@@ -1,0 +1,50 @@
+# 열린재정 데이터셋별 요청주소와 파라미터명을 기록합니다.
+# 실제 요청주소와 필드명은 열린재정 Open API 상세화면의 명세를 확인해 수정하세요.
+
+datasets:
+  - id: project_budget
+    name: 세부사업 예산편성현황
+    api_url: ""
+    api_key_param: key
+    page_index_param: pIndex
+    page_size_param: pSize
+    request_params:
+      year: ""
+      ministry: ""
+    response:
+      records_path: ""
+      total_count_path: ""
+    field_mapping:
+      fiscal_year: ""
+      ministry_name: ""
+      account_name: ""
+      program_code: ""
+      program_name: ""
+      unit_project_code: ""
+      unit_project_name: ""
+      detail_project_code: ""
+      detail_project_name: ""
+      budget_amount: ""
+
+  - id: project_execution
+    name: 세부사업 집행실적
+    api_url: ""
+    api_key_param: key
+    page_index_param: pIndex
+    page_size_param: pSize
+    request_params:
+      year: ""
+      ministry: ""
+    response:
+      records_path: ""
+      total_count_path: ""
+    field_mapping:
+      fiscal_year: ""
+      ministry_name: ""
+      account_name: ""
+      program_code: ""
+      program_name: ""
+      detail_project_code: ""
+      detail_project_name: ""
+      current_budget_amount: ""
+      execution_amount: ""
