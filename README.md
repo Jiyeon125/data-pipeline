@@ -23,11 +23,17 @@ pip install -e .
 cp .env.example .env
 ```
 
-`.env`에 발급받은 인증키와 열린재정 상세통계 화면의 API 요청주소를 입력합니다.
+Windows PowerShell에서는 다음 명령을 사용해도 됩니다.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`.env`에 발급받은 인증키와 열린재정 Open API 상세화면의 실제 요청주소를 입력합니다.
 
 ```dotenv
 OPEN_FISCAL_API_KEY=발급받은_인증키
-OPEN_FISCAL_API_URL=https://요청주소
+OPEN_FISCAL_API_URL=https://실제_API_요청주소
 ```
 
 인증키는 절대로 GitHub에 커밋하지 않습니다.
@@ -38,14 +44,23 @@ OPEN_FISCAL_API_URL=https://요청주소
 openfiscal smoke-test
 ```
 
-## 데이터 수집
+성공하면 인증키나 전체 응답값을 출력하지 않고 요청시각, 요청주소, 최상위 JSON 키만 표시합니다.
+
+## 시험 수집
+
+현재 초기 CLI는 실제 데이터셋의 검색 파라미터명이 확정되기 전 범용 연결검증용입니다.
 
 ```bash
-openfiscal collect \
-  --dataset configs/datasets.example.yaml \
-  --year 2024 \
-  --ministry 중소벤처기업부
+openfiscal collect --max-pages 1
 ```
+
+회계연도와 소관 파라미터가 실제로 `year`, `ministry`인 데이터셋에서만 다음 옵션을 사용합니다.
+
+```bash
+openfiscal collect --max-pages 1 --year 2024 --ministry 중소벤처기업부
+```
+
+데이터셋마다 파라미터명과 응답 필드가 다를 수 있으므로, 열린재정 Open API 상세화면의 `요청주소`, `검색 요청인자`, `출력값 명세`를 확인한 뒤 `configs/datasets.example.yaml`에 매핑합니다. 이후 이 설정파일을 읽는 정규화 수집 명령을 추가할 예정입니다.
 
 수집 결과는 다음에 저장됩니다.
 
@@ -64,4 +79,14 @@ openfiscal collect \
 
 ## 현재 단계
 
-초기 저장소는 특정 API 데이터셋의 요청주소와 응답 필드가 확정되기 전에도 연결 테스트가 가능하도록 범용 클라이언트로 구성되어 있습니다. 열린재정 상세통계에서 사용할 데이터셋의 `요청주소`, `검색 요청인자`, `출력값 명세`를 확인한 뒤 `configs/` 파일에 매핑을 추가합니다.
+- [x] 공개 저장소 초기화
+- [x] `.env` 및 생성데이터 Git 제외
+- [x] 범용 Open API 클라이언트
+- [x] 인증키·요청주소 연결 테스트 명령
+- [x] 원본 JSON 페이지 저장 기능
+- [x] 데이터셋 매핑 템플릿
+- [ ] 첫 데이터셋 요청주소·파라미터 확정
+- [ ] 응답 레코드 경로 및 필드 매핑
+- [ ] 중기부 2024년 5개 사업 시험수집
+- [ ] 기존 마스터와 코드·금액 대조
+- [ ] 전체 수집 및 분류마스터 생성
