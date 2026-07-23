@@ -1,0 +1,28 @@
+{
+  "ExpenditureBudgetInit5": [
+    {
+      "head": [
+        {"list_total_count": 2},
+        {"RESULT": {"CODE": "INFO-000", "MESSAGE": "정상 처리되었습니다."}}
+      ]
+    },
+    {
+      "row": [
+        {
+          "FSCL_YY": "2024",
+          "OFFC_NM": "중소벤처기업부",
+          "PGM_NM": "중소기업기술개발지원",
+          "SACTV_NM": "중소기업기술혁신개발(R&D)",
+          "Y_YY_DFN_MEDI_KCUR_AMT": "1000"
+        },
+        {
+          "FSCL_YY": "2024",
+          "OFFC_NM": "중소벤처기업부",
+          "PGM_NM": "소상공인·전통시장지원",
+          "SACTV_NM": "소상공인지원",
+          "Y_YY_DFN_MEDI_KCUR_AMT": "2000"
+        }
+      ]
+    }
+  ]
+}
