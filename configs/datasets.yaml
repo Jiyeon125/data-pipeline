@@ -1,43 +1,209 @@
 datasets:
   expenditure_budget_init:
     name: "세부사업 예산편성현황(총액)"
-    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit5"
     source_type: api
     enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit5"
+    service_name: "ExpenditureBudgetInit5"
+    parameter_map:
+      year: FSCL_YY
+      ministry: OFFC_NM
+    required: [year]
+    expected_fields:
+      - FSCL_YY
+      - OFFC_NM
+      - FSCL_NM
+      - ACCT_NM
+      - FLD_NM
+      - SECT_NM
+      - PGM_NM
+      - ACTV_NM
+      - SACTV_NM
+      - BZ_CLS_NM
+      - FIN_DE_EP_NM
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
+    amount_fields: [Y_YY_MEDI_KCUR_AMT, Y_YY_DFN_MEDI_KCUR_AMT]
 
   total_expenditure_project:
     name: "세부사업 예산편성현황(총지출)"
-    url: "https://openapi.openfiscaldata.go.kr/TotalExpenditure5"
     source_type: api
     enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/TotalExpenditure5"
+    service_name: "TotalExpenditure5"
+    parameter_map:
+      year: FSCL_YY
+      ministry: OFFC_NM
+    required: [year]
+    defaults:
+      BDG_FND_DIV_CD: "0"
+      ANEXP_INQ_STND_CD: "1"
+    expected_fields:
+      - FSCL_YY
+      - OFFC_NM
+      - FSCL_NM
+      - ACCT_NM
+      - FLD_NM
+      - SECT_NM
+      - PGM_NM
+      - ACTV_NM
+      - SACTV_NM
+      - BZ_CLS_NM
+      - FIN_DE_EP_NM
+      - ANEXP_INQ_STND_CD
+      - Y_PREY_FIRST_KCUR_AMT
+      - Y_PREY_FNL_FRC_AMT
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
+    amount_fields:
+      - Y_PREY_FIRST_KCUR_AMT
+      - Y_PREY_FNL_FRC_AMT
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
 
   expenditure_budget_add:
     name: "세부사업 예산편성현황(추경포함)"
-    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetAdd7"
     source_type: api
     enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetAdd7"
+    service_name: "ExpenditureBudgetAdd7"
+    parameter_map:
+      year: FSCL_YY
+      ministry: OFFC_NM
+      supplementary_round: SBUDG_DGR
+    required: [year, supplementary_round]
+    expected_fields:
+      - FSCL_YY
+      - SBUDG_DGR
+      - OFFC_NM
+      - FSCL_NM
+      - ACCT_NM
+      - FLD_NM
+      - SECT_NM
+      - PGM_NM
+      - ACTV_NM
+      - SACTV_NM
+      - BZ_CLS_NM
+      - FIN_DE_EP_NM
+      - Y_YY_DFN_KCUR_AMT
+      - Y_YY_DFN_FRC_AMT
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
+    amount_fields:
+      - Y_YY_DFN_KCUR_AMT
+      - Y_YY_DFN_FRC_AMT
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
 
   monthly_expenditure:
     name: "월별 지출운용상황"
-    url: "https://openapi.openfiscaldata.go.kr/VWFOEM2"
     source_type: api
     enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/VWFOEM2"
+    service_name: "VWFOEM2"
+    parameter_map:
+      year: FSCL_YY
+      execution_month: EXE_M
+      ministry_code: OFFC_CD
+      account_code: FSCL_CD
+    required: [year, execution_month, ministry_code]
+    expected_fields:
+      - FSCL_YY
+      - EXE_M
+      - OFFC_CD
+      - OFFC_NM
+      - FSCL_CD
+      - FSCL_NM
+      - FLD_CD
+      - FLD_NM
+      - SECT_CD
+      - SECT_NM
+      - PGM_CD
+      - PGM_NM
+      - ACTV_CD
+      - ACTV_NM
+      - SACTV_CD
+      - SACTV_NM
+      - ANEXP_BDG_AMT
+      - ANEXP_BDG_CAMT
+      - EP_AMT
+      - THISM_AGGR_EP_AMT
+      - THISM_AGGR_EP_NAMT
+    amount_fields:
+      - ANEXP_BDG_AMT
+      - ANEXP_BDG_CAMT
+      - EP_AMT
+      - THISM_AGGR_EP_AMT
+      - THISM_AGGR_EP_NAMT
 
   total_expenditure_item:
     name: "세목 예산편성현황(총지출)"
-    url: "https://openapi.openfiscaldata.go.kr/TotalExpenditure6"
     source_type: api
     enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/TotalExpenditure6"
+    service_name: "TotalExpenditure6"
+    parameter_map:
+      year: FSCL_YY
+      ministry: OFFC_NM
+    required: [year]
+    defaults:
+      BDG_FND_DIV_CD: "0"
+      ANEXP_INQ_STND_CD: "1"
+    expected_fields:
+      - FSCL_YY
+      - OFFC_NM
+      - FSCL_NM
+      - ACCT_NM
+      - FLD_NM
+      - SECT_NM
+      - PGM_NM
+      - ACTV_NM
+      - SACTV_NM
+      - CITM_NM
+      - EITM_NM
+      - BZ_CLS_NM
+      - FIN_DE_EP_NM
+      - Y_PREY_FIRST_KCUR_AMT
+      - Y_PREY_FNL_KCUR_AMT
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
+    amount_fields:
+      - Y_PREY_FIRST_KCUR_AMT
+      - Y_PREY_FNL_KCUR_AMT
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
 
   expenditure_budget_init_item:
     name: "세목 예산편성현황(총액)"
-    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit6"
     source_type: api
     enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit6"
+    service_name: "ExpenditureBudgetInit6"
+    parameter_map:
+      year: FSCL_YY
+      ministry: OFFC_NM
+    required: [year]
+    expected_fields:
+      - FSCL_YY
+      - OFFC_NM
+      - FSCL_NM
+      - ACCT_NM
+      - FLD_NM
+      - SECT_NM
+      - PGM_NM
+      - ACTV_NM
+      - SACTV_NM
+      - CITM_NM
+      - EITM_NM
+      - BZ_CLS_NM
+      - FIN_DE_EP_NM
+      - Y_YY_MEDI_KCUR_AMT
+      - Y_YY_DFN_MEDI_KCUR_AMT
+    amount_fields: [Y_YY_MEDI_KCUR_AMT, Y_YY_DFN_MEDI_KCUR_AMT]
 
   project_settlement:
     name: "사업별결산세출지출현황"
     source_type: local_csv
+    enabled: true
     directory_env: "OPEN_FISCAL_SETTLEMENT_DIR"
     file_pattern: "사업별결산세출지출현황_{year}.csv"
-    enabled: true
