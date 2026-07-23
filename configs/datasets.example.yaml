@@ -1,50 +1,23 @@
-# 열린재정 데이터셋별 요청주소와 파라미터명을 기록합니다.
-# 실제 요청주소와 필드명은 열린재정 Open API 상세화면의 명세를 확인해 수정하세요.
+# 열린재정 데이터셋별 요청주소와 수집 방식을 기록합니다.
+# 실제 요청주소는 열린재정 Open API 상세화면의 명세를 확인해 수정하세요.
+# 운영 설정은 configs/datasets.yaml을 사용합니다.
 
 datasets:
-  - id: project_budget
-    name: 세부사업 예산편성현황
-    api_url: ""
-    api_key_param: key
-    page_index_param: pIndex
-    page_size_param: pSize
-    request_params:
-      year: ""
-      ministry: ""
-    response:
-      records_path: ""
-      total_count_path: ""
-    field_mapping:
-      fiscal_year: ""
-      ministry_name: ""
-      account_name: ""
-      program_code: ""
-      program_name: ""
-      unit_project_code: ""
-      unit_project_name: ""
-      detail_project_code: ""
-      detail_project_name: ""
-      budget_amount: ""
+  expenditure_budget_init:
+    name: "세부사업 예산편성현황(총액)"
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit5"
+    source_type: api
+    enabled: true
 
-  - id: project_execution
-    name: 세부사업 집행실적
-    api_url: ""
-    api_key_param: key
-    page_index_param: pIndex
-    page_size_param: pSize
-    request_params:
-      year: ""
-      ministry: ""
-    response:
-      records_path: ""
-      total_count_path: ""
-    field_mapping:
-      fiscal_year: ""
-      ministry_name: ""
-      account_name: ""
-      program_code: ""
-      program_name: ""
-      detail_project_code: ""
-      detail_project_name: ""
-      current_budget_amount: ""
-      execution_amount: ""
+  monthly_expenditure:
+    name: "월별 지출운용상황"
+    url: "https://openapi.openfiscaldata.go.kr/VWFOEM2"
+    source_type: api
+    enabled: true
+
+  project_settlement:
+    name: "사업별결산세출지출현황"
+    source_type: local_csv
+    directory_env: "OPEN_FISCAL_SETTLEMENT_DIR"
+    file_pattern: "사업별결산세출지출현황_{year}.csv"
+    enabled: true

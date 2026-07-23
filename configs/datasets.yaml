@@ -1,0 +1,43 @@
+datasets:
+  expenditure_budget_init:
+    name: "세부사업 예산편성현황(총액)"
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit5"
+    source_type: api
+    enabled: true
+
+  total_expenditure_project:
+    name: "세부사업 예산편성현황(총지출)"
+    url: "https://openapi.openfiscaldata.go.kr/TotalExpenditure5"
+    source_type: api
+    enabled: true
+
+  expenditure_budget_add:
+    name: "세부사업 예산편성현황(추경포함)"
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetAdd7"
+    source_type: api
+    enabled: true
+
+  monthly_expenditure:
+    name: "월별 지출운용상황"
+    url: "https://openapi.openfiscaldata.go.kr/VWFOEM2"
+    source_type: api
+    enabled: true
+
+  total_expenditure_item:
+    name: "세목 예산편성현황(총지출)"
+    url: "https://openapi.openfiscaldata.go.kr/TotalExpenditure6"
+    source_type: api
+    enabled: true
+
+  expenditure_budget_init_item:
+    name: "세목 예산편성현황(총액)"
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit6"
+    source_type: api
+    enabled: true
+
+  project_settlement:
+    name: "사업별결산세출지출현황"
+    source_type: local_csv
+    directory_env: "OPEN_FISCAL_SETTLEMENT_DIR"
+    file_pattern: "사업별결산세출지출현황_{year}.csv"
+    enabled: true
