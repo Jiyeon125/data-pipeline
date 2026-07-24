@@ -25,6 +25,48 @@ class APIPage:
     parsed: ParsedResponse
 
 
+def _safe_preview(response: httpx.Response, api_key: str, limit: int = 300) -> str:
+    text = response.text.replace(api_key, "***")
+    return " ".join(text[:limit].split())
+
+
+def _decode_payload(response: httpx.Response, api_key: str) -> dict[str, Any] | list[Any]:
+    """열린재정 응답을 객체 또는 배열 형태의 JSON으로 정규화합니다.
+
+    일부 공공 API는 JSON 본문을 문자열로 한 번 더 감싸서 반환합니다.
+    이 경우 최대 두 번까지 추가 디코딩합니다.
+    """
+    try:
+        payload: Any = response.json()
+    except json.JSONDecodeError as exc:
+        content_type = response.headers.get("content-type", "unknown")
+        preview = _safe_preview(response, api_key)
+        raise OpenFiscalError(
+            f"JSON 응답이 아닙니다. content-type={content_type}, preview={preview}"
+        ) from exc
+
+    for _ in range(2):
+        if isinstance(payload, (dict, list)):
+            return payload
+        if not isinstance(payload, str):
+            break
+
+        candidate = payload.strip().lstrip("\ufeff")
+        if not candidate:
+            break
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            break
+
+    content_type = response.headers.get("content-type", "unknown")
+    preview = _safe_preview(response, api_key)
+    raise OpenFiscalError(
+        "지원하지 않는 JSON 최상위 타입입니다. "
+        f"type={type(payload).__name__}, content-type={content_type}, preview={preview}"
+    )
+
+
 class OpenFiscalClient:
     def __init__(
         self,
@@ -82,21 +124,14 @@ class OpenFiscalClient:
             response = self.client.get(dataset.url, params=query)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            preview = exc.response.text[:300].replace(self.settings.api_key, "***")
+            preview = _safe_preview(exc.response, self.settings.api_key)
             raise OpenFiscalError(
                 f"HTTP {exc.response.status_code} 응답: {preview}"
             ) from exc
         except httpx.HTTPError as exc:
             raise OpenFiscalError(f"API 연결 실패: {type(exc).__name__}") from exc
 
-        try:
-            payload = response.json()
-        except json.JSONDecodeError as exc:
-            preview = response.text[:300].replace(self.settings.api_key, "***")
-            raise OpenFiscalError(f"JSON 응답이 아닙니다: {preview}") from exc
-
-        if not isinstance(payload, (dict, list)):
-            raise OpenFiscalError("최상위 API 응답이 JSON 객체 또는 배열이 아닙니다.")
+        payload = _decode_payload(response, self.settings.api_key)
 
         try:
             parsed = parse_api_payload(payload, dataset.service_name)
