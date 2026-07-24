@@ -1,0 +1,38 @@
+normalization:
+  code_type: string
+  strip_whitespace: true
+  preserve_leading_zeroes: true
+  null_tokens: ["", "-", "해당없음", "N/A"]
+
+tables:
+  program_year:
+    primary_key: [ministry_code, fiscal_year, program_code]
+  kpi_year:
+    primary_key: [ministry_code, fiscal_year, program_code, indicator_id]
+  project_year:
+    primary_key: [ministry_code, fiscal_year, program_code, project_code]
+  project_month:
+    primary_key:
+      - ministry_code
+      - fiscal_year
+      - execution_month
+      - fiscal_account_code
+      - program_code
+      - activity_code
+      - subactivity_code
+  amount_event:
+    primary_key: [project_id, fiscal_year, amount_type]
+
+performance_to_fiscal:
+  stages:
+    - name: exact_program_code
+      keys: [ministry_code, fiscal_year, program_code]
+      match_status: EXACT_MATCH
+    - name: normalized_program_name
+      keys: [ministry_code, fiscal_year, normalized_program_name]
+      match_status: MATCH_AFTER_CHANGE
+    - name: manual_review
+      keys: [ministry_code, fiscal_year]
+      match_status: MANUAL_REVIEW
+  never_auto_match_on_name_only: true
+  retain_unmatched_rows: true

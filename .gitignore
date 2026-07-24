@@ -11,18 +11,30 @@ build/
 .ruff_cache/
 .DS_Store
 
-# Collected fiscal data may contain large generated files.
-data/raw/*
-data/interim/*
-data/processed/*
+# Collected and generated data stay local. Only directory placeholders are tracked.
+data/**
+!data/**/
+!data/**/.gitkeep
+!data/README.md
 logs/*
+artifacts/**
+!artifacts/**/
+!artifacts/**/.gitkeep
+!artifacts/README.md
 
 # Keep directory placeholders.
-!data/raw/.gitkeep
-!data/interim/.gitkeep
-!data/processed/.gitkeep
 !logs/.gitkeep
 
 # Local notes and work log (not for remote).
 docs/MENTORING_GUIDE.md
 docs/WORK_LOG.md
+docs/PROJECT_PROPOSAL.md
+
+# Local Codex work tracker and lifecycle automation (never publish).
+/AGENTS.md
+/.codex/
+/docs/WORK_TRACKER.md
+/docs/work_tracker.json
+/scripts/work_tracker_hook.py
+/src/open_fiscal_pipeline/work_tracker.py
+/tests/test_work_tracker.py

@@ -1,0 +1,25 @@
+llm:
+  provider: openai
+  model_env: OPENAI_MODEL
+  api_key_env: OPENAI_API_KEY
+  temperature: 0
+  max_retries: 2
+  request_timeout_seconds: 120
+  prompt_version: performance_extraction_v1
+  schema_version: performance_indicator_v1
+
+extraction:
+  batch_pages: 1
+  preserve_source_text: true
+  require_source_page: true
+  null_when_unverified: true
+
+review:
+  auto_verify: false
+  confidence_threshold_for_review: 0.8
+  statuses:
+    - UNREVIEWED
+    - VERIFIED
+    - CORRECTED
+    - REJECTED
+    - AMBIGUOUS

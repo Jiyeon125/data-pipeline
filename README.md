@@ -2,6 +2,23 @@
 
 열린재정 Open API 원본을 수집하는 Python 파이프라인입니다.
 
+## 프로젝트 범위와 구조
+
+이 프로젝트는 OpenAPI 수집뿐 아니라 성과계획서·성과보고서 LLM 파싱,
+성과·재정 마스터 테이블 엔지니어링, 애널리틱스, BI·시각화까지 단계적으로
+확장합니다.
+
+```text
+open_fiscal_pipeline   열린재정 OpenAPI 수집·정규화
+performance_pipeline   성과 문서 수집·LLM 추출·검증
+master_engineering     전처리·조인·마스터·품질
+fiscal_analytics       피처·순위·민감도·보고
+fiscal_dashboard       BI 앱·차트·데이터 계약
+```
+
+상세한 의존 방향, 데이터 계층과 팀 공유 마일스톤은
+[프로젝트 아키텍처](docs/architecture.md)를 참고합니다.
+
 ## 설치
 
 ```powershell
