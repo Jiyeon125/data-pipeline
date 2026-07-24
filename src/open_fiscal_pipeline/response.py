@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,26 +37,71 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _looks_like_result_code(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z]+-?\d{3,}", value.strip()))
+
+
+def _result_from_mapping(node: dict[str, Any]) -> tuple[str | None, str | None]:
+    code_keys = (
+        "CODE",
+        "code",
+        "RESULT_CODE",
+        "resultCode",
+        "result_code",
+    )
+    message_keys = (
+        "MESSAGE",
+        "message",
+        "RESULT_MESSAGE",
+        "resultMessage",
+        "result_message",
+        "RESULT_MSG",
+        "resultMsg",
+    )
+
+    code = next((node.get(key) for key in code_keys if node.get(key) not in (None, "")), None)
+    message = next(
+        (node.get(key) for key in message_keys if node.get(key) not in (None, "")),
+        None,
+    )
+    if code is not None or message is not None:
+        return (
+            str(code) if code is not None else None,
+            str(message) if message is not None else None,
+        )
+    return None, None
+
+
 def _find_result(node: Any) -> tuple[str | None, str | None]:
+    if isinstance(node, str):
+        value = node.strip()
+        if _looks_like_result_code(value):
+            return value, None
+        return None, None
+
     if isinstance(node, dict):
+        direct_code, direct_message = _result_from_mapping(node)
+        if direct_code is not None or direct_message is not None:
+            return direct_code, direct_message
+
         for key in ("RESULT", "result", "Result"):
-            value = node.get(key)
-            if isinstance(value, dict):
-                code = value.get("CODE") or value.get("code")
-                message = value.get("MESSAGE") or value.get("message")
-                return (
-                    str(code) if code is not None else None,
-                    str(message) if message is not None else None,
-                )
+            if key not in node:
+                continue
+            code, message = _find_result(node[key])
+            if code is not None or message is not None:
+                return code, message
+
         for value in node.values():
             code, message = _find_result(value)
             if code is not None or message is not None:
                 return code, message
+
     elif isinstance(node, list):
         for value in node:
             code, message = _find_result(value)
             if code is not None or message is not None:
                 return code, message
+
     return None, None
 
 
@@ -93,6 +139,10 @@ def _is_direct_record_list(node: list[Any]) -> bool:
         "RESULT",
         "result",
         "Result",
+        "CODE",
+        "code",
+        "MESSAGE",
+        "message",
         "row",
         "rows",
         "item",
