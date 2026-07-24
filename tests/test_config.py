@@ -25,6 +25,6 @@ def test_monthly_expenditure_requires_code_and_month() -> None:
         dataset.build_params({"year": 2024, "execution_month": "12"})
 
     params = dataset.build_params(
-        {"year": 2024, "execution_month": "12", "ministry_code": "TEST"}
+        {"year": 2024, "execution_month": "202412", "ministry_code": "TEST"}
     )
-    assert params == {"FSCL_YY": "2024", "EXE_M": "12", "OFFC_CD": "TEST"}
+    assert params == {"FSCL_YY": "2024", "EXE_M": "202412", "OFFC_CD": "TEST"}

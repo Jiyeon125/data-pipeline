@@ -23,7 +23,7 @@ class Settings:
     ministry_code: str | None = None
 
     @classmethod
-    def from_env(cls, *, require_api_key: bool = True) -> "Settings":
+    def from_env(cls, *, require_api_key: bool = True) -> Settings:
         load_dotenv()
 
         api_key = os.environ.get("OPEN_FISCAL_API_KEY", "").strip()
@@ -66,7 +66,7 @@ class DatasetConfig:
     file_pattern: str | None = None
 
     @classmethod
-    def from_mapping(cls, dataset_id: str, raw: dict[str, Any]) -> "DatasetConfig":
+    def from_mapping(cls, dataset_id: str, raw: dict[str, Any]) -> DatasetConfig:
         if not isinstance(raw, dict):
             raise ConfigError(f"데이터셋 설정은 객체여야 합니다: {dataset_id}")
 
@@ -127,6 +127,12 @@ class DatasetConfig:
         return result
 
 
+@dataclass(frozen=True)
+class Ministry:
+    code: str
+    name: str
+
+
 def load_yaml(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
     if not config_path.exists():
@@ -149,3 +155,23 @@ def load_datasets(path: str | Path) -> dict[str, DatasetConfig]:
         str(dataset_id): DatasetConfig.from_mapping(str(dataset_id), config)
         for dataset_id, config in items.items()
     }
+
+
+def load_ministries(path: str | Path) -> dict[str, Ministry]:
+    raw = load_yaml(path)
+    items = raw.get("ministries")
+    if not isinstance(items, list):
+        raise ConfigError("부처 설정의 ministries는 배열이어야 합니다.")
+
+    ministries: dict[str, Ministry] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ConfigError("각 부처 설정은 객체여야 합니다.")
+        code = str(item.get("code", "")).strip()
+        name = str(item.get("name", "")).strip()
+        if not code or not name:
+            raise ConfigError("부처 code와 name은 비어 있을 수 없습니다.")
+        if code in ministries:
+            raise ConfigError(f"중복된 소관코드입니다: {code}")
+        ministries[code] = Ministry(code=code, name=name)
+    return ministries

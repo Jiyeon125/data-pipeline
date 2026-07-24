@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import typer
 
 from .client import OpenFiscalClient, OpenFiscalError
-from .config import ConfigError, DatasetConfig, Settings, load_datasets
+from .config import ConfigError, DatasetConfig, Settings, load_datasets, load_ministries
+from .monthly import MonthlyResult, build_summary, collect_ministry_month
 
 app = typer.Typer(no_args_is_help=True, help="열린재정 데이터 수집 파이프라인")
 DEFAULT_DATASETS_PATH = Path("configs/datasets.yaml")
+DEFAULT_MINISTRIES_PATH = Path("configs/ministries.yaml")
 
 
 def _logical_params(
@@ -59,7 +63,7 @@ def _response_status(page: Any) -> str:
 
 def _safe_output(dataset: DatasetConfig, page: Any) -> dict[str, Any]:
     record_keys = sorted(
-        {str(key) for record in page.parsed.records[:5] for key in record.keys()}
+        {str(key) for record in page.parsed.records[:5] for key in record}
     )
     expected = set(dataset.expected_fields)
     actual = set(record_keys)
@@ -123,7 +127,7 @@ def probe(
     year: int | None = typer.Option(None, help="회계연도"),
     ministry: str | None = typer.Option(None, help="소관명"),
     ministry_code: str | None = typer.Option(None, help="소관코드"),
-    execution_month: str | None = typer.Option(None, help="집행월. 예: 12 또는 202412"),
+    execution_month: str | None = typer.Option(None, help="집행연월. 예: 202412"),
     supplementary_round: str | None = typer.Option(None, help="추경차수"),
     account_code: str | None = typer.Option(None, help="회계코드"),
     page_size: int = typer.Option(5, min=1, max=1000),
@@ -188,7 +192,7 @@ def probe_all(
     year: int = typer.Option(2024, help="회계연도"),
     ministry: str = typer.Option("중소벤처기업부", help="소관명"),
     ministry_code: str | None = typer.Option(None, help="월별 집행용 소관코드"),
-    execution_month: str | None = typer.Option("12", help="월별 집행용 집행월"),
+    execution_month: str | None = typer.Option("202412", help="월별 집행용 집행연월"),
     supplementary_round: str | None = typer.Option("1", help="추경차수"),
     page_size: int = typer.Option(5, min=1, max=1000),
     config_path: Path = typer.Option(DEFAULT_DATASETS_PATH, help="데이터셋 설정 파일"),
@@ -296,6 +300,98 @@ def collect(
     typer.echo(f"[{dataset_id}] 원본 응답 {len(paths)}개 저장")
     for path in paths:
         typer.echo(f"- {path}")
+
+
+@app.command("collect-monthly-all")
+def collect_monthly_all(
+    start_year: int = typer.Option(2022, min=2000, max=2100, help="시작 회계연도"),
+    end_year: int = typer.Option(2025, min=2000, max=2100, help="종료 회계연도"),
+    ministry_code: str | None = typer.Option(
+        None, help="특정 소관코드만 수집. 생략하면 설정된 전체 부처"
+    ),
+    page_size: int | None = typer.Option(None, min=1, max=1000, help="페이지당 건수"),
+    resume: bool = typer.Option(False, help="미완료 페이지부터 이어서 수집"),
+    overwrite: bool = typer.Option(False, help="기존 부처·연월 파일을 삭제 후 다시 수집"),
+    config_path: Path = typer.Option(DEFAULT_DATASETS_PATH, help="데이터셋 설정 파일"),
+    ministries_path: Path = typer.Option(DEFAULT_MINISTRIES_PATH, help="부처 설정 파일"),
+    output_dir: Path = typer.Option(
+        Path("data/raw/monthly_expenditure"), help="월별 지출 원본 저장 디렉터리"
+    ),
+) -> None:
+    """설정된 부처의 연도·월별 지출운용상황을 일괄 수집합니다."""
+    try:
+        if start_year > end_year:
+            raise ConfigError("--start-year는 --end-year보다 클 수 없습니다.")
+        if resume and overwrite:
+            raise ConfigError("--resume과 --overwrite는 동시에 사용할 수 없습니다.")
+
+        settings = Settings.from_env()
+        dataset = _get_dataset(config_path, "monthly_expenditure")
+        ministries = load_ministries(ministries_path)
+        if ministry_code:
+            ministry = ministries.get(ministry_code)
+            if ministry is None:
+                raise ConfigError(f"설정에 없는 소관코드입니다: {ministry_code}")
+            selected = [ministry]
+        else:
+            selected = list(ministries.values())
+        actual_page_size = page_size or settings.page_size
+    except (ConfigError, OSError, FileNotFoundError, ValueError) as exc:
+        typer.echo(f"설정 로드 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    results: list[MonthlyResult] = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    failure_log_path = output_dir / f"collection_failures_{run_timestamp}.jsonl"
+    with OpenFiscalClient(settings) as client:
+        for ministry in selected:
+            for year in range(start_year, end_year + 1):
+                for month in range(1, 13):
+                    execution_month = f"{year}{month:02d}"
+                    typer.echo(f"수집 중: {ministry.code} {ministry.name} {execution_month}")
+                    try:
+                        result = collect_ministry_month(
+                            client,
+                            dataset,
+                            ministry,
+                            year,
+                            month,
+                            output_dir=output_dir,
+                            page_size=actual_page_size,
+                            resume=resume,
+                            overwrite=overwrite,
+                        )
+                    except (OpenFiscalError, OSError, ValueError, json.JSONDecodeError) as exc:
+                        result = MonthlyResult(
+                            ministry.code,
+                            ministry.name,
+                            year,
+                            execution_month,
+                            "failure",
+                            error=str(exc),
+                        )
+                        typer.echo(
+                            f"실패(계속 진행): {ministry.code} {execution_month}: {exc}",
+                            err=True,
+                        )
+                        with failure_log_path.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                json.dumps(asdict(result), ensure_ascii=False) + "\n"
+                            )
+                    results.append(result)
+
+    summary = build_summary(results)
+    summary_path = output_dir / f"collection_summary_{run_timestamp}.json"
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    typer.echo(f"수집 요약 저장: {summary_path}")
+    if summary["status_counts"]["failure"]:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

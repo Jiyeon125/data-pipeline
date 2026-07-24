@@ -208,7 +208,7 @@ def _select_service_node(payload: Any, service_name: str | None) -> tuple[str | 
 
 def _top_level_keys(payload: Any) -> tuple[str, ...]:
     if isinstance(payload, dict):
-        return tuple(str(key) for key in payload.keys())
+        return tuple(str(key) for key in payload)
     if isinstance(payload, list):
         keys: list[str] = []
         for index, item in enumerate(payload[:20]):
@@ -222,7 +222,7 @@ def _top_level_keys(payload: Any) -> tuple[str, ...]:
 
 def parse_api_payload(payload: Any, service_name: str | None = None) -> ParsedResponse:
     if not isinstance(payload, (dict, list)):
-        raise ValueError("API JSON 최상위는 객체 또는 배열이어야 합니다.")
+        raise TypeError("API JSON 최상위는 객체 또는 배열이어야 합니다.")
 
     selected_name, node = _select_service_node(payload, service_name)
     result_code, result_message = _find_result(node)

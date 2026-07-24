@@ -106,7 +106,7 @@ datasets:
       execution_month: EXE_M
       ministry_code: OFFC_CD
       account_code: FSCL_CD
-    required: [year]
+    required: [year, execution_month, ministry_code]
     expected_fields:
       - FSCL_YY
       - EXE_M

@@ -1,0 +1,11 @@
+ministries:
+  - code: "101"
+    name: "행정안전부"
+  - code: "102"
+    name: "중소벤처기업부"
+  - code: "019"
+    name: "고용노동부"
+  - code: "162"
+    name: "과학기술정보통신부"
+  - code: "075"
+    name: "보건복지부"

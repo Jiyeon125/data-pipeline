@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -84,7 +84,7 @@ class OpenFiscalClient:
     def close(self) -> None:
         self.client.close()
 
-    def __enter__(self) -> "OpenFiscalClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -135,7 +135,7 @@ class OpenFiscalClient:
 
         try:
             parsed = parse_api_payload(payload, dataset.service_name)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise OpenFiscalError(str(exc)) from exc
 
         if not parsed.is_success and not parsed.is_no_data:

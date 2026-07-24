@@ -101,14 +101,16 @@ def test_request_reports_scalar_json_type_and_preview() -> None:
         )
 
     settings = Settings(api_key="secret", page_size=10)
-    with OpenFiscalClient(settings, transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(OpenFiscalError) as exc_info:
-            client.request_page(
-                _dataset(),
-                page_index=1,
-                page_size=10,
-                params={"FSCL_YY": "2024"},
-            )
+    with (
+        OpenFiscalClient(settings, transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(OpenFiscalError) as exc_info,
+    ):
+        client.request_page(
+            _dataset(),
+            page_index=1,
+            page_size=10,
+            params={"FSCL_YY": "2024"},
+        )
 
     message = str(exc_info.value)
     assert "type=int" in message
