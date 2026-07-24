@@ -1,0 +1,13 @@
+datasets:
+  ministry_code_lookup:
+    name: "소관코드 조회용 예산편성현황"
+    source_type: api
+    enabled: true
+    url: "https://openapi.openfiscaldata.go.kr/ExpenditureBudgetInit1"
+    service_name: "ExpenditureBudgetInit1"
+    parameter_map:
+      year: FSCL_YY
+      ministry: OFFC_NM
+    required: [year]
+    expected_fields: []
+    amount_fields: []
