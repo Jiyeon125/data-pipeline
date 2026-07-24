@@ -47,3 +47,25 @@ def test_parse_direct_record_list() -> None:
     assert parsed.total_count is None
     assert len(parsed.records) == 2
     assert parsed.top_level_type == "array"
+
+
+def test_parse_result_string_no_data() -> None:
+    parsed = parse_api_payload({"RESULT": "INFO-200"}, "ExpenditureBudgetAdd7")
+
+    assert parsed.is_no_data
+    assert not parsed.is_success
+    assert parsed.result_code == "INFO-200"
+    assert parsed.records == []
+    assert parsed.service_name == "RESULT"
+
+
+def test_parse_result_mapping_no_data() -> None:
+    parsed = parse_api_payload(
+        {"RESULT": {"CODE": "INFO-200", "MESSAGE": "해당하는 데이터가 없습니다."}},
+        "ExpenditureBudgetAdd7",
+    )
+
+    assert parsed.is_no_data
+    assert parsed.result_code == "INFO-200"
+    assert parsed.result_message == "해당하는 데이터가 없습니다."
+    assert parsed.records == []
