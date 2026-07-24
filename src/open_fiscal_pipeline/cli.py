@@ -11,6 +11,7 @@ import typer
 from .client import OpenFiscalClient, OpenFiscalError
 from .config import ConfigError, DatasetConfig, Settings, load_datasets, load_ministries
 from .monthly import MonthlyResult, build_summary, collect_ministry_month
+from .normalize_monthly import normalize_monthly
 
 app = typer.Typer(no_args_is_help=True, help="열린재정 데이터 수집 파이프라인")
 DEFAULT_DATASETS_PATH = Path("configs/datasets.yaml")
@@ -391,6 +392,69 @@ def collect_monthly_all(
     typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
     typer.echo(f"수집 요약 저장: {summary_path}")
     if summary["status_counts"]["failure"]:
+        raise typer.Exit(code=1)
+
+
+@app.command("normalize-monthly")
+def normalize_monthly_command(
+    input_dir: Path = typer.Option(
+        Path("data/raw/monthly_expenditure"),
+        help="월별 지출 원본 JSON 디렉터리",
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/processed/monthly_expenditure"),
+        help="정규화 결과 저장 디렉터리",
+    ),
+    format: str = typer.Option(
+        "parquet",
+        "--format",
+        help="출력 형식: parquet, csv, both",
+    ),
+    start_year: int | None = typer.Option(None, help="시작 회계연도 필터"),
+    end_year: int | None = typer.Option(None, help="종료 회계연도 필터"),
+    ministry_code: str | None = typer.Option(None, help="특정 소관코드만 정규화"),
+    overwrite: bool = typer.Option(False, help="기존 출력 파일이 있으면 덮어쓰기"),
+) -> None:
+    """월별 지출운용상황 원본 JSON을 분석용 테이블로 정규화합니다."""
+    try:
+        if start_year is not None and end_year is not None and start_year > end_year:
+            raise ConfigError("--start-year는 --end-year보다 클 수 없습니다.")
+        normalized_format = format.strip().lower()
+        if normalized_format not in {"parquet", "csv", "both"}:
+            raise ConfigError("--format은 parquet, csv, both 중 하나여야 합니다.")
+        result = normalize_monthly(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            output_format=normalized_format,  # type: ignore[arg-type]
+            start_year=start_year,
+            end_year=end_year,
+            ministry_code=ministry_code,
+            overwrite=overwrite,
+        )
+    except (ConfigError, OSError, FileExistsError, ValueError) as exc:
+        typer.echo(f"정규화 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    summary = {
+        key: result.summary[key]
+        for key in (
+            "files_read",
+            "raw_record_count",
+            "normalized_row_count",
+            "masked_row_count",
+            "duplicate_key_row_count",
+            "cumulative_decrease_count",
+            "execution_month_year_mismatch_count",
+            "monthly_cumulative_mismatch_count",
+            "raw_vs_normalized_difference",
+            "failed_files",
+        )
+        if key in result.summary
+    }
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+    if result.failed_files:
         raise typer.Exit(code=1)
 
 

@@ -22,3 +22,7 @@ logs/*
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 !logs/.gitkeep
+
+# Local notes and work log (not for remote).
+docs/MENTORING_GUIDE.md
+docs/WORK_LOG.md

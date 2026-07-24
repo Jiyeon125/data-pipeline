@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +16,13 @@ from .response import ParsedResponse, parse_api_payload
 
 class OpenFiscalError(RuntimeError):
     """열린재정 호출 또는 응답 검증 오류입니다."""
+
+
+_BARE_MASKED_VALUE = re.compile(r'(:\s*)(-?[\d]*\*+[\d*]*)(\s*[,}])')
+
+
+def _quote_bare_masked_values(value: str) -> str:
+    return _BARE_MASKED_VALUE.sub(r'\1"\2"\3', value)
 
 
 @dataclass(frozen=True)
@@ -45,7 +53,8 @@ def _decode_payload(response: httpx.Response, api_key: str) -> dict[str, Any] | 
             f"JSON 응답이 아닙니다. content-type={content_type}, preview={preview}"
         ) from exc
 
-    for _ in range(2):
+    decode_error: json.JSONDecodeError | None = None
+    for _ in range(100):
         if isinstance(payload, (dict, list)):
             return payload
         if not isinstance(payload, str):
@@ -56,14 +65,23 @@ def _decode_payload(response: httpx.Response, api_key: str) -> dict[str, Any] | 
             break
         try:
             payload = json.loads(candidate)
-        except json.JSONDecodeError:
-            break
+        except json.JSONDecodeError as exc:
+            repaired = _quote_bare_masked_values(candidate)
+            if repaired == candidate:
+                decode_error = exc
+                break
+            try:
+                payload = json.loads(repaired)
+            except json.JSONDecodeError as repaired_exc:
+                decode_error = repaired_exc
+                break
 
     content_type = response.headers.get("content-type", "unknown")
     preview = _safe_preview(response, api_key)
     raise OpenFiscalError(
         "지원하지 않는 JSON 최상위 타입입니다. "
-        f"type={type(payload).__name__}, content-type={content_type}, preview={preview}"
+        f"type={type(payload).__name__}, content-type={content_type}, "
+        f"decode_error={decode_error}, preview={preview}"
     )
 
 

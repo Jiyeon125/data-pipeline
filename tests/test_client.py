@@ -92,6 +92,60 @@ def test_request_decodes_json_wrapped_in_string() -> None:
     assert page.parsed.result_code == "INFO-000"
 
 
+def test_request_decodes_json_wrapped_in_multiple_strings() -> None:
+    payload = _load_fixture("openfiscal_success.json")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        wrapped: object = payload
+        for _ in range(10):
+            wrapped = json.dumps(wrapped, ensure_ascii=False)
+        return httpx.Response(200, json=wrapped)
+
+    settings = Settings(api_key="secret", page_size=10)
+    with OpenFiscalClient(settings, transport=httpx.MockTransport(handler)) as client:
+        page = client.request_page(
+            _dataset(),
+            page_index=1,
+            page_size=10,
+            params={"FSCL_YY": "2024"},
+        )
+
+    assert len(page.parsed.records) == 2
+    assert page.parsed.result_code == "INFO-000"
+
+
+def test_request_repairs_unquoted_masked_amount_in_wrapped_json() -> None:
+    payload = {
+        "ExpenditureBudgetInit5": [
+            {
+                "head": [
+                    {"list_total_count": 1},
+                    {"RESULT": {"CODE": "INFO-000", "MESSAGE": "정상"}},
+                ]
+            },
+            {"row": [{"EP_AMT": 123}]},
+        ]
+    }
+    malformed = json.dumps(payload, ensure_ascii=False).replace(
+        '"EP_AMT": 123',
+        '"EP_AMT": 180310*******',
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=malformed)
+
+    settings = Settings(api_key="secret", page_size=10)
+    with OpenFiscalClient(settings, transport=httpx.MockTransport(handler)) as client:
+        page = client.request_page(
+            _dataset(),
+            page_index=1,
+            page_size=10,
+            params={"FSCL_YY": "2024"},
+        )
+
+    assert page.parsed.records[0]["EP_AMT"] == "180310*******"
+
+
 def test_request_reports_scalar_json_type_and_preview() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
