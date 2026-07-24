@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
-from open_fiscal_pipeline.client import OpenFiscalClient
+from open_fiscal_pipeline.client import OpenFiscalClient, OpenFiscalError
 from open_fiscal_pipeline.config import DatasetConfig, Settings
 
 
@@ -69,3 +70,46 @@ def test_request_accepts_list_root_json() -> None:
     assert len(page.parsed.records) == 2
     assert page.parsed.top_level_type == "array"
     assert page.parsed.result_code == "INFO-000"
+
+
+def test_request_decodes_json_wrapped_in_string() -> None:
+    payload = _load_fixture("openfiscal_success.json")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        wrapped = json.dumps(payload, ensure_ascii=False)
+        return httpx.Response(200, json=wrapped)
+
+    settings = Settings(api_key="secret", page_size=10)
+    with OpenFiscalClient(settings, transport=httpx.MockTransport(handler)) as client:
+        page = client.request_page(
+            _dataset(),
+            page_index=1,
+            page_size=10,
+            params={"FSCL_YY": "2024"},
+        )
+
+    assert len(page.parsed.records) == 2
+    assert page.parsed.result_code == "INFO-000"
+
+
+def test_request_reports_scalar_json_type_and_preview() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=123,
+            headers={"content-type": "application/json"},
+        )
+
+    settings = Settings(api_key="secret", page_size=10)
+    with OpenFiscalClient(settings, transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(OpenFiscalError) as exc_info:
+            client.request_page(
+                _dataset(),
+                page_index=1,
+                page_size=10,
+                params={"FSCL_YY": "2024"},
+            )
+
+    message = str(exc_info.value)
+    assert "type=int" in message
+    assert "preview=123" in message
