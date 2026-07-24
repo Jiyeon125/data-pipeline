@@ -53,6 +53,10 @@ def _get_dataset(config_path: Path, dataset_id: str) -> DatasetConfig:
     return dataset
 
 
+def _response_status(page: Any) -> str:
+    return "no_data" if page.parsed.is_no_data else "ok"
+
+
 def _safe_output(dataset: DatasetConfig, page: Any) -> dict[str, Any]:
     record_keys = sorted(
         {str(key) for record in page.parsed.records[:5] for key in record.keys()}
@@ -60,6 +64,7 @@ def _safe_output(dataset: DatasetConfig, page: Any) -> dict[str, Any]:
     expected = set(dataset.expected_fields)
     actual = set(record_keys)
     return {
+        "response_status": _response_status(page),
         "dataset_id": dataset.dataset_id,
         "dataset_name": dataset.name,
         "requested_at": page.requested_at,
@@ -218,7 +223,7 @@ def probe_all(
                     page_size=page_size,
                     params=params,
                 )
-                results.append({"status": "ok", **_safe_output(dataset, page)})
+                results.append({"status": _response_status(page), **_safe_output(dataset, page)})
             except ConfigError as exc:
                 results.append(
                     {
