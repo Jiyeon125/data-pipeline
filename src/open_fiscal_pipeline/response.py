@@ -12,6 +12,7 @@ class ParsedResponse:
     result_code: str | None
     result_message: str | None
     top_level_keys: tuple[str, ...]
+    top_level_type: str
 
     @property
     def is_success(self) -> bool:
@@ -84,6 +85,26 @@ def _find_total_count(node: Any) -> int | None:
     return None
 
 
+def _is_direct_record_list(node: list[Any]) -> bool:
+    if not node or not all(isinstance(item, dict) for item in node):
+        return False
+
+    wrapper_keys = {
+        "RESULT",
+        "result",
+        "Result",
+        "row",
+        "rows",
+        "item",
+        "items",
+        "list_total_count",
+        "total_count",
+        "totalCount",
+        "totalCnt",
+    }
+    return not any(wrapper_keys.intersection(item.keys()) for item in node)
+
+
 def _find_records(node: Any) -> list[dict[str, Any]]:
     if isinstance(node, dict):
         for key in ("row", "rows", "item", "items"):
@@ -101,6 +122,8 @@ def _find_records(node: Any) -> list[dict[str, Any]]:
             if records:
                 return records
     elif isinstance(node, list):
+        if _is_direct_record_list(node):
+            return [dict(item) for item in node]
         for value in node:
             records = _find_records(value)
             if records:
@@ -108,20 +131,49 @@ def _find_records(node: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _select_service_node(
-    payload: dict[str, Any], service_name: str | None
-) -> tuple[str | None, Any]:
-    if service_name and service_name in payload:
-        return service_name, payload[service_name]
-    if len(payload) == 1:
-        only_key = next(iter(payload))
-        return str(only_key), payload[only_key]
+def _select_service_node(payload: Any, service_name: str | None) -> tuple[str | None, Any]:
+    if isinstance(payload, dict):
+        if service_name and service_name in payload:
+            return service_name, payload[service_name]
+        if len(payload) == 1:
+            only_key = next(iter(payload))
+            return str(only_key), payload[only_key]
+        return service_name, payload
+
+    if isinstance(payload, list):
+        if service_name:
+            for item in payload:
+                if isinstance(item, dict) and service_name in item:
+                    return service_name, item[service_name]
+        if len(payload) == 1:
+            item = payload[0]
+            if isinstance(item, dict) and len(item) == 1:
+                only_key = next(iter(item))
+                return str(only_key), item[only_key]
+            return service_name, item
+        return service_name, payload
+
     return service_name, payload
 
 
-def parse_api_payload(
-    payload: dict[str, Any], service_name: str | None = None
-) -> ParsedResponse:
+def _top_level_keys(payload: Any) -> tuple[str, ...]:
+    if isinstance(payload, dict):
+        return tuple(str(key) for key in payload.keys())
+    if isinstance(payload, list):
+        keys: list[str] = []
+        for index, item in enumerate(payload[:20]):
+            if isinstance(item, dict) and len(item) == 1:
+                keys.append(str(next(iter(item))))
+            else:
+                keys.append(f"[{index}]")
+        return tuple(keys)
+    return ()
+
+
+def parse_api_payload(payload: Any, service_name: str | None = None) -> ParsedResponse:
+    if not isinstance(payload, (dict, list)):
+        raise ValueError("API JSON 최상위는 객체 또는 배열이어야 합니다.")
+
     selected_name, node = _select_service_node(payload, service_name)
     result_code, result_message = _find_result(node)
     return ParsedResponse(
@@ -130,5 +182,6 @@ def parse_api_payload(
         total_count=_find_total_count(node),
         result_code=result_code,
         result_message=result_message,
-        top_level_keys=tuple(str(key) for key in payload.keys()),
+        top_level_keys=_top_level_keys(payload),
+        top_level_type="object" if isinstance(payload, dict) else "array",
     )
