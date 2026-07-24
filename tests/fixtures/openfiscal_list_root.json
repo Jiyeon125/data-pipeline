@@ -1,0 +1,25 @@
+[
+  {
+    "ExpenditureBudgetInit5": {
+      "list_total_count": 2,
+      "RESULT": {
+        "CODE": "INFO-000",
+        "MESSAGE": "정상 처리되었습니다"
+      },
+      "row": [
+        {
+          "FSCL_YY": "2024",
+          "OFFC_NM": "중소벤처기업부",
+          "PROG_NM": "중소기업성장안정지원",
+          "FSCL_BSNS_NM": "시험사업1"
+        },
+        {
+          "FSCL_YY": "2024",
+          "OFFC_NM": "중소벤처기업부",
+          "PROG_NM": "벤처기업활성화지원",
+          "FSCL_BSNS_NM": "시험사업2"
+        }
+      ]
+    }
+  }
+]
