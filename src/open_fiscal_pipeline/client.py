@@ -21,7 +21,7 @@ class OpenFiscalError(RuntimeError):
 class APIPage:
     page_index: int
     requested_at: str
-    payload: dict[str, Any]
+    payload: Any
     parsed: ParsedResponse
 
 
@@ -95,10 +95,14 @@ class OpenFiscalClient:
             preview = response.text[:300].replace(self.settings.api_key, "***")
             raise OpenFiscalError(f"JSON 응답이 아닙니다: {preview}") from exc
 
-        if not isinstance(payload, dict):
-            raise OpenFiscalError("최상위 API 응답이 JSON 객체가 아닙니다.")
+        if not isinstance(payload, (dict, list)):
+            raise OpenFiscalError("최상위 API 응답이 JSON 객체 또는 배열이 아닙니다.")
 
-        parsed = parse_api_payload(payload, dataset.service_name)
+        try:
+            parsed = parse_api_payload(payload, dataset.service_name)
+        except ValueError as exc:
+            raise OpenFiscalError(str(exc)) from exc
+
         if not parsed.is_success and not parsed.is_no_data:
             raise OpenFiscalError(
                 f"API 오류 {parsed.result_code or 'UNKNOWN'}: "
@@ -149,6 +153,7 @@ class OpenFiscalClient:
                             "record_count": len(page.parsed.records),
                             "total_count": page.parsed.total_count,
                             "result_code": page.parsed.result_code,
+                            "top_level_type": page.parsed.top_level_type,
                         },
                         "response": page.payload,
                     },
