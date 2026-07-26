@@ -320,6 +320,33 @@ fiscal-analytics validate-m2-definitions --root .
 - 분석 기준 확정 보고서: `docs/M2_ANALYSIS_DEFINITION_VALIDATION.md`
 - 최종 점수·최종 순위·정책 결론은 생성하지 않음
 
+## M3 재정 신호와 예산 환류 탐색
+
+검증된 재정지표에서 집행률·연말집중 기준을 비교하고, 독립 재정 신호와
+T+1·T+2 예산변화의 연관성을 탐색합니다. 최종 복합점수나 전체 순위는 생성하지 않습니다.
+
+```powershell
+fiscal-analytics build-m3-financial-signals --root .
+```
+
+- 분석표와 피처: `data/analytics/m3/`
+- 판단용 그래프 8개: `artifacts/figures/m3/`
+- 분석 및 권장안 보고서: `docs/M3_FINANCIAL_INSIGHTS.md`
+- 임계값은 사용자·팀 결정 전까지 확정 설정으로 저장하지 않음
+
+## M3 방법론 감사
+
+상대 분위수의 경계 동률, 신호 분석 단위, 동일 사업 반복관측과
+UNKNOWN 분류 검토 효과를 기존 M3 산출물과 분리해 감사합니다.
+
+```powershell
+fiscal-analytics audit-m3-methodology --root .
+```
+
+- 감사표와 단위별 피처: `data/analytics/m3_audit/`
+- 감사 보고서: `docs/M3_METHODOLOGY_AUDIT.md`
+- 기존 M3 산출물과 원본 금액은 덮어쓰지 않음
+
 ```powershell
 openfiscal doctor
 openfiscal probe monthly_expenditure `
