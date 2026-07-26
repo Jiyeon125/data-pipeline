@@ -125,6 +125,48 @@ def execution_eligible_frame(features: pd.DataFrame) -> pd.DataFrame:
     return features.loc[eligible].copy()
 
 
+def large_project_scope_sensitivity(
+    features: pd.DataFrame,
+    *,
+    threshold: float = 0.9,
+) -> pd.DataFrame:
+    """대규모 보통교부세 포함 여부가 금액가중 집행률 신호에 미치는 영향을 계산합니다."""
+    eligible = execution_eligible_frame(features)
+    ordinary_grant = eligible["subactivity_name"].fillna("").eq("보통교부세")
+    bond_purchase = (
+        eligible["subactivity_name"]
+        .fillna("")
+        .str.contains(
+            r"(?:국채|채권).*매입",
+            regex=True,
+        )
+    )
+    rows = []
+    for scenario, keep in [
+        ("CURRENT_SCOPE", pd.Series(True, index=eligible.index)),
+        ("EXCLUDE_ORDINARY_GRANT", ~ordinary_grant),
+    ]:
+        frame = eligible.loc[keep]
+        detected = frame[_numeric(frame, "execution_rate").lt(threshold)]
+        rows.append(
+            {
+                "scenario": scenario,
+                "threshold": threshold,
+                "eligible_row_count": len(frame),
+                "detected_row_count": len(detected),
+                "detected_current_budget_amount": _sum(detected, "current_budget_analysis_amount"),
+                "eligible_current_budget_amount": _sum(frame, "current_budget_analysis_amount"),
+                "detected_current_budget_share": _safe_rate(
+                    _sum(detected, "current_budget_analysis_amount"),
+                    _sum(frame, "current_budget_analysis_amount"),
+                ),
+                "ordinary_grant_removed_row_count": int((ordinary_grant & ~keep).sum()),
+                "bond_purchase_row_count_in_current_scope": int(bond_purchase.sum()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _ecdf_rows(
     frame: pd.DataFrame,
     *,
@@ -1455,11 +1497,13 @@ def build_decision_support_report(
     patterns: pd.DataFrame,
     recurrence: pd.DataFrame,
     options: pd.DataFrame,
+    scope_sensitivity: pd.DataFrame,
     chart_map: pd.DataFrame,
 ) -> None:
     """발표·질의응답에 사용할 분석 기준 의사결정 문서를 작성합니다."""
     under80 = _overall_threshold(sensitivity, 0.8)
     under90 = _overall_threshold(sensitivity, 0.9)
+    scope = scope_sensitivity.set_index("scenario")
     top_increments = (
         sensitivity[sensitivity["dimension"].eq("OVERALL") & sensitivity["rapid_change_candidate"]]
         .sort_values("incremental_change_rank")
@@ -1601,6 +1645,15 @@ def build_decision_support_report(
                 "발표하기 전에는 이 대규모 사업들의 정책사업 범위와 재정수단을 먼저 확인해야 "
                 "합니다. 이 표는 기준을 폐기하는 근거가 아니라 금액가중 결과가 분류 검토에 "
                 "민감하다는 근거입니다."
+            ),
+            "",
+            (
+                f"현재 범위에서 90% 미만 탐지 예산현액 비중은 "
+                f"{scope.loc['CURRENT_SCOPE', 'detected_current_budget_share']:.1%}이며, "
+                f"보통교부세를 민감도에서 제외하면 "
+                f"{scope.loc['EXCLUDE_ORDINARY_GRANT', 'detected_current_budget_share']:.1%}입니다. "
+                f"국채·채권매입은 범위 규칙 적용 후 현재 M3에 "
+                f"{int(scope.loc['CURRENT_SCOPE', 'bond_purchase_row_count_in_current_scope']):,}행입니다."
             ),
         ]
     )
@@ -1852,7 +1905,7 @@ def build_decision_support_report(
             "## 12. 권장 다음 단계",
             "",
             "1. 이 문서의 잠정 권장안을 발표용 기준으로 검토합니다.",
-            "2. UNKNOWN 상위 16개를 실제 근거로 수기 분류합니다.",
+            "2. UNKNOWN 본예산 80% 커버리지 검토집합을 실제 근거로 수기 분류합니다.",
             "3. 분류 결과를 반영해 비교집단 크기와 상대 신호만 최소 재실행합니다.",
             "4. 실제 공유·피드백 후 확정된 기준만 설정파일과 의사결정 기록에 저장합니다.",
             "",
@@ -1861,7 +1914,7 @@ def build_decision_support_report(
             "- 80~90%를 대시보드에서 별도 색상으로 표시할지, 필터로만 제공할지?",
             "- 상대 신호 LOW 등급을 화면에 표시할지, 상세표에만 남길지?",
             "- 정상 연말 지급이 예상되는 사업유형을 별도 설명 태그로 관리할지?",
-            "- UNKNOWN 16개 검수 후 분석 대상 예산 커버리지 목표를 어디까지 둘지?",
+            "- UNKNOWN 80% 커버리지 검수 후 추가 검수 범위를 어디까지 둘지?",
             "",
             "## 부록. 차트 원자료 연결",
             "",
@@ -1894,6 +1947,7 @@ def build_analysis_policy_decision_support(
     patterns, year_points = year_end_pattern_types(features, peer_flags)
     recurrence = repeated_signal_distribution(features)
     options = analysis_policy_options(features, peer_flags, recurrence)
+    scope_sensitivity = large_project_scope_sensitivity(features)
 
     figure_paths, chart_map = create_decision_support_figures(
         ecdf,
@@ -1915,6 +1969,7 @@ def build_analysis_policy_decision_support(
         "year_end_pattern_points.csv": year_points,
         "repeated_signal_distribution.csv": recurrence,
         "analysis_policy_options.csv": options,
+        "large_project_scope_sensitivity.csv": scope_sensitivity,
         "decision_support_chart_map.csv": chart_map,
     }
     output_paths: list[Path] = []
@@ -1927,7 +1982,9 @@ def build_analysis_policy_decision_support(
     over100_count = int(_bool(features, "execution_over_100_flag").sum())
     validations = {
         "source_file_unchanged": before_hash == _hash(paths.features),
-        "feature_row_count_preserved": len(features) == 6290,
+        "feature_row_count_preserved": (
+            len(features) == features["source_project_year_id"].nunique()
+        ),
         "threshold_range_complete": set(
             sensitivity.loc[
                 sensitivity["dimension"].eq("OVERALL"),
@@ -1954,6 +2011,8 @@ def build_analysis_policy_decision_support(
         "policy_not_finalized": options["final_policy_status"]
         .eq("CANDIDATE_NOT_FINAL_CONFIG")
         .all(),
+        "large_project_scope_sensitivity_complete": set(scope_sensitivity["scenario"])
+        == {"CURRENT_SCOPE", "EXCLUDE_ORDINARY_GRANT"},
         "leading_zero_codes_preserved": {"019", "075"}.issubset(
             set(features["ministry_code"].astype(str))
         ),
@@ -1989,6 +2048,7 @@ def build_analysis_policy_decision_support(
         "year_end_point_rows": len(year_points),
         "recurrence_rows": len(recurrence),
         "policy_option_rows": len(options),
+        "large_project_scope_sensitivity_rows": len(scope_sensitivity),
         "figure_count": len(figure_paths),
         "validation": validations,
         "validation_status": "PASS" if not failed else "FAIL",
@@ -2048,6 +2108,7 @@ def build_analysis_policy_decision_support(
         patterns,
         recurrence,
         options,
+        scope_sensitivity,
         chart_map,
     )
     if failed:

@@ -279,7 +279,7 @@ fiscal-master build-project-continuity --overwrite
 fiscal-master build-ranking-population-v2 --overwrite
 ```
 
-- core 6,290행을 기본 순위 모집단으로 유지
+- 현재 core 모집단 전체를 기본 순위 모집단으로 유지
 - UNKNOWN 재정수단은 재정수단 구성요소만 제한
 - 집행률 1 초과는 집행 구성요소만 제한
 - 관측경계·관계 후보는 추세 구성요소만 제한
@@ -360,6 +360,21 @@ fiscal-analytics build-analysis-policy-decision-support --root .
 - 편집 가능한 분석표: `data/analytics/decision_support/`
 - 발표용 정적 그래프: `artifacts/figures/decision_support/`
 - 그래프 읽는 법과 질의응답 근거: `docs/ANALYSIS_POLICY_DECISION_SUPPORT.md`
+
+## UNKNOWN 예산 80% 커버리지 사람 검수
+
+M3에서 UNKNOWN 누적 본예산의 80%를 차지하는 우선사업을
+분석 범위·재정수단·연도 적용·공식 근거 순서로 검수합니다.
+
+```powershell
+fiscal-analytics prepare-unknown-priority-review --root .
+fiscal-analytics validate-unknown-priority-review --root .
+```
+
+- 검수 워크북: `data/manual/unknown_priority_fiscal_instrument_review.xlsx`
+- 작성 안내: `docs/UNKNOWN_PRIORITY_REVIEW_GUIDE.md`
+- 기존 검수 워크북은 기본적으로 덮어쓰지 않음
+- 현재 80% 커버리지 대상 모두 확정된 뒤 `--require-complete`로 완료 검증
 
 ```powershell
 openfiscal doctor

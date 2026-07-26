@@ -56,11 +56,9 @@ class AuditPaths:
             root=root,
             features=root / "data/analytics/m3/financial_signal_features.parquet",
             programs=root / "data/processed/masters/program_year_financial.parquet",
-            broad=root
-            / "data/processed/masters/population_sensitivity/broad_population.parquet",
+            broad=root / "data/processed/masters/population_sensitivity/broad_population.parquet",
             v2=root / "data/processed/masters/project_year_financial_v2.parquet",
-            cohorts=root
-            / "data/analytics/definition_validation/feedback_cohort_t1_t2.csv",
+            cohorts=root / "data/analytics/definition_validation/feedback_cohort_t1_t2.csv",
             unknown=root / "data/analytics/m3/unknown_manual_review_priority.csv",
             output_dir=root / "data/analytics/m3_audit",
             report=root / "docs/M3_METHODOLOGY_AUDIT.md",
@@ -182,9 +180,7 @@ def peer_threshold_tie_audit(features: pd.DataFrame) -> pd.DataFrame:
                     "target_tail_row_count": target_count,
                     "target_tail_share": tail_share,
                     "existing_detected_share": float(detected.mean()),
-                    "over_detection_row_count": max(
-                        int(detected.sum()) - target_count, 0
-                    ),
+                    "over_detection_row_count": max(int(detected.sum()) - target_count, 0),
                     "minimum_peer_group_size": minimum_size,
                     "small_peer_group_flag": len(values) < minimum_size,
                     "all_values_tied_flag": values.nunique(dropna=True) == 1,
@@ -225,16 +221,8 @@ def _rank_flags(
     target_n = max(math.ceil(len(numeric) * tail_share), 1)
     exact_boundary = float(ordered.iloc[min(target_n - 1, len(ordered) - 1)])
     exact_boundary_mask = _is_boundary(numeric, exact_boundary)
-    better = (
-        numeric.lt(exact_boundary)
-        if direction == "BOTTOM"
-        else numeric.gt(exact_boundary)
-    )
-    exact_hold = (
-        better | exact_boundary_mask
-        if int(exact_boundary_mask.sum()) == 1
-        else better
-    )
+    better = numeric.lt(exact_boundary) if direction == "BOTTOM" else numeric.gt(exact_boundary)
+    exact_hold = better | exact_boundary_mask if int(exact_boundary_mask.sum()) == 1 else better
     return {
         "EXISTING_QUANTILE_INCLUSIVE": inclusive,
         "AVERAGE_PERCENTILE_RANK": average,
@@ -271,9 +259,7 @@ def build_peer_method_flags(features: pd.DataFrame) -> pd.DataFrame:
 
     for tail, label in [(0.10, "bottom_10"), (0.20, "bottom_20")]:
         minimum_size = _tail_minimum_size(tail)
-        for index in result.loc[execution_valid].groupby(
-            PEER_KEYS, dropna=False
-        ).groups.values():
+        for index in result.loc[execution_valid].groupby(PEER_KEYS, dropna=False).groups.values():
             values = _numeric(result.loc[index], "execution_rate")
             flags = _rank_flags(values, quantile=tail, direction="BOTTOM")
             eligible = len(values) >= minimum_size
@@ -292,37 +278,29 @@ def build_peer_method_flags(features: pd.DataFrame) -> pd.DataFrame:
         tail = 1 - percentile
         label = f"p{int(percentile * 100)}"
         minimum_size = _tail_minimum_size(tail)
-        for index in result.loc[monthly_valid].groupby(
-            PEER_KEYS, dropna=False
-        ).groups.values():
+        for index in result.loc[monthly_valid].groupby(PEER_KEYS, dropna=False).groups.values():
             q4 = _numeric(result.loc[index], "q4_expenditure_share")
             december = _numeric(result.loc[index], "december_single_month_share")
             eligible = len(index) >= minimum_size
             q4_flags = _rank_flags(q4, quantile=percentile, direction="TOP")
-            dec_flags = _rank_flags(
-                december, quantile=percentile, direction="TOP"
-            )
+            dec_flags = _rank_flags(december, quantile=percentile, direction="TOP")
             result.loc[index, f"peer_{label}_q4_percentile_rank_average"] = q4.rank(
                 method="average", pct=True
             )
-            result.loc[
-                index, f"peer_{label}_december_percentile_rank_average"
-            ] = december.rank(method="average", pct=True)
+            result.loc[index, f"peer_{label}_december_percentile_rank_average"] = december.rank(
+                method="average", pct=True
+            )
             result.loc[index, f"peer_{label}_group_size"] = len(index)
             for method in q4_flags:
                 q4_column = f"peer_{label}_q4_{method.lower()}"
                 dec_column = f"peer_{label}_december_{method.lower()}"
                 union_column = f"peer_{label}_year_end_{method.lower()}"
                 if eligible:
-                    result.loc[index, q4_column] = q4_flags[method].astype(
+                    result.loc[index, q4_column] = q4_flags[method].astype("boolean")
+                    result.loc[index, dec_column] = dec_flags[method].astype("boolean")
+                    result.loc[index, union_column] = (q4_flags[method] | dec_flags[method]).astype(
                         "boolean"
                     )
-                    result.loc[index, dec_column] = dec_flags[method].astype(
-                        "boolean"
-                    )
-                    result.loc[index, union_column] = (
-                        q4_flags[method] | dec_flags[method]
-                    ).astype("boolean")
                 else:
                     result.loc[index, [q4_column, dec_column, union_column]] = pd.NA
     return result
@@ -338,8 +316,7 @@ def peer_method_comparison(
             columns=[
                 column
                 for column in peer_flags.columns
-                if column in features.columns
-                and column != "source_project_year_id"
+                if column in features.columns and column != "source_project_year_id"
             ]
         ),
         on="source_project_year_id",
@@ -401,27 +378,19 @@ def peer_method_comparison(
                         "flagged_unique_project_count": numerator[
                             "classification_project_id"
                         ].nunique(),
-                        "flagged_row_share": _safe_rate(
-                            len(numerator), len(denominator)
-                        ),
+                        "flagged_row_share": _safe_rate(len(numerator), len(denominator)),
                         "original_budget_amount": _sum(
                             numerator, "original_budget_analysis_amount"
                         ),
                         "original_budget_share": _safe_rate(
                             _sum(numerator, "original_budget_analysis_amount"),
-                            _sum(
-                                denominator, "original_budget_analysis_amount"
-                            ),
+                            _sum(denominator, "original_budget_analysis_amount"),
                         ),
-                        "current_budget_amount": _sum(
-                            numerator, "current_budget_analysis_amount"
-                        ),
+                        "current_budget_amount": _sum(numerator, "current_budget_analysis_amount"),
                         "settlement_expenditure_amount": _sum(
                             numerator, "settlement_analysis_amount"
                         ),
-                        "recommended_candidate": criterion.endswith(
-                            "CONSERVATIVE_TIE_BLOCK"
-                        ),
+                        "recommended_candidate": criterion.endswith("CONSERVATIVE_TIE_BLOCK"),
                         "arbitrary_boundary_selection_used": False,
                     }
                 )
@@ -480,39 +449,27 @@ def split_signal_grains(
         ),
         "strong_low_execution_year_count": (
             "strong_low_execution_flag",
-            lambda values: int(
-                values.astype("boolean").fillna(False).sum()
-            ),
+            lambda values: int(values.astype("boolean").fillna(False).sum()),
         ),
         "moderate_low_execution_year_count": (
             "moderate_low_execution_flag",
-            lambda values: int(
-                values.astype("boolean").fillna(False).sum()
-            ),
+            lambda values: int(values.astype("boolean").fillna(False).sum()),
         ),
         "fixed_year_end_concentration_year_count": (
             "fixed_year_end_concentration_flag",
-            lambda values: int(
-                values.astype("boolean").fillna(False).sum()
-            ),
+            lambda values: int(values.astype("boolean").fillna(False).sum()),
         ),
         "cumulative_decrease_year_count": (
             "cumulative_decrease_flag",
-            lambda values: int(
-                values.astype("boolean").fillna(False).sum()
-            ),
+            lambda values: int(values.astype("boolean").fillna(False).sum()),
         ),
         "execution_over_100_year_count": (
             "execution_over_100_flag",
-            lambda values: int(
-                values.astype("boolean").fillna(False).sum()
-            ),
+            lambda values: int(values.astype("boolean").fillna(False).sum()),
         ),
     }
     rows = []
-    for project_id, part in project_year.groupby(
-        "classification_project_id", dropna=False
-    ):
+    for project_id, part in project_year.groupby("classification_project_id", dropna=False):
         latest = part.sort_values("fiscal_year").iloc[-1]
         row: dict[str, Any] = {
             "analysis_grain": "project",
@@ -540,9 +497,7 @@ def split_signal_grains(
         row["repeated_moderate_low_execution_flag"] = (
             valid >= 2 and moderate >= 2 and moderate / valid >= 0.5
         )
-        monthly_valid = int(
-            part["fixed_year_end_concentration_flag"].notna().sum()
-        )
+        monthly_valid = int(part["fixed_year_end_concentration_flag"].notna().sum())
         row["valid_monthly_year_count"] = monthly_valid
         row["repeated_year_end_concentration_flag"] = (
             monthly_valid >= 2 and year_end >= 2 and year_end / monthly_valid >= 0.5
@@ -553,12 +508,8 @@ def split_signal_grains(
     program_year = programs.copy()
     program_year.insert(0, "analysis_grain", "program_year")
     program_year["program_concentration_flag"] = (
-        pd.to_numeric(
-            program_year["analysis_included_project_count"], errors="coerce"
-        ).ge(2)
-        & pd.to_numeric(
-            program_year["top1_project_budget_share"], errors="coerce"
-        ).ge(0.70)
+        pd.to_numeric(program_year["analysis_included_project_count"], errors="coerce").ge(2)
+        & pd.to_numeric(program_year["top1_project_budget_share"], errors="coerce").ge(0.70)
     ).astype("boolean")
     program_year["program_signal_row_weight"] = 1
     program_year["program_signal_counting_rule"] = (
@@ -567,12 +518,8 @@ def split_signal_grains(
 
     old_program_rows = _bool(features, "program_concentration_flag")
     new_program_rows = _bool(program_year, "program_concentration_flag")
-    old_budget = _sum(
-        features.loc[old_program_rows], "original_budget_analysis_amount"
-    )
-    new_budget = _sum(
-        program_year.loc[new_program_rows], "original_budget"
-    )
+    old_budget = _sum(features.loc[old_program_rows], "original_budget_analysis_amount")
+    new_budget = _sum(program_year.loc[new_program_rows], "original_budget")
     audit_rows = [
         {
             "signal": "PROGRAM_BUDGET_CONCENTRATION",
@@ -608,16 +555,10 @@ def split_signal_grains(
             "previous_flagged_row_count": len(features),
             "correct_grain_flagged_row_count": len(project_year),
             "row_count_inflation_factor": 1.0,
-            "previous_unique_project_count": features[
-                "classification_project_id"
-            ].nunique(),
+            "previous_unique_project_count": features["classification_project_id"].nunique(),
             "correct_unique_program_year_count": math.nan,
-            "previous_budget_amount": _sum(
-                features, "original_budget_analysis_amount"
-            ),
-            "correct_grain_budget_amount": _sum(
-                project_year, "original_budget_analysis_amount"
-            ),
+            "previous_budget_amount": _sum(features, "original_budget_analysis_amount"),
+            "correct_grain_budget_amount": _sum(project_year, "original_budget_analysis_amount"),
             "budget_amount_difference": 0.0,
             "duplicate_counting_confirmed": False,
             "risk": "none after program-level flags are removed",
@@ -629,12 +570,8 @@ def split_signal_grains(
             "previous_storage_grain": "project_year_repeated_values",
             "previous_flagged_row_count": len(features),
             "correct_grain_flagged_row_count": len(recurrence),
-            "row_count_inflation_factor": _safe_rate(
-                len(features), len(recurrence)
-            ),
-            "previous_unique_project_count": features[
-                "classification_project_id"
-            ].nunique(),
+            "row_count_inflation_factor": _safe_rate(len(features), len(recurrence)),
+            "previous_unique_project_count": features["classification_project_id"].nunique(),
             "correct_unique_program_year_count": math.nan,
             "previous_budget_amount": math.nan,
             "correct_grain_budget_amount": math.nan,
@@ -651,10 +588,7 @@ def _matched_signal_control(
     cohort: pd.DataFrame,
     signal_column: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    valid = (
-        cohort[signal_column].notna()
-        & _numeric(cohort, "feedback_budget_change_rate").notna()
-    )
+    valid = cohort[signal_column].notna() & _numeric(cohort, "feedback_budget_change_rate").notna()
     signal = cohort.loc[valid & _bool(cohort, signal_column)].copy()
     if signal.empty:
         return signal, cohort.iloc[0:0].copy()
@@ -690,21 +624,11 @@ def _cluster_bootstrap_interval(
     control_keys = np.array(list(control_groups), dtype=object)
     differences = np.empty(iterations)
     for index in range(iterations):
-        sampled_signal = rng.choice(
-            signal_keys, size=len(signal_keys), replace=True
-        )
-        sampled_control = rng.choice(
-            control_keys, size=len(control_keys), replace=True
-        )
-        signal_values = np.concatenate(
-            [signal_groups[key] for key in sampled_signal]
-        )
-        control_values = np.concatenate(
-            [control_groups[key] for key in sampled_control]
-        )
-        differences[index] = np.median(signal_values) - np.median(
-            control_values
-        )
+        sampled_signal = rng.choice(signal_keys, size=len(signal_keys), replace=True)
+        sampled_control = rng.choice(control_keys, size=len(control_keys), replace=True)
+        signal_values = np.concatenate([signal_groups[key] for key in sampled_signal])
+        control_values = np.concatenate([control_groups[key] for key in sampled_control])
+        differences[index] = np.median(signal_values) - np.median(control_values)
     return (
         float(np.quantile(differences, 0.025)),
         float(np.quantile(differences, 0.975)),
@@ -722,15 +646,11 @@ def _mean_rank_difference(
         ],
         ignore_index=True,
     )
-    combined["_within_stratum_rank"] = combined.groupby(
-        FEEDBACK_STRATA, dropna=False
-    )["feedback_budget_change_rate"].rank(method="average", pct=True)
-    signal_mean = combined.loc[
-        combined["_signal_group"], "_within_stratum_rank"
-    ].mean()
-    control_mean = combined.loc[
-        ~combined["_signal_group"], "_within_stratum_rank"
-    ].mean()
+    combined["_within_stratum_rank"] = combined.groupby(FEEDBACK_STRATA, dropna=False)[
+        "feedback_budget_change_rate"
+    ].rank(method="average", pct=True)
+    signal_mean = combined.loc[combined["_signal_group"], "_within_stratum_rank"].mean()
+    control_mean = combined.loc[~combined["_signal_group"], "_within_stratum_rank"].mean()
     return float(signal_mean - control_mean)
 
 
@@ -789,9 +709,7 @@ def feedback_cluster_bootstrap(
     }
     rows: list[dict[str, Any]] = []
     for horizon_index, horizon in enumerate(["T+1", "T+2"]):
-        cohort = _feedback_cohort_frame(
-            cohorts, enriched_features, v2, horizon
-        )
+        cohort = _feedback_cohort_frame(cohorts, enriched_features, v2, horizon)
         extra_columns = [
             "source_project_year_id",
             "valid_execution_year_count",
@@ -814,12 +732,8 @@ def feedback_cluster_bootstrap(
                 STRUCTURE_CANDIDATE_STATUSES
             ),
             "EXCLUDE_ONE_VALID_OBSERVATION": None,
-            "EXCLUDE_SMALL_PROJECT": ~cohort["project_size_bucket"].eq(
-                "Q1_SMALL"
-            ),
-            "EXCLUDE_LARGE_PROJECT": ~cohort["project_size_bucket"].eq(
-                "Q4_VERY_LARGE"
-            ),
+            "EXCLUDE_SMALL_PROJECT": ~cohort["project_size_bucket"].eq("Q1_SMALL"),
+            "EXCLUDE_LARGE_PROJECT": ~cohort["project_size_bucket"].eq("Q4_VERY_LARGE"),
         }
         for signal_index, (
             signal_name,
@@ -834,28 +748,16 @@ def feedback_cluster_bootstrap(
                     else base_filter
                 )
                 scoped = cohort.loc[filter_mask].copy()
-                signal, control = _matched_signal_control(
-                    scoped, signal_column
-                )
-                signal_values = _numeric(
-                    signal, "feedback_budget_change_rate"
-                ).dropna()
-                control_values = _numeric(
-                    control, "feedback_budget_change_rate"
-                ).dropna()
-                signal_projects = signal[
-                    "classification_project_id"
-                ].nunique()
-                control_projects = control[
-                    "classification_project_id"
-                ].nunique()
+                signal, control = _matched_signal_control(scoped, signal_column)
+                signal_values = _numeric(signal, "feedback_budget_change_rate").dropna()
+                control_values = _numeric(control, "feedback_budget_change_rate").dropna()
+                signal_projects = signal["classification_project_id"].nunique()
+                control_projects = control["classification_project_id"].nunique()
                 insufficient = signal_projects < 10 or control_projects < 10
                 ci_low, ci_high = _cluster_bootstrap_interval(
                     signal,
                     control,
-                    seed=20260726
-                    + horizon_index * 100
-                    + signal_index * 10,
+                    seed=20260726 + horizon_index * 100 + signal_index * 10,
                 )
                 rows.append(
                     {
@@ -871,8 +773,7 @@ def feedback_cluster_bootstrap(
                         "signal_budget_change_median": signal_values.median(),
                         "control_budget_change_median": control_values.median(),
                         "median_difference": (
-                            signal_values.median()
-                            - control_values.median()
+                            signal_values.median() - control_values.median()
                             if len(signal_values) and len(control_values)
                             else math.nan
                         ),
@@ -884,9 +785,7 @@ def feedback_cluster_bootstrap(
                         "cluster_bootstrap_ci_low": ci_low,
                         "cluster_bootstrap_ci_high": ci_high,
                         "cluster_unit": "classification_project_id",
-                        "bootstrap_iterations": 600
-                        if not insufficient
-                        else 0,
+                        "bootstrap_iterations": 600 if not insufficient else 0,
                         "insufficient_sample_flag": insufficient,
                         "result_status": (
                             "INSUFFICIENT_SAMPLE"
@@ -913,15 +812,9 @@ def _review_scenario_metrics(
     selected_rows = broad["classification_project_id"].isin(selected_ids)
     classified = known | selected_rows
     total_projects = broad["classification_project_id"].nunique()
-    classified_projects = broad.loc[
-        classified, "classification_project_id"
-    ].nunique()
-    selected_feature_rows = features[
-        "classification_project_id"
-    ].isin(selected_ids)
-    current_rank_eligible = _bool(
-        features, "fiscal_instrument_ranking_eligible"
-    )
+    classified_projects = broad.loc[classified, "classification_project_id"].nunique()
+    selected_feature_rows = features["classification_project_id"].isin(selected_ids)
+    current_rank_eligible = _bool(features, "fiscal_instrument_ranking_eligible")
     total_budget = _sum(broad, "original_budget_analysis_amount")
     return {
         "scenario": scenario,
@@ -933,20 +826,14 @@ def _review_scenario_metrics(
             _sum(unknown, "original_budget_amount"),
         ),
         "classified_unique_project_count": classified_projects,
-        "classified_unique_project_share": _safe_rate(
-            classified_projects, total_projects
-        ),
+        "classified_unique_project_share": _safe_rate(classified_projects, total_projects),
         "classified_project_year_row_count": int(classified.sum()),
-        "classified_project_year_row_share": _safe_rate(
-            int(classified.sum()), len(broad)
-        ),
+        "classified_project_year_row_share": _safe_rate(int(classified.sum()), len(broad)),
         "classified_original_budget_amount": _sum(
             broad.loc[classified], "original_budget_analysis_amount"
         ),
         "classified_original_budget_share": _safe_rate(
-            _sum(
-                broad.loc[classified], "original_budget_analysis_amount"
-            ),
+            _sum(broad.loc[classified], "original_budget_analysis_amount"),
             total_budget,
         ),
         "fiscal_instrument_ranking_eligible_row_count": int(
@@ -962,8 +849,7 @@ def _review_scenario_metrics(
             if assumption_type == "COVERAGE_ASSUMPTION"
             else "ACTUAL_OR_PROXY_VALUES_REQUIRED"
         ),
-        "actual_manual_confirmation_used": assumption_type
-        == "ACTUAL_CONFIRMED",
+        "actual_manual_confirmation_used": assumption_type == "ACTUAL_CONFIRMED",
     }
 
 
@@ -972,13 +858,12 @@ def unknown_review_impact(
     features: pd.DataFrame,
     unknown: pd.DataFrame,
 ) -> pd.DataFrame:
-    """상위 16·40개 검수가 분류 커버리지에 미칠 효과를 가정과 실제로 분리합니다."""
+    """80% 커버리지 집합·상위 40개 검수 효과를 가정과 실제로 분리합니다."""
     baseline = unknown.iloc[0:0].copy()
-    top16 = unknown.head(16).copy()
+    coverage80 = unknown[_bool(unknown, "priority_80pct_coverage")].copy()
     top40 = unknown.head(40).copy()
     actual = unknown[
-        unknown["review_status"].eq("VERIFIED")
-        & unknown["manual_confirmed_value"].notna()
+        unknown["review_status"].eq("VERIFIED") & unknown["manual_confirmed_value"].notna()
     ].copy()
     rows = [
         _review_scenario_metrics(
@@ -993,8 +878,8 @@ def unknown_review_impact(
             broad,
             features,
             unknown,
-            scenario="ASSUME_TOP_16_ALL_CONFIRMED",
-            selected=top16,
+            scenario="ASSUME_80PCT_COVERAGE_ALL_CONFIRMED",
+            selected=coverage80,
             assumption_type="COVERAGE_ASSUMPTION",
         ),
         _review_scenario_metrics(
@@ -1015,7 +900,7 @@ def unknown_review_impact(
         ),
     ]
     result = pd.DataFrame(rows)
-    for count, selected in [(16, top16), (40, top40)]:
+    for label, selected in [("80PCT_COVERAGE", coverage80), ("TOP_40", top40)]:
         single_candidate = selected[
             ~selected["keyword_candidate"].eq("NO_CANDIDATE")
             & ~_bool(selected, "multiple_candidate_flag")
@@ -1024,26 +909,23 @@ def unknown_review_impact(
             broad,
             features,
             unknown,
-            scenario=f"KEYWORD_PROXY_TOP_{count}",
+            scenario=f"KEYWORD_PROXY_{label}",
             selected=single_candidate,
             assumption_type="UNCONFIRMED_KEYWORD_PROXY",
         )
-        proxy["comparison_group_change_status"] = (
-            "PARTIAL_PROXY_ONLY_NOT_A_MANUAL_CLASSIFICATION"
-        )
+        proxy["comparison_group_change_status"] = "PARTIAL_PROXY_ONLY_NOT_A_MANUAL_CLASSIFICATION"
         result = pd.concat([result, pd.DataFrame([proxy])], ignore_index=True)
 
     result["unknown_review_unit_total"] = len(unknown)
-    result["top16_cumulative_budget_share"] = float(
-        top16["cumulative_unknown_budget_share"].max()
+    result["coverage80_project_count"] = len(coverage80)
+    result["coverage80_cumulative_budget_share"] = float(
+        coverage80["cumulative_unknown_budget_share"].max()
     )
-    result["top40_cumulative_budget_share"] = float(
-        top40["cumulative_unknown_budget_share"].max()
-    )
-    result["top16_average_annual_budget"] = float(
+    result["top40_cumulative_budget_share"] = float(top40["cumulative_unknown_budget_share"].max())
+    result["coverage80_average_annual_budget"] = float(
         (
-            top16["original_budget_amount"]
-            / top16["observed_years"].fillna("").str.split(";").str.len()
+            coverage80["original_budget_amount"]
+            / coverage80["observed_years"].fillna("").str.split(";").str.len()
         ).sum()
     )
     result["top40_average_annual_budget"] = float(
@@ -1052,7 +934,7 @@ def unknown_review_impact(
             / top40["observed_years"].fillna("").str.split(";").str.len()
         ).sum()
     )
-    for count, selected in [(16, top16), (40, top40)]:
+    for prefix, selected in [("coverage80", coverage80), ("top40", top40)]:
         latest_budgets = []
         observed_year_counts = []
         for row in selected.itertuples(index=False):
@@ -1060,10 +942,8 @@ def unknown_review_impact(
             observed_year_counts.append(len(yearly))
             latest_year = max(yearly, key=int)
             latest_budgets.append(float(yearly[latest_year]))
-        result[f"top{count}_latest_year_budget"] = sum(latest_budgets)
-        result[f"top{count}_mean_observed_year_count"] = float(
-            np.mean(observed_year_counts)
-        )
+        result[f"{prefix}_latest_year_budget"] = sum(latest_budgets)
+        result[f"{prefix}_mean_observed_year_count"] = float(np.mean(observed_year_counts))
     result["interpretation_note"] = (
         "coverage scenarios assume a valid manual instrument assignment; "
         "comparison-group changes remain unknown until actual values exist"
@@ -1122,20 +1002,16 @@ def build_audit_report(
         "YEAR_END_P90",
         "CONSERVATIVE_TIE_BLOCK",
     )
-    program = unit_audit[
-        unit_audit["signal"].eq("PROGRAM_BUDGET_CONCENTRATION")
-    ].iloc[0]
+    program = unit_audit[unit_audit["signal"].eq("PROGRAM_BUDGET_CONCENTRATION")].iloc[0]
     t1_fixed = feedback[
         feedback["feedback_horizon"].eq("T+1")
         & feedback["signal"].eq("FIXED_YEAR_END")
         & feedback["sensitivity_filter"].eq("ALL")
     ].iloc[0]
-    top16 = unknown_impact[
-        unknown_impact["scenario"].eq("ASSUME_TOP_16_ALL_CONFIRMED")
+    coverage80 = unknown_impact[
+        unknown_impact["scenario"].eq("ASSUME_80PCT_COVERAGE_ALL_CONFIRMED")
     ].iloc[0]
-    top40 = unknown_impact[
-        unknown_impact["scenario"].eq("ASSUME_TOP_40_ALL_CONFIRMED")
-    ].iloc[0]
+    top40 = unknown_impact[unknown_impact["scenario"].eq("ASSUME_TOP_40_ALL_CONFIRMED")].iloc[0]
     tie_excess = tie_audit["over_detection_row_count"].sum()
     all_tied = int(tie_audit["all_values_tied_flag"].sum())
     lines = [
@@ -1153,7 +1029,8 @@ def build_audit_report(
         "## 2. 사용 자료와 원본 보존",
         "",
         (
-            f"기존 M3 6,290행을 읽기 전용으로 사용했습니다. 입력 해시 변경은 0건이며 감사 결과는 "
+            f"기존 M3 {summary['feature_rows']:,}행을 읽기 전용으로 사용했습니다. "
+            "입력 해시 변경은 0건이며 감사 결과는 "
             f"`data/analytics/m3_audit/`에 분리했습니다. 검증 상태: {summary['validation_status']}."
         ),
         "",
@@ -1237,23 +1114,25 @@ def build_audit_report(
         "## 7. UNKNOWN 우선검토 효과",
         "",
         (
-            f"상위 16개를 모두 수기 확정한다고 가정하면 분류 본예산 커버리지는 "
-            f"{top16['classified_original_budget_share']:.1%}, 상위 40개는 "
+            f"UNKNOWN 본예산 80% 커버리지 검토집합 "
+            f"{int(coverage80['coverage80_project_count']):,}개를 모두 수기 확정한다고 가정하면 "
+            f"분류 본예산 커버리지는 {coverage80['classified_original_budget_share']:.1%}, 상위 40개는 "
             f"{top40['classified_original_budget_share']:.1%}까지 개선됩니다. 이는 분류값이 "
             "실제로 확정된 결과가 아니라 커버리지 가정입니다."
         ),
         "",
         (
-            f"상위 16개의 연평균 본예산 합계는 {top16['top16_average_annual_budget'] / 1e12:,.1f}조원, "
+            f"80% 커버리지 검토집합의 연평균 본예산 합계는 "
+            f"{coverage80['coverage80_average_annual_budget'] / 1e12:,.1f}조원, "
             f"각 사업의 최근 관측연도 본예산 합계는 "
-            f"{top16['top16_latest_year_budget'] / 1e12:,.1f}조원이며 평균 관측연도 수는 "
-            f"{top16['top16_mean_observed_year_count']:.1f}년입니다. 따라서 4개 연도 누적액만으로 "
+            f"{coverage80['coverage80_latest_year_budget'] / 1e12:,.1f}조원이며 평균 관측연도 수는 "
+            f"{coverage80['coverage80_mean_observed_year_count']:.1f}년입니다. 따라서 관측연도 누적액만으로 "
             "우선순위를 해석하지 않습니다."
         ),
         "",
         (
-            "상위 16개는 현재 키워드 단일 후보가 없어 재정수단별 비교집단 크기 변화는 계산할 수 "
-            "없습니다. 실제 수기 확정값이 생기기 전에는 순위 적격 증가 행만 잠재치로 제시하고 "
+            "실제 수기 확정값이 생기기 전에는 재정수단별 비교집단 크기 변화를 계산할 수 없습니다. "
+            "순위 적격 증가 행만 잠재치로 제시하고 "
             "비교집단 변화는 `UNIDENTIFIED`로 유지했습니다."
         ),
         "",
@@ -1261,8 +1140,8 @@ def build_audit_report(
         "",
         (
             "절대 기준, 고정 연말집중, 단위 분리 결과, 동률 과다탐지 원인과 군집 부트스트랩 결과는 "
-            "팀에 공유할 수 있습니다. 상대 신호는 보수적 동률 보정 버전으로 교체하기 전까지 기존 "
-            "플래그를 사용하면 안 됩니다. UNKNOWN 효과는 가정과 실제를 구분해 표시해야 합니다."
+            "팀에 공유할 수 있습니다. 상대 신호는 보수적 동률 보정 버전만 사용하고 기존의 경계값 "
+            "포함 플래그는 사용하면 안 됩니다. UNKNOWN 효과는 가정과 실제를 구분해 표시해야 합니다."
         ),
         "",
         "## 9. 권장 결정안",
@@ -1271,7 +1150,7 @@ def build_audit_report(
         "2. 상대 집행률은 방향별 보수적 percentile rank와 경계 동률 플래그를 병행합니다.",
         "3. 연말집중 주 기준은 고정 40%/20%, P90은 보조, P80·P95는 민감도로 둡니다.",
         "4. 반복은 2회 이상이면서 유효연도 50% 이상, 연속 2회는 보조로 둡니다.",
-        "5. UNKNOWN 16개를 먼저 실제 수기검토한 뒤 효과표를 실제값으로 갱신합니다.",
+        "5. UNKNOWN 80% 커버리지 검토집합을 먼저 수기검토한 뒤 효과표를 실제값으로 갱신합니다.",
         "",
         "## 10. 남은 한계",
         "",
@@ -1283,7 +1162,7 @@ def build_audit_report(
         "",
         "## 11. 다음 단계",
         "",
-        "1. UNKNOWN 상위 16개를 실제로 수기 분류합니다.",
+        "1. UNKNOWN 80% 커버리지 검토집합을 실제로 수기 분류합니다.",
         "2. 팀에 감사 결과를 공유하고 기준 역할을 결정합니다.",
         "3. 결정된 값만 설정파일과 의사결정 기록에 고정합니다.",
         "4. 그 뒤 프로그램 단위 성과자료를 연결합니다.",
@@ -1321,12 +1200,8 @@ def build_m3_methodology_audit(paths: AuditPaths) -> AuditResult:
     tie_audit = peer_threshold_tie_audit(features)
     peer_flags = build_peer_method_flags(features)
     method_comparison = peer_method_comparison(features, peer_flags)
-    project_year, recurrence, program_year, unit_audit = split_signal_grains(
-        features, programs
-    )
-    feedback = feedback_cluster_bootstrap(
-        features, peer_flags, cohorts, v2
-    )
+    project_year, recurrence, program_year, unit_audit = split_signal_grains(features, programs)
+    feedback = feedback_cluster_bootstrap(features, peer_flags, cohorts, v2)
     unknown_impact = unknown_review_impact(broad, features, unknown)
 
     paths.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1353,34 +1228,24 @@ def build_m3_methodology_audit(paths: AuditPaths) -> AuditResult:
         output_paths.append(output)
 
     after = {str(path): _hash(path) for path in paths.inputs}
-    program_audit = unit_audit[
-        unit_audit["signal"].eq("PROGRAM_BUDGET_CONCENTRATION")
-    ].iloc[0]
+    program_audit = unit_audit[unit_audit["signal"].eq("PROGRAM_BUDGET_CONCENTRATION")].iloc[0]
     validation = {
         "source_files_unchanged": before == after,
         "project_year_row_count_preserved": len(project_year) == len(features),
-        "project_recurrence_key_unique": not recurrence[
-            "classification_project_id"
-        ].duplicated().any(),
-        "program_year_key_unique": not program_year[
-            PROGRAM_KEYS
-        ].duplicated().any(),
+        "project_recurrence_key_unique": not recurrence["classification_project_id"]
+        .duplicated()
+        .any(),
+        "program_year_key_unique": not program_year[PROGRAM_KEYS].duplicated().any(),
         "program_signal_not_in_project_features": (
             "program_concentration_flag" not in project_year
         ),
-        "program_duplicate_counting_detected": bool(
-            program_audit["duplicate_counting_confirmed"]
-        ),
+        "program_duplicate_counting_detected": bool(program_audit["duplicate_counting_confirmed"]),
         "no_arbitrary_tie_selection": not method_comparison[
             "arbitrary_boundary_selection_used"
         ].any(),
-        "cluster_unit_is_project": feedback["cluster_unit"].eq(
-            "classification_project_id"
-        ).all(),
+        "cluster_unit_is_project": feedback["cluster_unit"].eq("classification_project_id").all(),
         "t1_t2_separate": set(feedback["feedback_horizon"]) == {"T+1", "T+2"},
-        "unknown_actual_and_assumption_separated": set(
-            unknown_impact["assumption_type"]
-        )
+        "unknown_actual_and_assumption_separated": set(unknown_impact["assumption_type"])
         >= {
             "ACTUAL_CONFIRMED",
             "COVERAGE_ASSUMPTION",
@@ -1395,8 +1260,7 @@ def build_m3_methodology_audit(paths: AuditPaths) -> AuditResult:
     failed = [
         key
         for key, value in validation.items()
-        if key
-        not in {"final_composite_score_generated", "overall_rank_generated"}
+        if key not in {"final_composite_score_generated", "overall_rank_generated"}
         and value is False
     ]
     summary: dict[str, Any] = {

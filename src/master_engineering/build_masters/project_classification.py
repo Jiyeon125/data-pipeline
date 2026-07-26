@@ -70,6 +70,11 @@ EXCLUSION_RULES = {
     "PRINCIPAL_REPAYMENT": (r"원금\s*상환", r"차입금\s*상환"),
     "SURPLUS_OPERATION": (r"여유\s*자금\s*운용",),
     "PRESERVATION_EXPENDITURE": (r"보전\s*지출", r"보존성\s*지출"),
+    "FINANCIAL_ASSET_OPERATION": (
+        r"(?:국채|채권)\s*(?:외\s*채권\s*)?매입",
+        r"주식\s*매입",
+        r"(?:비통화\s*)?금융기관\s*예치",
+    ),
 }
 HARD_FINANCIAL_REASONS = {
     "FINANCIAL_BASE_MISSING",
@@ -96,9 +101,7 @@ class ProjectClassificationResult:
 
 def _text(*values: Any) -> str:
     return " | ".join(
-        str(value).strip()
-        for value in values
-        if pd.notna(value) and str(value).strip()
+        str(value).strip() for value in values if pd.notna(value) and str(value).strip()
     )
 
 
@@ -173,29 +176,41 @@ def classify_exclusion(
     business = _text(business_class_name)
     finance = _text(finance_detail_name)
     names = _text(program_name, activity_name, subactivity_name)
+    activity = _text(activity_name)
+    subactivity = _text(subactivity_name)
     hits: dict[str, list[str]] = {}
     if "인건비" in business:
         hits.setdefault("PERSONNEL", []).append(f"business_class_name={business}")
     if "기본경비" in business:
         hits.setdefault("BASIC_OPERATION", []).append(f"business_class_name={business}")
-    if "내부거래" in finance:
-        hits.setdefault("INTERNAL_TRANSACTION", []).append(
-            f"finance_detail_name={finance}"
+    if not business and (
+        re.fullmatch(r"(?:소속기관\s*)?인건비", activity)
+        or re.match(r"^인건비(?:\s*\(|$)", subactivity)
+    ):
+        hits.setdefault("PERSONNEL", []).append(
+            f"name_fallback_when_business_class_missing={_text(activity, subactivity)}"
         )
+    if not business and (
+        re.fullmatch(r"(?:본부\s*)?기본경비", activity)
+        or ("기본경비" in activity and "기본경비" in subactivity)
+    ):
+        hits.setdefault("BASIC_OPERATION", []).append(
+            f"name_fallback_when_business_class_missing={_text(activity, subactivity)}"
+        )
+    if "내부거래" in finance:
+        hits.setdefault("INTERNAL_TRANSACTION", []).append(f"finance_detail_name={finance}")
     for category, patterns in EXCLUSION_RULES.items():
         evidence = [pattern for pattern in patterns if re.search(pattern, _text(finance, names))]
         if evidence:
             hits.setdefault(category, []).append(
                 f"keyword={','.join(evidence)};text={_text(finance, names)}"
             )
-    if len(hits) == 1:
-        category = next(iter(hits))
-        return False, category, " | ".join(hits[category]), False
-    if len(hits) > 1:
+    if hits:
         evidence = "; ".join(
             f"{category}[{' | '.join(values)}]" for category, values in sorted(hits.items())
         )
-        return True, None, f"복수 제외 규칙 충돌: {evidence}", True
+        category = next(iter(hits)) if len(hits) == 1 else "MULTIPLE_SCOPE_EXCLUSIONS"
+        return False, category, evidence, False
     return True, None, None, False
 
 
@@ -316,9 +331,11 @@ def _collapse_classification(yearly: pd.DataFrame) -> pd.DataFrame:
     for project_id, group in yearly.groupby("classification_project_id", sort=True):
         ordered = group.sort_values("fiscal_year")
         distinct_signatures = ordered[signature_columns].astype("string").drop_duplicates()
-        pieces = [ordered] if len(distinct_signatures) == 1 else [
-            year_group for _, year_group in ordered.groupby("fiscal_year", sort=True)
-        ]
+        pieces = (
+            [ordered]
+            if len(distinct_signatures) == 1
+            else [year_group for _, year_group in ordered.groupby("fiscal_year", sort=True)]
+        )
         for piece in pieces:
             latest = piece.iloc[-1]
             classification_year = (
@@ -373,9 +390,7 @@ def _primary_population_reason(row: pd.Series) -> str | None:
         category_value = "UNRESOLVED" if pd.isna(category) else str(category)
         return f"CLASSIFICATION_EXCLUSION:{category_value}"
     raw_restrictions = row.get("financial_analysis_exclusion_reason")
-    restrictions = (
-        [] if pd.isna(raw_restrictions) else str(raw_restrictions).split(";")
-    )
+    restrictions = [] if pd.isna(raw_restrictions) else str(raw_restrictions).split(";")
     restrictions = [reason for reason in restrictions if reason]
     if restrictions:
         return restrictions[0]
@@ -554,9 +569,7 @@ def build_project_classification(
     source["financial_analysis_limitation_flags"] = [
         ";".join(values) if values else pd.NA for values in financial_limitation_reasons
     ]
-    source["financial_analysis_eligible"] = [
-        not values for values in financial_exclusion_reasons
-    ]
+    source["financial_analysis_eligible"] = [not values for values in financial_exclusion_reasons]
     source["financial_quality_level"] = [
         _financial_quality_level(row, values)
         for (_, row), values in zip(source.iterrows(), restrictions, strict=True)
@@ -566,24 +579,15 @@ def build_project_classification(
         & source["execution_denominator_status"].eq("APPLIED")
         & ~source["execution_rate_over_100_flag"]
     )
-    source["reconciliation_analysis_eligible"] = (
-        source["financial_analysis_eligible"]
-        & ~source["financial_analysis_limitation_flags"]
-        .fillna("")
-        .str.contains("MATERIAL_SCOPE_OR_CLOSING_DIFFERENCE|MULTIPLE_MATCHING_CANDIDATES")
-    )
+    source["reconciliation_analysis_eligible"] = source["financial_analysis_eligible"] & ~source[
+        "financial_analysis_limitation_flags"
+    ].fillna("").str.contains("MATERIAL_SCOPE_OR_CLOSING_DIFFERENCE|MULTIPLE_MATCHING_CANDIDATES")
     source["required_project_hierarchy_available"] = source[
         list(CLASSIFICATION_CODE_KEY)
-    ].notna().all(axis=1) & source[list(CLASSIFICATION_CODE_KEY)].astype(
-        "string"
-    ).apply(
+    ].notna().all(axis=1) & source[list(CLASSIFICATION_CODE_KEY)].astype("string").apply(
         lambda column: column.str.strip().ne("")
-    ).all(
-        axis=1
-    )
-    source["base_amount_basis_confirmed"] = source[
-        "settlement_expenditure_amount"
-    ].notna()
+    ).all(axis=1)
+    source["base_amount_basis_confirmed"] = source["settlement_expenditure_amount"].notna()
     source["population_exclusion_reason"] = source.apply(_primary_population_reason, axis=1)
     source["analysis_population_included"] = (
         source["analysis_included_classified"]
@@ -600,10 +604,9 @@ def build_project_classification(
     ].astype("string")
     source.loc[dataset_fallback, "source_trace_level"] = "RAW_DATASET_SET"
     v1_fallback = source["source_trace"].isna()
-    source.loc[v1_fallback, "source_trace"] = (
-        "project_year_financial_v1:"
-        + source.loc[v1_fallback, "source_project_year_id"].astype("string")
-    )
+    source.loc[v1_fallback, "source_trace"] = "project_year_financial_v1:" + source.loc[
+        v1_fallback, "source_project_year_id"
+    ].astype("string")
     source.loc[v1_fallback, "source_trace_level"] = "DERIVED_V1_ROW"
 
     eligible = source["analysis_population_included"]
@@ -623,9 +626,7 @@ def build_project_classification(
         ["project_id", "classification_year"], keep=False
     )
     classification_sizes = (
-        source.loc[eligible]
-        .groupby("comparison_group")["classification_project_id"]
-        .nunique()
+        source.loc[eligible].groupby("comparison_group")["classification_project_id"].nunique()
     )
     classification["comparison_group_size"] = (
         classification["comparison_group"].map(classification_sizes).fillna(0).astype("Int64")
@@ -703,16 +704,14 @@ def build_project_classification(
         .sort_index()
         .to_dict()
     )
-    comparison_sizes = (
-        analysis_population.groupby("comparison_group")["classification_project_id"].nunique()
-    )
+    comparison_sizes = analysis_population.groupby("comparison_group")[
+        "classification_project_id"
+    ].nunique()
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "input_availability": _input_availability(input_paths),
         "source_project_year_row_count": len(source),
-        "classification_project_count": int(
-            classification["project_id"].nunique(dropna=True)
-        ),
+        "classification_project_count": int(classification["project_id"].nunique(dropna=True)),
         "classification_row_count": len(classification),
         "classification_year_exception_row_count": int(
             classification["classification_year"].notna().sum()
@@ -727,8 +726,11 @@ def build_project_classification(
             analysis_excluded["financial_quality_level"].eq("BLOCKING").sum()
         ),
         "execution_rate_over_100_excluded_row_count": int(
-            (~source.loc[source["execution_rate_over_100_flag"], "execution_rate_analysis_eligible"])
-            .sum()
+            (
+                ~source.loc[
+                    source["execution_rate_over_100_flag"], "execution_rate_analysis_eligible"
+                ]
+            ).sum()
         ),
         "unknown_instrument_classification_count": int(
             classification.loc[
@@ -739,9 +741,7 @@ def build_project_classification(
             classification["fiscal_instrument"].eq("UNKNOWN").sum()
         ),
         "unknown_account_type_count": int(
-            classification.loc[
-                classification["account_type"].eq("UNKNOWN"), "project_id"
-            ].nunique()
+            classification.loc[classification["account_type"].eq("UNKNOWN"), "project_id"].nunique()
         ),
         "rule_candidate_count": int(
             classification.loc[
@@ -751,18 +751,14 @@ def build_project_classification(
         "rule_candidate_classification_row_count": int(
             classification["classification_status"].eq("RULE_CANDIDATE").sum()
         ),
-        "manual_review_classification_count": int(
-            manual_review["project_id"].nunique()
-        ),
+        "manual_review_classification_count": int(manual_review["project_id"].nunique()),
         "manual_review_classification_row_count": len(manual_review),
         "comparison_group_count": int(comparison_sizes.size),
         "small_comparison_group_count": int((comparison_sizes < 5).sum()),
         "validation": {
             "source_row_count_preserved": len(combined) == len(source),
             "joined_primary_key_duplicate_count": int(key_duplicates.sum()),
-            "classification_primary_key_duplicate_count": int(
-                classification_key_duplicate.sum()
-            ),
+            "classification_primary_key_duplicate_count": int(classification_key_duplicate.sum()),
             "classification_analysis_included_null_count": int(
                 source["analysis_included_classified"].isna().sum()
             ),
@@ -780,9 +776,7 @@ def build_project_classification(
                 ).sum()
             ),
             "ministry_codes": ministry_validation,
-            "source_tracking_missing_count": int(
-                source["source_trace"].isna().sum()
-            ),
+            "source_tracking_missing_count": int(source["source_trace"].isna().sum()),
             "raw_source_reference_missing_count": int(
                 (source["source_path"].isna() & source["source_datasets"].isna()).sum()
             ),
@@ -791,7 +785,10 @@ def build_project_classification(
             "responsible_operation_account": "account_code 4xx",
             "instrument": "사업 계층 명칭의 단일 키워드 적중은 RULE_CANDIDATE",
             "instrument_overlap": "복수 재정수단 적중은 UNKNOWN 및 MANUAL_REVIEW",
-            "exclusion": "구조화 필드 또는 단일 제외 규칙 적중만 자동 제외",
+            "exclusion": (
+                "구조화 필드 또는 제외 규칙이 하나 이상 적중하면 자동 제외하며, "
+                "복수 적중은 MULTIPLE_SCOPE_EXCLUSIONS로 보존"
+            ),
             "comparison_group": "account_type|fiscal_instrument|project_category",
             "comparison_group_size": "분석 모집단 내 고유 classification_project_id 수",
             "small_group": "comparison_group_size < 5; 자동 병합하지 않음",
@@ -801,8 +798,7 @@ def build_project_classification(
             "재정수단은 공식 사업유형 코드가 없어 명칭 키워드 후보이며 최종 확정이 아님",
             "사업 계보 원천이 없어 코드 계층이 불완전한 행은 연속성 미확정으로 제한",
             (
-                "docs/PROJECT_PLAN.md가 없어 사용자 지정 기준과 "
-                "docs/MENTORING_GUIDE.md를 적용"
+                "docs/PROJECT_PLAN.md가 없어 사용자 지정 기준과 docs/MENTORING_GUIDE.md를 적용"
                 if not project_plan_path.exists()
                 else ""
             ),

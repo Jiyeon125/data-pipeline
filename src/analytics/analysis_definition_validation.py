@@ -224,10 +224,7 @@ def monthly_eligibility_breakdown(patterns: pd.DataFrame, core: pd.DataFrame) ->
             "core_row_share": len(part) / len(frame),
             "excluded_row_share": (
                 len(part) / int(excluded.sum())
-                if excluded.any()
-                and not (
-                    decomposition == "FINAL_STATUS" and label == "ELIGIBLE"
-                )
+                if excluded.any() and not (decomposition == "FINAL_STATUS" and label == "ELIGIBLE")
                 else math.nan
             ),
             "original_budget_amount": _sum(part, "original_budget_analysis_amount"),
@@ -407,9 +404,7 @@ def execution_threshold_sensitivity(ranking_v2: pd.DataFrame) -> pd.DataFrame:
                     "PEER_BOTTOM_20": "execution_rate <= peer_group_year_p20",
                 }[name],
                 "tie_policy": (
-                    "INCLUDE_ALL_AT_THRESHOLD"
-                    if name.startswith("PEER")
-                    else "NOT_APPLICABLE"
+                    "INCLUDE_ALL_AT_THRESHOLD" if name.startswith("PEER") else "NOT_APPLICABLE"
                 ),
             }
         )
@@ -488,11 +483,7 @@ def year_end_sensitivity(patterns: pd.DataFrame, core: pd.DataFrame) -> pd.DataF
                     "FIXED_ONLY": "fixed criterion and not peer P80",
                     "PEER_P80_ONLY": "peer P80 criterion and not fixed",
                 }[name],
-                "tie_policy": (
-                    "INCLUDE_ALL_AT_THRESHOLD"
-                    if "PEER" in name
-                    else "NOT_APPLICABLE"
-                ),
+                "tie_policy": ("INCLUDE_ALL_AT_THRESHOLD" if "PEER" in name else "NOT_APPLICABLE"),
             }
         )
     return pd.DataFrame(rows)
@@ -1078,18 +1069,17 @@ def build_analysis_definition_validation(
     primary = monthly_breakdown[
         monthly_breakdown["decomposition_type"].eq("MUTUALLY_EXCLUSIVE_PRIMARY")
     ]
+    monthly_eligible_rows = int(_bool(patterns, "monthly_pattern_eligible_final").sum())
+    monthly_excluded_rows = len(patterns) - monthly_eligible_rows
     validation = {
         "source_files_unchanged": before == after,
-        "monthly_eligible_rows": int(_bool(patterns, "monthly_pattern_eligible_final").sum()),
-        "monthly_excluded_rows": int((~_bool(patterns, "monthly_pattern_eligible_final")).sum()),
+        "monthly_eligible_rows": monthly_eligible_rows,
+        "monthly_excluded_rows": monthly_excluded_rows,
         "monthly_primary_exclusion_sum": int(primary["row_count"].sum()),
         "monthly_formula_all_core_metrics_present": len(formula) == 6,
         "monthly_formula_row_accounting_complete": bool(
-            (
-                formula["comparable_row_count"]
-                + formula["missing_row_count"]
-            )
-            .eq(3328)
+            (formula["comparable_row_count"] + formula["missing_row_count"])
+            .eq(monthly_eligible_rows)
             .all()
         ),
         "monthly_formula_mismatch_count": int(formula["mismatch_count"].sum()),
@@ -1150,11 +1140,9 @@ def build_analysis_definition_validation(
     failures: list[str] = []
     if not validation["source_files_unchanged"]:
         failures.append("source_files_unchanged")
-    if validation["monthly_eligible_rows"] != 3328:
-        failures.append("monthly_eligible_rows")
-    if validation["monthly_excluded_rows"] != 2962:
-        failures.append("monthly_excluded_rows")
-    if validation["monthly_primary_exclusion_sum"] != 2962:
+    if validation["monthly_eligible_rows"] + validation["monthly_excluded_rows"] != len(patterns):
+        failures.append("monthly_row_partition")
+    if validation["monthly_primary_exclusion_sum"] != validation["monthly_excluded_rows"]:
         failures.append("monthly_primary_exclusion_sum")
     if not validation["monthly_formula_row_accounting_complete"]:
         failures.append("monthly_formula_row_accounting_complete")

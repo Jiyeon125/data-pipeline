@@ -8,6 +8,7 @@ from analytics.m3_financial_signals import (
     attach_signal_types,
     build_repeated_signals,
     build_signal_features,
+    feedback_summary,
     unknown_manual_review_priority,
 )
 
@@ -155,3 +156,25 @@ def test_unknown_candidates_are_not_confirmed() -> None:
     assert result["keyword_candidate"] == "LOAN"
     assert pd.isna(result["manual_confirmed_value"])
     assert result["review_status"] == "UNREVIEWED"
+
+
+def test_feedback_summary_keeps_missing_segment_as_explicit_group() -> None:
+    cohort = pd.DataFrame(
+        {
+            "base_fiscal_year": [2022, 2022],
+            "ministry_code": [pd.NA, pd.NA],
+            "account_type_classified": ["GENERAL_ACCOUNT"] * 2,
+            "project_size_bucket": ["MEDIUM"] * 2,
+            "feedback_budget_change_rate": [0.1, 0.2],
+            **{column: [False, False] for column in [*SIGNAL_COLUMNS, *TYPE_COLUMNS]},
+        }
+    )
+    cohort.loc[0, "strong_low_execution_flag"] = True
+
+    result = feedback_summary(cohort, "T+1")
+
+    missing = result[
+        result["segment_dimension"].eq("MINISTRY")
+        & result["segment_value"].eq("MISSING")
+    ]
+    assert len(missing) == 1

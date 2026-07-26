@@ -604,7 +604,7 @@ def descriptive_relationships(core: pd.DataFrame, repeated: pd.DataFrame) -> lis
             "metric": name,
             "sample_size": len(pair),
             "missing_count": len(left) - len(pair),
-            "spearman_correlation": pair["left"].corr(pair["right"], method="spearman"),
+            "spearman_correlation": pair["left"].rank().corr(pair["right"].rank()),
             "interpretation": "기술적 연관이며 인과관계를 의미하지 않음",
         }
 
@@ -892,7 +892,8 @@ def build_report(
         ),
         (
             f"- 기존 strict v1은 core의 {overall.loc['strict_ranking_population_v1', 'core_row_inclusion_rate']:.1%}만 "
-            "남겼지만, ranking v2는 행을 유지하고 변수별 적격성을 제한해 core 6,290행을 보존했습니다."
+            f"남겼지만, ranking v2는 행을 유지하고 변수별 적격성을 제한해 core "
+            f"{summary['counts']['core_rows']:,}행을 보존했습니다."
         ),
         (
             f"- 프로그램 연결은 PARTIAL {partial:,}행, UNMATCHED {unmatched:,}행이며 이들의 "
@@ -1177,10 +1178,13 @@ def build_financial_eda(paths: EDAPaths) -> EDAResult:
     }
     validation = {
         "source_files_unchanged": before_hashes == after_hashes,
-        "broad_row_count_preserved": len(broad) == 6346,
-        "core_row_count_preserved": len(core) == 6290,
-        "strict_row_count_preserved": len(strict) == 2913,
-        "ranking_v2_row_count_preserved": len(ranking_v2) == 6290,
+        "broad_row_count_preserved": len(broad)
+        == int(_bool(v2, "in_broad_population").sum()),
+        "core_row_count_preserved": len(core)
+        == int(_bool(v2, "in_core_financial_population").sum()),
+        "strict_row_count_preserved": len(strict)
+        == int(_bool(v2, "in_strict_ranking_population").sum()),
+        "ranking_v2_row_count_preserved": len(ranking_v2) == len(core),
         "core_amounts_reconciled": amount_checks,
         "partial_or_unmatched_execution_rate_non_null": int(
             program[

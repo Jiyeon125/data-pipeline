@@ -15,6 +15,11 @@ from analytics.analysis_policy_decision_support import (
 from analytics.financial_eda import EDAPaths, build_financial_eda
 from analytics.m3_financial_signals import M3Paths, build_m3_analysis
 from analytics.m3_methodology_audit import AuditPaths, build_m3_methodology_audit
+from analytics.unknown_top16_review import (
+    UnknownReviewPaths,
+    build_unknown_review_workbook,
+    validate_unknown_review_workbook,
+)
 
 app = typer.Typer(help="재정 마스터 기반 비LLM 분석")
 
@@ -73,6 +78,44 @@ def build_analysis_policy_decision_support_command(
         f"분석 기준 의사결정 자료 완료: 표 {len(result.output_paths)}개, "
         f"그래프 {len(result.figure_paths)}개, 보고서 {result.report_path}"
     )
+
+
+@app.command("prepare-unknown-priority-review")
+def prepare_unknown_priority_review(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    overwrite: bool = typer.Option(
+        False,
+        help="기존 검수 파일을 덮어씁니다. 사람 입력 유실 위험이 있어 기본값은 false입니다.",
+    ),
+) -> None:
+    """UNKNOWN 예산 80% 커버리지 우선사업의 사람 검수용 Excel 워크북을 생성합니다."""
+    output = build_unknown_review_workbook(
+        UnknownReviewPaths.from_root(root),
+        overwrite=overwrite,
+    )
+    typer.echo(f"UNKNOWN 80% 커버리지 검수 워크북 생성: {output}")
+
+
+@app.command("validate-unknown-priority-review")
+def validate_unknown_priority_review(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    require_complete: bool = typer.Option(
+        False,
+        help="현재 80% 커버리지 대상 모두 CONFIRMED인지 완료 기준으로 검사합니다.",
+    ),
+) -> None:
+    """UNKNOWN 80% 커버리지 검수 워크북의 구조·허용값·근거 완전성을 검사합니다."""
+    result = validate_unknown_review_workbook(
+        UnknownReviewPaths.from_root(root),
+        require_complete=require_complete,
+    )
+    typer.echo(
+        f"검수 워크북 검증 {result.status}: 사업 {result.project_count}개, "
+        f"연도 {result.year_row_count}행, 확정 {result.confirmed_project_count}개, "
+        f"오류 {result.error_count}개, 경고 {result.warning_count}개"
+    )
+    if result.status == "FAIL":
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

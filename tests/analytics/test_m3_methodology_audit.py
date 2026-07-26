@@ -7,6 +7,7 @@ from analytics.m3_methodology_audit import (
     _rank_flags,
     build_peer_method_flags,
     peer_threshold_tie_audit,
+    unknown_review_impact,
 )
 
 
@@ -81,17 +82,13 @@ def test_tie_audit_attributes_quantile_excess_to_boundary_block() -> None:
 def test_cluster_bootstrap_uses_unique_project_clusters() -> None:
     signal = pd.DataFrame(
         {
-            "classification_project_id": [
-                project for project in range(10) for _ in range(2)
-            ],
+            "classification_project_id": [project for project in range(10) for _ in range(2)],
             "feedback_budget_change_rate": [-0.1] * 20,
         }
     )
     control = pd.DataFrame(
         {
-            "classification_project_id": [
-                project for project in range(20, 30) for _ in range(2)
-            ],
+            "classification_project_id": [project for project in range(20, 30) for _ in range(2)],
             "feedback_budget_change_rate": [0.0] * 20,
         }
     )
@@ -103,3 +100,44 @@ def test_cluster_bootstrap_uses_unique_project_clusters() -> None:
     )
     assert low == -0.1
     assert high == -0.1
+
+
+def test_unknown_review_impact_uses_current_80pct_coverage_flag() -> None:
+    unknown = pd.DataFrame(
+        {
+            "classification_project_id": ["p1", "p2", "p3"],
+            "original_budget_amount": [60.0, 25.0, 15.0],
+            "cumulative_unknown_budget_share": [0.60, 0.85, 1.00],
+            "priority_80pct_coverage": [True, True, False],
+            "observed_years": ["2024", "2024", "2024"],
+            "yearly_original_budgets": [
+                '{"2024": 60}',
+                '{"2024": 25}',
+                '{"2024": 15}',
+            ],
+            "review_status": ["UNREVIEWED"] * 3,
+            "manual_confirmed_value": [None] * 3,
+            "keyword_candidate": ["NO_CANDIDATE"] * 3,
+            "multiple_candidate_flag": [False] * 3,
+        }
+    )
+    broad = pd.DataFrame(
+        {
+            "classification_project_id": ["p1", "p2", "p3"],
+            "fiscal_instrument": ["UNKNOWN"] * 3,
+            "original_budget_analysis_amount": [60.0, 25.0, 15.0],
+        }
+    )
+    features = pd.DataFrame(
+        {
+            "classification_project_id": ["p1", "p2", "p3"],
+            "fiscal_instrument_ranking_eligible": [False] * 3,
+        }
+    )
+
+    result = unknown_review_impact(broad, features, unknown)
+    coverage = result[result["scenario"].eq("ASSUME_80PCT_COVERAGE_ALL_CONFIRMED")].iloc[0]
+
+    assert coverage["review_unique_project_count"] == 2
+    assert coverage["coverage80_project_count"] == 2
+    assert coverage["selected_unknown_budget_coverage"] == 0.85

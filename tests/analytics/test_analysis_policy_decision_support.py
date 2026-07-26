@@ -6,6 +6,7 @@ from analytics.analysis_policy_decision_support import (
     execution_ecdf_summary,
     execution_threshold_increment_cases,
     execution_threshold_sensitivity,
+    large_project_scope_sensitivity,
     peer_confidence,
     peer_distribution_diagnostics,
     repeated_signal_distribution,
@@ -59,6 +60,21 @@ def test_threshold_sensitivity_uses_strict_less_than() -> None:
     at_90 = result[result["dimension"].eq("OVERALL") & result["threshold"].eq(0.9)].iloc[0]
     assert at_80["detected_row_count"] == 1
     assert at_90["detected_row_count"] == 1
+
+
+def test_large_project_scope_sensitivity_recalculates_denominator() -> None:
+    frame = _execution_rows()
+    frame.loc[1, "subactivity_name"] = "보통교부세"
+    result = large_project_scope_sensitivity(frame).set_index("scenario")
+
+    assert result.loc["CURRENT_SCOPE", "detected_current_budget_share"] == 0.25
+    assert (
+        result.loc[
+            "EXCLUDE_ORDINARY_GRANT",
+            "detected_current_budget_share",
+        ]
+        == 1.0
+    )
 
 
 def test_increment_case_enters_at_first_strict_threshold() -> None:

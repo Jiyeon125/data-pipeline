@@ -62,6 +62,50 @@ def test_structured_exclusion_rule_does_not_delete_row() -> None:
     assert review is False
 
 
+def test_multiple_scope_rules_and_financial_assets_are_excluded() -> None:
+    included, category, reason, review = classify_exclusion(
+        "주요사업비(기금사업비)",
+        "보전지출",
+        "여유자금운용",
+        "여유자금운용",
+        "국채외채권매입",
+    )
+    assert included is False
+    assert category == "MULTIPLE_SCOPE_EXCLUSIONS"
+    assert "FINANCIAL_ASSET_OPERATION" in str(reason)
+    assert "PRESERVATION_EXPENDITURE" in str(reason)
+    assert "SURPLUS_OPERATION" in str(reason)
+    assert review is False
+
+
+def test_missing_business_class_uses_narrow_administration_name_fallback() -> None:
+    personnel = classify_exclusion(
+        None,
+        None,
+        "행정안전행정지원",
+        "소속기관인건비",
+        "인건비(위원회)",
+    )
+    basic = classify_exclusion(
+        None,
+        None,
+        "일반행정지원",
+        "본부 기본경비",
+        "중앙사고수습본부 기본경비(총액)",
+    )
+    policy_support = classify_exclusion(
+        None,
+        "일반지출",
+        "보육지원강화",
+        "어린이집 지원",
+        "보육교직원 인건비 및 운영지원",
+    )
+
+    assert personnel[:2] == (False, "PERSONNEL")
+    assert basic[:2] == (False, "BASIC_OPERATION")
+    assert policy_support == (True, None, None, False)
+
+
 def _source_frame() -> pd.DataFrame:
     rows = [
         {

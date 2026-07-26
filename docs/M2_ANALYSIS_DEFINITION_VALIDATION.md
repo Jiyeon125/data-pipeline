@@ -4,9 +4,9 @@
 
 - **현재 자료로 최종 점수나 순위를 생성하지 않았습니다.** 이번 단계는 단위, 산식, 표본, 민감도, 완전성 기준을 확정하기 위한 검증입니다.
 - API-결산 본예산 비교 가능 행 중 1배 일치가 8,149행이며, 일관된 1,000배·100만 배 단위 차이는 발견되지 않았습니다.
-- 월별 적격은 3,328행, 제외는 2,962행입니다. 관측경계가 주된 제한이며 상호배타 주사유 5개로 전 행을 분해했습니다.
-- 연말 집중은 고정 기준 461행과 비교집단 P80 기준 1,438행이 달라, 팀 합의 전 하나의 기준을 확정값으로 사용하지 않습니다.
-- 반복 집행설명필요 사업은 200개이며 신호별로 분해했습니다.
+- 월별 적격은 3,328행, 제외는 2,962행입니다. 관측경계가 주된 제한이며 상호배타 주사유 4개로 전 행을 분해했습니다.
+- 연말 집중은 고정 기준 453행과 비교집단 P80 기준 1,430행이 달라, 팀 합의 전 하나의 기준을 확정값으로 사용하지 않습니다.
+- 반복 집행설명필요 사업은 177개이며 신호별로 분해했습니다.
 
 ## 1. 검증 목적과 금지사항
 
@@ -22,68 +22,67 @@
 
 | 상호배타 주사유 | 행 수 | core 비율 |
 |---|---:|---:|
-| NO_MONTHLY_SOURCE | 27 | 0.4% |
+| NO_MONTHLY_SOURCE | 23 | 0.4% |
 | MASKED_AMOUNT | 2 | 0.0% |
-| INCOMPLETE_MONTHS | 21 | 0.3% |
-| OBSERVATION_BOUNDARY | 2,910 | 46.3% |
-| BASE_MONTHLY_FLAG_FALSE | 2 | 0.0% |
+| INCOMPLETE_MONTHS | 16 | 0.3% |
+| OBSERVATION_BOUNDARY | 2,837 | 46.3% |
 
 월별 분기 누계는 3·6·9·12월 누계액을 확인된 분모로 나눕니다. 4분기 비중은 10~12월 단월 지출 합계/12월 누계, 12월 비중은 12월 단월 지출/12월 누계로 재검증했습니다.
 
 | 산식 | 비교 가능 | 불일치 | 일치율 |
 |---|---:|---:|---:|
-| q1_cumulative_execution_rate | 3,327 | 0 | 100.0% |
-| half_year_cumulative_execution_rate | 3,328 | 0 | 100.0% |
-| q3_cumulative_execution_rate | 3,328 | 0 | 100.0% |
-| december_cumulative_execution_rate | 3,328 | 0 | 100.0% |
-| q4_expenditure_share | 3,293 | 0 | 100.0% |
-| december_single_month_share | 3,293 | 0 | 100.0% |
+| q1_cumulative_execution_rate | 3,252 | 0 | 100.0% |
+| half_year_cumulative_execution_rate | 3,252 | 0 | 100.0% |
+| q3_cumulative_execution_rate | 3,252 | 0 | 100.0% |
+| december_cumulative_execution_rate | 3,252 | 0 | 100.0% |
+| q4_expenditure_share | 3,247 | 0 | 100.0% |
+| december_single_month_share | 3,247 | 0 | 100.0% |
 
 ## 4. 집행률 기준 민감도
 
 | 기준 | 신호 행 | 적격 표본 대비 |
 |---|---:|---:|
-| FIXED_UNDER_80 | 270 | 4.4% |
-| FIXED_UNDER_90 | 532 | 8.6% |
-| PEER_BOTTOM_10 | 1,674 | 27.0% |
-| PEER_BOTTOM_20 | 2,559 | 41.3% |
+| FIXED_UNDER_80 | 254 | 4.2% |
+| FIXED_UNDER_90 | 513 | 8.4% |
+| PEER_BOTTOM_10 | 1,661 | 27.2% |
+| PEER_BOTTOM_20 | 2,540 | 41.5% |
 
 고정 80%·90%는 절대 기준이고 하위 10%·20%는 비교집단 내부 상대 기준이므로 서로 같은 의미가 아닙니다. 분위수 경계의 동률은 모두 포함하므로 실제 신호 비율이 명목 10%·20%보다 커질 수 있으며, 두 기준의 중첩을 별도로 보존합니다.
 
 ## 5. 연말 집중 기준 민감도
 
-고정 40%/20% 기준은 461행, 비교집단 P80 기준은 1,438행입니다. 비교집단 크기 5 미만은 분위수 판정에서 제외합니다. P80은 4분기 또는 12월 중 하나가 기준 이상이면 포함하고 동률을 모두 포함하므로 전체의 20%와 일치할 필요가 없습니다.
+고정 40%/20% 기준은 453행, 비교집단 P80 기준은 1,430행입니다. 비교집단 크기 5 미만은 분위수 판정에서 제외합니다. P80은 4분기 또는 12월 중 하나가 기준 이상이면 포함하고 동률을 모두 포함하므로 전체의 20%와 일치할 필요가 없습니다.
 
 ## 6. 반복 집행설명필요 신호
 
-사업 1,941개 중 반복 신호는 200개입니다. 저집행, 연말 집중, 누계 감소, 100% 초과를 별도 횟수로 제공하며 복합 신호를 단일 실패 의미로 합치지 않습니다.
+사업 1,899개 중 반복 신호는 177개입니다. 저집행, 연말 집중, 누계 감소, 100% 초과를 별도 횟수로 제공하며 복합 신호를 단일 실패 의미로 합치지 않습니다.
 
 ## 7. 프로그램 금액 범위와 집중도
 
 프로그램-연도 범위 비교 592행에서 전체금액과 core 분석대상금액을 별도 컬럼으로 보존했습니다.
-집중도 513행은 세부사업 수를 함께 제시하고, 2개 이상 사업에서 정규화 HHI=(HHI-1/n)/(1-1/n)를 산출했습니다. 단일사업 프로그램은 정규화 HHI를 결측으로 유지합니다.
+집중도 462행은 세부사업 수를 함께 제시하고, 2개 이상 사업에서 정규화 HHI=(HHI-1/n)/(1-1/n)를 산출했습니다. 단일사업 프로그램은 정규화 HHI를 결측으로 유지합니다.
 
 ## 8. UNKNOWN 재정수단 검토 범위
 
-UNKNOWN 고유 사업 1,094개를 본예산 누적 커버리지 순으로 정렬했습니다. 상위 16개가 UNKNOWN 본예산의 최소 80% 검토 집합입니다. 이는 수기검토 순서이며 사업 순위가 아닙니다.
+UNKNOWN 고유 사업 1,045개를 본예산 누적 커버리지 순으로 정렬했습니다. 상위 18개가 UNKNOWN 본예산의 최소 80% 검토 집합입니다. 이는 수기검토 순서이며 사업 순위가 아닙니다.
 
 ## 9. 순위 시나리오별 완전성 정의
 
 | 시나리오 | 필수 변수 | 완전 행 | 완전율 |
 |---|---|---:|---:|
-| BUDGET_SCALE_CROSS_SECTION | original_budget_analysis_amount;budget_ranking_eligible | 6,242 | 99.2% |
-| EXECUTION_CROSS_SECTION | execution_rate;execution_ranking_eligible | 6,198 | 98.5% |
-| BUDGET_TREND | budget_change_rate;trend_ranking_eligible | 2,464 | 39.2% |
-| FISCAL_INSTRUMENT_PEER | fiscal_instrument;comparison_group;fiscal_instrument_ranking_eligible | 3,078 | 48.9% |
-| PROGRAM_STRUCTURE | program_code;original_budget_analysis_amount;program_ranking_eligible | 6,263 | 99.6% |
-| MULTI_COMPONENT_DIAGNOSTIC | budget_ranking_eligible;execution_ranking_eligible;program_ranking_eligible;one_of_trend_or_instrument | 4,321 | 68.7% |
+| BUDGET_SCALE_CROSS_SECTION | original_budget_analysis_amount;budget_ranking_eligible | 6,086 | 99.3% |
+| EXECUTION_CROSS_SECTION | execution_rate;execution_ranking_eligible | 6,114 | 99.7% |
+| BUDGET_TREND | budget_change_rate;trend_ranking_eligible | 2,401 | 39.2% |
+| FISCAL_INSTRUMENT_PEER | fiscal_instrument;comparison_group;fiscal_instrument_ranking_eligible | 3,066 | 50.0% |
+| PROGRAM_STRUCTURE | program_code;original_budget_analysis_amount;program_ranking_eligible | 6,107 | 99.6% |
+| MULTI_COMPONENT_DIAGNOSTIC | budget_ranking_eligible;execution_ranking_eligible;program_ranking_eligible;one_of_trend_or_instrument | 4,282 | 69.9% |
 
 시나리오별 필수 변수가 다르므로 하나의 행 전체 적격 플래그로 대체하지 않습니다. 모든 시나리오에서 최종 점수와 최종 순위 생성 여부는 false입니다.
 
 ## 10. T+1·T+2 환류 코호트
 
-- T+1 후보 4,726행 중 연속 재정비교 적격 2,464행
-- T+2 후보 3,126행 중 2단계 연속 재정비교 적격 1,110행
+- T+1 후보 4,604행 중 연속 재정비교 적격 2,401행
+- T+2 후보 3,041행 중 2단계 연속 재정비교 적격 1,083행
 
 현재 코호트는 재정자료의 연속성만 정의합니다. 성과자료가 결합되기 전에는 성과 환류 효과나 인과관계를 판단할 수 없습니다.
 

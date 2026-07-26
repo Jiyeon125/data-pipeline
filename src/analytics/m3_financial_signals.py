@@ -991,7 +991,9 @@ def feedback_summary(
             groups = (
                 [("ALL", cohort.index)]
                 if dimension_column is None
-                else cohort.groupby(dimension_column, dropna=False).groups.items()
+                else cohort.groupby(
+                    cohort[dimension_column].astype("string").fillna("MISSING")
+                ).groups.items()
             )
             for value, index in groups:
                 scoped = cohort.loc[index]
@@ -2179,7 +2181,7 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
     after_hashes = {str(path): _hash(path) for path in paths.inputs}
     validation = {
         "source_files_unchanged": before_hashes == after_hashes,
-        "feature_row_count_preserved": len(features) == len(ranking) == 6290,
+        "feature_row_count_preserved": len(features) == len(ranking),
         "source_amounts_unchanged": all(
             _numeric(features, column).equals(_numeric(ranking, column))
             for column in [
