@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.27,<1",
+  "matplotlib>=3.8,<4",
   "pandas>=2.2,<3",
   "pyarrow>=15,<22",
   "python-dotenv>=1.0,<2",
@@ -25,6 +26,8 @@ dev = [
 
 [project.scripts]
 openfiscal = "open_fiscal_pipeline.cli:app"
+fiscal-master = "master_engineering.cli:app"
+fiscal-analytics = "analytics.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -39,3 +42,5 @@ target-version = "py311"
 
 [tool.ruff.lint.per-file-ignores]
 "src/open_fiscal_pipeline/cli.py" = ["B008"]
+"src/master_engineering/cli.py" = ["B008"]
+"src/analytics/cli.py" = ["B008"]

@@ -121,10 +121,18 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 
 ## CLI 전략
 
-현재 운영 명령 `openfiscal`은 기존 OpenAPI 파이프라인에 유지합니다.
-`performance_pipeline.cli`와 `master_engineering.cli`는 패키지 경계 확인용으로만
-준비했으며, 첫 실제 워크플로가 구현될 때 명령 이름과 입력·출력 계약을 확정한 뒤
-`pyproject.toml`에 등록합니다.
+운영 명령 `openfiscal`은 OpenAPI 수집·정규화를 담당하고, `fiscal-master`는
+검증된 정규화 결과로 분석 기준 테이블을 만듭니다. 현재 구현된 경계는 다음과
+같습니다.
+
+- `openfiscal collect-budget-all`: 예산 API 원본 일괄 수집
+- `openfiscal normalize-budget`: 예산 레코드·금액 이벤트 정규화와 코드 매칭
+- `fiscal-master build-project-year-budget`: 예산 기준 사업-연도 중간 테이블 구축
+- `fiscal-master build-project-year-financial`: 월별 집행 외부 결합
+
+`performance_pipeline.cli`는 OpenAI API 키가 준비될 때까지 실행하지 않습니다.
+예산 기준 중간 테이블은 결산·성과 자료가 결합되기 전에는 최종 마스터로
+간주하지 않습니다.
 
 ## 팀 공유 마일스톤
 

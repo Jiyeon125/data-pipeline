@@ -7,6 +7,7 @@ dist/
 build/
 .pytest_cache/
 .pytest_tmp/
+.pytest_*/
 .mypy_cache/
 .ruff_cache/
 .DS_Store

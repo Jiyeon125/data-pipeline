@@ -8,10 +8,18 @@ from typing import Any
 
 import typer
 
+from .budget import (
+    DEFAULT_BUDGET_DATASET_IDS,
+    BudgetCollectionResult,
+    build_budget_summary,
+    collect_budget_slice,
+)
 from .client import OpenFiscalClient, OpenFiscalError
 from .config import ConfigError, DatasetConfig, Settings, load_datasets, load_ministries
 from .monthly import MonthlyResult, build_summary, collect_ministry_month
+from .normalize_budget import normalize_budget
 from .normalize_monthly import normalize_monthly
+from .normalize_settlement import normalize_settlement
 
 app = typer.Typer(no_args_is_help=True, help="열린재정 데이터 수집 파이프라인")
 DEFAULT_DATASETS_PATH = Path("configs/datasets.yaml")
@@ -63,9 +71,7 @@ def _response_status(page: Any) -> str:
 
 
 def _safe_output(dataset: DatasetConfig, page: Any) -> dict[str, Any]:
-    record_keys = sorted(
-        {str(key) for record in page.parsed.records[:5] for key in record}
-    )
+    record_keys = sorted({str(key) for record in page.parsed.records[:5] for key in record})
     expected = set(dataset.expected_fields)
     actual = set(record_keys)
     return {
@@ -377,9 +383,7 @@ def collect_monthly_all(
                             err=True,
                         )
                         with failure_log_path.open("a", encoding="utf-8") as handle:
-                            handle.write(
-                                json.dumps(asdict(result), ensure_ascii=False) + "\n"
-                            )
+                            handle.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
                     results.append(result)
 
     summary = build_summary(results)
@@ -392,6 +396,100 @@ def collect_monthly_all(
     typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
     typer.echo(f"수집 요약 저장: {summary_path}")
     if summary["status_counts"]["failure"]:
+        raise typer.Exit(code=1)
+
+
+@app.command("collect-budget-all")
+def collect_budget_all(
+    start_year: int = typer.Option(2022, min=2000, max=2100, help="시작 회계연도"),
+    end_year: int = typer.Option(2025, min=2000, max=2100, help="종료 회계연도"),
+    ministry_code: str | None = typer.Option(
+        None, help="특정 소관코드만 수집. 생략하면 설정된 전체 부처"
+    ),
+    dataset_id: list[str] | None = typer.Option(
+        None,
+        "--dataset-id",
+        help="특정 예산 데이터셋만 수집. 여러 번 지정 가능",
+    ),
+    supplementary_round: str = typer.Option("1", help="추경포함 API의 추경 차수"),
+    page_size: int | None = typer.Option(None, min=1, max=1000, help="페이지당 건수"),
+    overwrite: bool = typer.Option(False, help="기존 완료 파티션의 페이지를 다시 수집"),
+    config_path: Path = typer.Option(DEFAULT_DATASETS_PATH, help="데이터셋 설정 파일"),
+    ministries_path: Path = typer.Option(DEFAULT_MINISTRIES_PATH, help="부처 설정 파일"),
+    output_dir: Path = typer.Option(Path("data/raw/budget"), help="예산 원본 루트"),
+) -> None:
+    """설정된 부처·연도의 예산 API 원본을 데이터셋별로 일괄 수집합니다."""
+    try:
+        if start_year > end_year:
+            raise ConfigError("--start-year는 --end-year보다 클 수 없습니다.")
+        settings = Settings.from_env()
+        datasets = load_datasets(config_path)
+        requested_ids = tuple(dataset_id or DEFAULT_BUDGET_DATASET_IDS)
+        selected_datasets = []
+        for requested_id in requested_ids:
+            dataset = datasets.get(requested_id)
+            if dataset is None:
+                raise ConfigError(f"설정에 없는 데이터셋입니다: {requested_id}")
+            if dataset.source_type != "api" or not dataset.enabled:
+                raise ConfigError(f"활성 API 데이터셋이 아닙니다: {requested_id}")
+            selected_datasets.append(dataset)
+
+        ministries = load_ministries(ministries_path)
+        if ministry_code:
+            ministry = ministries.get(ministry_code)
+            if ministry is None:
+                raise ConfigError(f"설정에 없는 소관코드입니다: {ministry_code}")
+            selected_ministries = [ministry]
+        else:
+            selected_ministries = list(ministries.values())
+        actual_page_size = page_size or settings.page_size
+    except (ConfigError, OSError, FileNotFoundError, ValueError) as exc:
+        typer.echo(f"예산 수집 설정 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    results: list[BudgetCollectionResult] = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    failure_log_path = output_dir / f"collection_failures_{run_timestamp}.jsonl"
+    with OpenFiscalClient(settings) as client:
+        for dataset in selected_datasets:
+            for ministry in selected_ministries:
+                for year in range(start_year, end_year + 1):
+                    typer.echo(f"수집 중: {dataset.dataset_id} {ministry.code} {year}")
+                    try:
+                        result = collect_budget_slice(
+                            client,
+                            dataset,
+                            ministry,
+                            year,
+                            output_dir=output_dir,
+                            page_size=actual_page_size,
+                            supplementary_round=supplementary_round,
+                            overwrite=overwrite,
+                        )
+                    except (OpenFiscalError, OSError, ValueError, json.JSONDecodeError) as exc:
+                        result = BudgetCollectionResult(
+                            dataset.dataset_id,
+                            ministry.code,
+                            ministry.name,
+                            year,
+                            "failure",
+                            error=str(exc),
+                        )
+                        with failure_log_path.open("a", encoding="utf-8") as handle:
+                            handle.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
+                        typer.echo(f"실패(계속 진행): {exc}", err=True)
+                    results.append(result)
+
+    summary = build_budget_summary(results)
+    summary_path = output_dir / f"collection_summary_{run_timestamp}.json"
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    typer.echo(f"수집 요약 저장: {summary_path}")
+    if summary["status_counts"].get("failure", 0):
         raise typer.Exit(code=1)
 
 
@@ -456,6 +554,98 @@ def normalize_monthly_command(
         typer.echo(f"- {path}")
     if result.failed_files:
         raise typer.Exit(code=1)
+
+
+@app.command("normalize-budget")
+def normalize_budget_command(
+    input_dir: Path = typer.Option(
+        Path("data/raw/budget"),
+        help="예산 API 원본 JSON 디렉터리",
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/processed/budget"),
+        help="예산 레코드와 품질검증 결과 저장 디렉터리",
+    ),
+    amount_event_output_dir: Path = typer.Option(
+        Path("data/processed/amount_event"),
+        help="금액 이벤트 저장 디렉터리",
+    ),
+    monthly_path: Path = typer.Option(
+        Path("data/processed/monthly_expenditure/monthly_expenditure_2022_2025.parquet"),
+        help="이름 기반 코드 매칭에 사용할 월별 집행 정규화 파일",
+    ),
+    start_year: int | None = typer.Option(None, help="시작 회계연도 필터"),
+    end_year: int | None = typer.Option(None, help="종료 회계연도 필터"),
+    ministry_code: str | None = typer.Option(None, help="특정 소관코드만 정규화"),
+    dataset_id: list[str] | None = typer.Option(
+        None,
+        "--dataset-id",
+        help="특정 예산 데이터셋만 정규화. 여러 번 지정 가능",
+    ),
+    config_path: Path = typer.Option(DEFAULT_DATASETS_PATH, help="데이터셋 설정 파일"),
+    overwrite: bool = typer.Option(False, help="기존 출력 파일 덮어쓰기"),
+) -> None:
+    """예산 API 원본을 예산 레코드와 금액 이벤트로 정규화합니다."""
+    try:
+        if start_year is not None and end_year is not None and start_year > end_year:
+            raise ConfigError("--start-year는 --end-year보다 클 수 없습니다.")
+        datasets = load_datasets(config_path)
+        selected_ids = set(dataset_id or DEFAULT_BUDGET_DATASET_IDS)
+        unknown = selected_ids - set(datasets)
+        if unknown:
+            raise ConfigError(f"설정에 없는 데이터셋입니다: {', '.join(sorted(unknown))}")
+        result = normalize_budget(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            amount_event_output_dir=amount_event_output_dir,
+            datasets=datasets,
+            monthly_path=monthly_path,
+            start_year=start_year,
+            end_year=end_year,
+            ministry_code=ministry_code,
+            dataset_ids=selected_ids,
+            overwrite=overwrite,
+        )
+    except (ConfigError, OSError, FileExistsError, ValueError) as exc:
+        typer.echo(f"예산 정규화 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+    if result.failed_files:
+        raise typer.Exit(code=1)
+
+
+@app.command("normalize-settlement")
+def normalize_settlement_command(
+    input_dir: Path = typer.Option(..., help="사업별결산세출지출현황 CSV 디렉터리"),
+    output_dir: Path = typer.Option(
+        Path("data/processed/settlement"),
+        help="결산 정규화 결과 저장 디렉터리",
+    ),
+    monthly_path: Path = typer.Option(
+        Path("data/processed/monthly_expenditure/monthly_expenditure_2022_2025.parquet"),
+        help="이름-코드 매칭 기준 월별 집행 테이블",
+    ),
+    ministries_path: Path = typer.Option(DEFAULT_MINISTRIES_PATH, help="부처 설정 파일"),
+    overwrite: bool = typer.Option(False, help="기존 출력 덮어쓰기"),
+) -> None:
+    """로컬 결산 CSV를 대상 부처 기준으로 정규화합니다."""
+    try:
+        result = normalize_settlement(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            ministries=load_ministries(ministries_path),
+            monthly_path=monthly_path,
+            overwrite=overwrite,
+        )
+    except (OSError, FileExistsError, ValueError) as exc:
+        typer.echo(f"결산 정규화 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
 
 
 if __name__ == "__main__":

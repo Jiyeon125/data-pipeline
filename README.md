@@ -137,7 +137,188 @@ null로 두고, `is_masked=true`, `masked_fields`, `masked_raw_values`,
 분석 원칙의 상세는 [docs/MENTORING_GUIDE.md](docs/MENTORING_GUIDE.md)를
 따릅니다.
 
+## 예산 API 일괄 수집·정규화
+
+5개 부처의 2022~2025년 세부사업·세목 예산 API 원본을 수집합니다.
+이미 완료된 파티션은 건너뛰며, 실패와 무자료 조합은 실행 요약에 남깁니다.
+
+```powershell
+openfiscal collect-budget-all --start-year 2022 --end-year 2025
+```
+
+수집된 원본은 데이터셋·연도·소관코드별로 보존합니다.
+
+```text
+data/raw/budget/<dataset_id>/year=2024/ministry_code=102/page_*.json
+```
+
+예산 레코드와 금액 이벤트를 분리해 정규화하고, 월별 집행 테이블의 이름-코드
+대응을 사용해 유일한 후보만 자동 매칭합니다.
+
+```powershell
+openfiscal normalize-budget
+```
+
+`amount_type`은 API 원본 필드명을 그대로 사용합니다. 금액 단위는 공식 명세를
+추가 확인하기 전까지 `unit_confirmed=false`로 유지하며, 미매칭·복수 후보·마스킹·
+파싱 실패·중복은 `manual_review.csv`에 남깁니다.
+
+예산 API만 반영한 사업-연도 중간 기준 테이블은 다음 명령으로 만듭니다.
+
+```powershell
+fiscal-master build-project-year-budget
+fiscal-master build-project-year-financial
+```
+
+이 결과는 `data/processed/masters/project_year_budget_base.parquet`에 저장됩니다.
+두 번째 명령은 월별 집행을 외부 결합한
+`project_year_financial_base.parquet`를 생성합니다. 기금의 지출계획현액 분모가
+확정되기 전에는 집행률을 계산하지 않습니다. 결산 CSV와 성과 문서가 연결되기
+전에는 어느 결과도 최종 분석 마스터로 사용하지 않습니다.
+
+## 결산 정규화 및 재정 사업-연도 v1
+
+사업별결산세출지출현황 CSV 디렉터리를 지정해 대상 부처 자료를 정규화합니다.
+
+```powershell
+openfiscal normalize-settlement `
+  --input-dir "<사업별결산세출지출현황 CSV 디렉터리>"
+```
+
+정규화된 결산을 예산·월별 집행 기준 테이블에 연결하고, 12월 누계 대조와
+회계유형별 집행률 분모 규칙을 적용합니다.
+
+```powershell
+fiscal-master build-project-year-financial-v1
+```
+
+- 일반회계·특별회계: 결산 세출예산현액을 분모로 사용
+- 기금: 월별 집행의 지출계획현액 대응 컬럼을 분모로 사용
+- 분모 누락·0, 회계유형 미확정, 집행률 1 초과는 수기검토 목록에 기록
+- 원본 결산과 12월 누계가 다르면 값을 덮어쓰지 않고 대조 상태와 차이를 보존
+
+후속 품질검증은 다음 명령으로 실행합니다.
+
+```powershell
+fiscal-master analyze-financial-v1-quality --overwrite
+```
+
+이 명령은 원본 금액을 수정하지 않고 12월 누계·결산 불일치 원인, 부처·연도·
+회계유형별 총누계·순누계 대응도, 집행률 1 초과, 수기검토 우선순위를
+`data/processed/masters/quality/` 아래에 생성합니다.
+
+- `financial_reconciliation_analysis.csv`
+- `execution_rate_over_100.csv`
+- `manual_review_prioritized.csv`
+- `reconciliation_summary.json`
+
+## 사업분류 및 재정분석 모집단
+
+LLM이나 외부 API 없이 financial v1의 코드·명칭·구조화 필드와 기존 품질검증
+결과를 사용해 사업분류 마스터와 분석 모집단을 생성합니다.
+
+```powershell
+fiscal-master build-project-analysis-population --overwrite
+```
+
+- 책임운영기관 회계코드 4xx는 `RESPONSIBLE_OPERATION_ACCOUNT`로 분리
+- 재정수단 명칭 키워드 단일 적중은 `RULE_CANDIDATE`
+- 복수 재정수단 키워드와 근거 부족은 자동 확정하지 않고 수기검토
+- 인건비·기본경비·내부거래 등 제외 행도 삭제하지 않고 별도 모집단에 보존
+- `NON_BLOCKING`·`INFORMATIONAL`은 일반 재정분석 적격을 유지
+- 집행률 1 초과·분모 미확정·중대한 대조 차이는 해당 지표 적격 플래그로 제한
+- 비교집단 크기 5 미만은 병합하지 않고 `small_group_flag=true`
+
+주요 출력:
+
+```text
+data/processed/masters/
+  project_classification.parquet
+  project_year_analysis_population.parquet
+  project_year_analysis_excluded.parquet
+  classification/
+    classification_summary.json
+    classification_manual_review.csv
+    analysis_population_summary.json
+    exclusion_summary.csv
+```
+
+기존 포함·제외 모집단의 과도한 제외 여부와 분석별 적격성을 다시 검증합니다.
+
+```powershell
+fiscal-master analyze-population-sensitivity --overwrite
+```
+
+이 명령은 예산·집행·결산·월별패턴·추세·순위 분석 적격 플래그를 각각 생성하고,
+`broad_population ⊇ core_financial_population ⊇ strict_ranking_population`
+관계를 검증합니다. 소표본 비교집단은 병합하지 않고 순위 제한 플래그로 남깁니다.
+
+출력은 `data/processed/masters/population_sensitivity/`에 저장됩니다.
+
+사업 연속성 후보, 세부사업-연도 재정 파생변수, 프로그램-연도 재정 테이블을
+생성합니다.
+
+```powershell
+fiscal-master build-project-continuity --overwrite
+```
+
+- `broad_population`: 전체 재정구조와 일반 기술통계
+- `core_financial_population`: 재정·집행률·추세·프로그램 집계
+- `strict_ranking_population`: 비교집단 내부 점검 순위에만 사용
+- 신규·종료·통합·분할·이관 및 연속성 미확정 사업은 일반 예산 증감률에서 제외
+- 2022년 시작과 2025년 종료 경계는 신규·종료로 단정하지 않고
+  `LEFT_CENSORED`·`RIGHT_CENSORED` 정보성 관계로 관리
+- `PARTIAL`/`UNMATCHED` 프로그램은 부분 집행률을 전체값처럼 계산하지 않음
+
+주요 출력은 `project_relation.parquet`, `project_year_financial_v2.parquet`,
+`program_year_financial.parquet` 및 대응 품질 요약 파일입니다.
+
+기존 strict 순위 모집단의 과도한 행 제외를 변수별 적격 정책으로 재설계합니다.
+
+```powershell
+fiscal-master build-ranking-population-v2 --overwrite
+```
+
+- core 6,290행을 기본 순위 모집단으로 유지
+- UNKNOWN 재정수단은 재정수단 구성요소만 제한
+- 집행률 1 초과는 집행 구성요소만 제한
+- 관측경계·관계 후보는 추세 구성요소만 제한
+- 소표본 비교집단은 행을 유지하고 `rank_confidence=LOW`로 표시
+- 모든 핵심 변수가 무효이거나 복구 불가능한 키·파싱 문제만 행 전체 제외
+
+출력은 `data/processed/masters/population_sensitivity/`의
+`ranking_population_v2.parquet` 및 strict 제외 규칙·비교·요약 파일입니다.
+
 ## 기타 명령
+
+## M2 재정 데이터 EDA
+
+외부 API·LLM·PDF 파싱 없이 현재 재정 마스터를 이용해 5개 부처의 데이터 품질,
+재정구조, 월별 집행 패턴과 모집단 대표성을 점검합니다.
+
+```powershell
+fiscal-analytics build-m2-data-review --root .
+```
+
+실행 결과:
+
+- 분석표 9개: `data/analytics/eda/`
+- 그래프 9개: `artifacts/figures/eda/`
+- 팀 중간점검 보고서: `docs/M2_DATA_REVIEW.md`
+
+`broad_population`은 전체 구조, `core_financial_population`은 금액·집행 분석,
+`strict_ranking_population`은 기존 순위 모집단의 대표성 진단에만 사용합니다.
+새 `ranking_population_v2`는 core 행을 유지하고 분석 변수별 적격 플래그를 적용합니다.
+
+최종 점수·순위를 만들기 전 분석 정의와 대표성을 검증합니다.
+
+```powershell
+fiscal-analytics validate-m2-definitions --root .
+```
+
+- 검증표 12개: `data/analytics/definition_validation/`
+- 분석 기준 확정 보고서: `docs/M2_ANALYSIS_DEFINITION_VALIDATION.md`
+- 최종 점수·최종 순위·정책 결론은 생성하지 않음
 
 ```powershell
 openfiscal doctor
