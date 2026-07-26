@@ -347,6 +347,20 @@ fiscal-analytics audit-m3-methodology --root .
 - 감사 보고서: `docs/M3_METHODOLOGY_AUDIT.md`
 - 기존 M3 산출물과 원본 금액은 덮어쓰지 않음
 
+## 분석 기준 의사결정 자료
+
+집행률 70~95% 임계값, 비가중·예산가중 ECDF, 집단별 탐지 편향,
+상대기준 표본 안정성, 연말집중 유형과 반복 신호를 비교합니다.
+이 명령은 최종 임계값·복합점수·전체 순위를 저장하지 않습니다.
+
+```powershell
+fiscal-analytics build-analysis-policy-decision-support --root .
+```
+
+- 편집 가능한 분석표: `data/analytics/decision_support/`
+- 발표용 정적 그래프: `artifacts/figures/decision_support/`
+- 그래프 읽는 법과 질의응답 근거: `docs/ANALYSIS_POLICY_DECISION_SUPPORT.md`
+
 ```powershell
 openfiscal doctor
 openfiscal probe monthly_expenditure `

@@ -8,6 +8,10 @@ from analytics.analysis_definition_validation import (
     DefinitionValidationPaths,
     build_analysis_definition_validation,
 )
+from analytics.analysis_policy_decision_support import (
+    DecisionSupportPaths,
+    build_analysis_policy_decision_support,
+)
 from analytics.financial_eda import EDAPaths, build_financial_eda
 from analytics.m3_financial_signals import M3Paths, build_m3_analysis
 from analytics.m3_methodology_audit import AuditPaths, build_m3_methodology_audit
@@ -55,8 +59,19 @@ def audit_m3_methodology(
     """M3 상대기준·분석단위·반복관측 방법론을 감사합니다."""
     result = build_m3_methodology_audit(AuditPaths.from_root(root))
     typer.echo(
-        f"M3 방법론 감사 완료: 산출물 {len(result.output_paths)}개, "
-        f"보고서 {result.report_path}"
+        f"M3 방법론 감사 완료: 산출물 {len(result.output_paths)}개, 보고서 {result.report_path}"
+    )
+
+
+@app.command("build-analysis-policy-decision-support")
+def build_analysis_policy_decision_support_command(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+) -> None:
+    """집행률·연말집중·반복 기준의 분포·민감도 의사결정 자료를 생성합니다."""
+    result = build_analysis_policy_decision_support(DecisionSupportPaths.from_root(root))
+    typer.echo(
+        f"분석 기준 의사결정 자료 완료: 표 {len(result.output_paths)}개, "
+        f"그래프 {len(result.figure_paths)}개, 보고서 {result.report_path}"
     )
 
 
