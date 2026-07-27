@@ -9,6 +9,10 @@
 코드 수정과 자동 검증은 완료됐고, 다음 병목은 UNKNOWN 본예산 80% 커버리지
 18개 사업의 사람 검수입니다.
 
+재현 경로 정리도 완료했습니다. 호출되지 않는 빈 패키지 뼈대와 월별 CSV
+중복본을 제거했고, 실제 분석 패키지명은 `analytics`로 문서와 구조 테스트를
+일치시켰습니다. 원본·수기검수·현재 M2/M3 결과는 보존했습니다.
+
 ## 발견한 원인
 
 - 기존 제외 규칙에 채권·주식·금융기관 예치가 명시돼 있지 않았습니다.
@@ -54,6 +58,24 @@
   선행 0 보존으로 검증했습니다. 5개 시트의 Excel 렌더링도 확인했습니다.
 - 현재 사람 검수 확정은 0개이므로 상태는 `INCOMPLETE`입니다.
 
+## 2026-07-27 저장소 정리와 실행환경
+
+- Python 3.13 기반 실행파일이 사라져 `.venv`, CLI와 작업 트래커 훅이
+  실행되지 않던 상태였습니다. 사용자 Python 3.13.14를 복구했고
+  `.venv\Scripts\python.exe`, 주요 의존성 import, 트래커 `sync`를
+  확인했습니다.
+- 실행 기능이 없는 `src/fiscal_analytics`, `src/fiscal_dashboard`,
+  빈 `clean/join/extract/prompts/validate` 뼈대와 빈 노트북 분류 폴더를
+  삭제했습니다.
+- 후속 코드가 읽지 않는 월별 CSV 중복본 5개와 접근 가능한 테스트·Python
+  캐시를 포함해 117.00 MiB를 삭제했습니다. 월별 Parquet은 유지했습니다.
+- 샌드박스 ACL 때문에 일반 권한에서 삭제가 거부됐던 과거 `.pytest_*`
+  폴더 23개도 Windows UAC 승인 후 정확한 경로로 삭제했습니다. 현재 루트의
+  `.pytest_*` 잔존 수는 0개입니다.
+- 정리 후 핵심 모집단을 실제 재실행해 원천 9,366행, 일반 모집단 6,107행,
+  제외 3,259행, core/ranking v2 6,130행, 금액 변경 0을 재확인했습니다.
+- Ruff와 전체 pytest 122개, M2 정의 검증이 통과했습니다.
+
 ## 남은 작업
 
 1. 사용자가 새 워크북의 `사업검수` 18행을 공식 근거와 함께 작성합니다.
@@ -72,16 +94,16 @@ fiscal-analytics validate-unknown-priority-review --root . --require-complete
 ## 주요 재실행 명령
 
 ```powershell
-python -m master_engineering.cli build-project-analysis-population --overwrite
-python -m master_engineering.cli analyze-population-sensitivity --overwrite
-python -m master_engineering.cli build-project-continuity --overwrite
-python -m master_engineering.cli build-ranking-population-v2 --overwrite
-python -m analytics.cli build-m2-data-review --root .
-python -m analytics.cli validate-m2-definitions --root .
-python -m analytics.cli build-m3-financial-signals --root .
-python -m analytics.cli build-analysis-policy-decision-support --root .
-python -m analytics.cli audit-m3-methodology --root .
-python -m analytics.cli validate-unknown-priority-review --root .
+.venv\Scripts\python.exe -m master_engineering.cli build-project-analysis-population --overwrite
+.venv\Scripts\python.exe -m master_engineering.cli analyze-population-sensitivity --overwrite
+.venv\Scripts\python.exe -m master_engineering.cli build-project-continuity --overwrite
+.venv\Scripts\python.exe -m master_engineering.cli build-ranking-population-v2 --overwrite
+.venv\Scripts\python.exe -m analytics.cli build-m2-data-review --root .
+.venv\Scripts\python.exe -m analytics.cli validate-m2-definitions --root .
+.venv\Scripts\python.exe -m analytics.cli build-m3-financial-signals --root .
+.venv\Scripts\python.exe -m analytics.cli build-analysis-policy-decision-support --root .
+.venv\Scripts\python.exe -m analytics.cli audit-m3-methodology --root .
+.venv\Scripts\python.exe -m analytics.cli validate-unknown-priority-review --root .
 ```
 
 ## 현재 완료로 처리하지 않은 작업

@@ -22,14 +22,14 @@ OpenAPI 자료와 결합해 분석용 마스터 테이블을 만든 뒤, 검증�
                          program_year / kpi_year / project_year
                          project_month / amount_event / masters
                                       ↓
-                              fiscal_analytics
+                                  analytics
                          피처·비교집단·순위·민감도
                                       ↓
                               data/analytics
                                       ↓
                               data/exports
                                       ↓
-                              fiscal_dashboard
+                           대시보드(구현 예정)
 ```
 
 ## 코드 경계
@@ -41,12 +41,11 @@ OpenAPI 자료와 결합해 분석용 마스터 테이블을 만든 뒤, 검증�
 
 ### `performance_pipeline`
 
-성과계획서·성과보고서만 다룹니다.
+성과계획서·성과보고서만 다룹니다. 현재는 문서 인벤토리까지만 구현돼 있습니다.
+사용자가 외부 LLM 사용을 허용하고 추출 계약이 확정된 뒤 나머지를 구현합니다.
 
 - `ingest`: 문서 목록, 유형 분류, 페이지 분할
-- `extract`: 성과지표명, 단위, 목표, 실적, 공식 달성률과 근거 추출
-- `validate`: JSON 스키마, 수치·단위, 원문 근거, 골드셋 평가
-- `prompts`: 버전이 명시된 프롬프트
+- 추후 구현: 성과지표 추출, JSON·원문 근거 검증, 버전별 프롬프트
 
 LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원시 추출값입니다.
 문서에 없는 값은 추정하지 않고 `null`과 검토 상태로 남깁니다.
@@ -55,41 +54,28 @@ LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원�
 
 문서 추출값과 OpenAPI 정규화 자료를 결합합니다.
 
-- `clean`: 원본과 정제값을 분리하는 비파괴 정제
-- `join`: `configs/join_keys.yaml` 기반 단계별 매칭
 - `build_masters`: 분석 기준 테이블 생성
 - `quality`: 결측사유, 매칭상태, 중복과 수동검토 플래그
 
 이 계층은 이름만 같은 사업을 자동 확정하지 않으며, 미매칭 행도 삭제하지 않습니다.
 
-### `fiscal_analytics`
+### `analytics`
 
-마스터 테이블만 읽어 분석합니다. 일반적인 외부 패키지명과 충돌할 수 있는
-`analytics` 대신 `fiscal_analytics`를 사용합니다.
-
-- `features`: 동년도 점검, 환류, 집행설명필요 등 지표
-- `ranking`: 비교집단과 복수 가중치 시나리오
-- `validation`: 시차, 변수 제거, 민감도, 순위 안정성, 외부 타당성
-- `reporting`: 검증된 표·그림·보고서 입력 생성
+마스터 테이블만 읽어 동년도 점검, 환류, 집행설명필요 신호, 비교집단,
+민감도와 보고서 입력을 생성합니다.
 
 탐색 코드는 `notebooks/`에 둘 수 있지만, 확정된 계산은 이 패키지로 옮깁니다.
 
-### `fiscal_dashboard`
+### 대시보드
 
-`data/exports`의 명시된 데이터 계약만 읽습니다. 원본 문서, LLM 응답 또는
-정규화 내부 테이블을 직접 읽지 않습니다.
-
-- `app`: BI 런타임
-- `charts`: 재사용 가능한 시각화
-- `data_contracts`: 필수 열, 타입, 갱신 규칙
-
-대시보드 기술은 데이터 계약 확정 후 Streamlit, Dash, Power BI 등에서 선택합니다.
+아직 구현하지 않습니다. `data/exports` 계약이 확정되면 원본·중간 테이블을
+직접 읽지 않는 별도 소비자로 구현하고 기술을 선택합니다.
 
 ## 의존 방향
 
 ```text
 open_fiscal_pipeline ─┐
-                      ├→ master_engineering → fiscal_analytics → fiscal_dashboard
+                      ├→ master_engineering → analytics → data/exports
 performance_pipeline ─┘
 ```
 

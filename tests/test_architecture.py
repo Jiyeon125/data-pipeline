@@ -13,8 +13,7 @@ def test_pipeline_packages_are_importable() -> None:
         "open_fiscal_pipeline",
         "performance_pipeline",
         "master_engineering",
-        "fiscal_analytics",
-        "fiscal_dashboard",
+        "analytics",
     )
     for package in packages:
         assert importlib.import_module(package)

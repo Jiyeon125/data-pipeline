@@ -10,11 +10,12 @@
 
 ```text
 open_fiscal_pipeline   열린재정 OpenAPI 수집·정규화
-performance_pipeline   성과 문서 수집·LLM 추출·검증
+performance_pipeline   성과 문서 인벤토리
 master_engineering     전처리·조인·마스터·품질
-fiscal_analytics       피처·순위·민감도·보고
-fiscal_dashboard       BI 앱·차트·데이터 계약
+analytics              피처·순위·민감도·보고
 ```
+
+성과 문서 추출과 대시보드는 데이터 계약과 사용 방식이 확정된 뒤 구현합니다.
 
 상세한 의존 방향, 데이터 계층과 팀 공유 마일스톤은
 [프로젝트 아키텍처](docs/architecture.md)를 참고합니다.
