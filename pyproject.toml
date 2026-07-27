@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
   "httpx>=0.27,<1",
   "matplotlib>=3.8,<4",
+  "openpyxl>=3.1,<4",
   "pandas>=2.2,<3",
   "pyarrow>=15,<22",
   "python-dotenv>=1.0,<2",
@@ -20,7 +21,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "openpyxl>=3.1,<4",
+  "ipykernel>=6.29,<7",
+  "nbclient>=0.10,<1",
+  "nbformat>=5.10,<6",
   "pytest>=8,<9",
   "ruff>=0.5,<1",
 ]
@@ -29,6 +32,7 @@ dev = [
 openfiscal = "open_fiscal_pipeline.cli:app"
 fiscal-master = "master_engineering.cli:app"
 fiscal-analytics = "analytics.cli:app"
+fiscal-performance = "performance_pipeline.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -45,3 +49,4 @@ target-version = "py311"
 "src/open_fiscal_pipeline/cli.py" = ["B008"]
 "src/master_engineering/cli.py" = ["B008"]
 "src/analytics/cli.py" = ["B008"]
+"src/performance_pipeline/cli.py" = ["B008"]
