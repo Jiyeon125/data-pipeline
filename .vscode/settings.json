@@ -1,0 +1,11 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.egg-info": true,
+    ".pytest*": true,
+    ".ruff_cache": true,
+    ".venv": true,
+    ".venv.broken": true,
+    "tmp": true
+  }
+}

@@ -1,6 +1,30 @@
 # Open Fiscal Data Pipeline
 
-열린재정 Open API 원본을 수집하는 Python 파이프라인입니다.
+성과계획서·성과보고서와 열린재정 데이터를 연결해 재정사업의 점검 후보와
+검토 순서를 만드는 Python 파이프라인입니다.
+
+## 처음 보는 분은 여기부터
+
+현재 공식 실행 경로는 `src/`의 네 파이프라인과 Streamlit 대시보드입니다.
+추적 중인 레거시 코드는 없으며, 오래된 실험 산출물은 Git에 포함하지 않습니다.
+
+| 경로 | 역할 | 수정 원칙 |
+|---|---|---|
+| `src/open_fiscal_pipeline/` | 열린재정 API 수집·정규화 | 원본 응답과 정규화 로직 분리 |
+| `src/performance_pipeline/` | 성과문서·수기 성과표 대조 | 근거 페이지와 검수 상태 보존 |
+| `src/master_engineering/` | 재정 마스터·조인·품질·모집단 | 원본값과 파생값 분리 |
+| `src/analytics/` | 신호·민감도·순위 안정성 | 확정 계산만 배치 |
+| `src/fiscal_dashboard/` | 검증 산출물 탐색 | 화면에서 분석 로직 재계산 금지 |
+| `configs/` | 부처·데이터셋·조인·시나리오 설정 | 비밀키 저장 금지 |
+| `data/` | 원본·중간·가공·분석·내보내기 | 실제 데이터는 Git 제외 |
+| `tests/` | 계산·경계·데이터 계약 검증 | 분석 타당성은 문서 검토 병행 |
+| `notebooks/` | 탐색과 검토 | 확정 로직은 `src/`로 이동 |
+| `artifacts/` | 그림·평가·실행 산출물 | 발표용 그림만 선택 추적 |
+| `docs/` | 계획·결정·품질·결과·이력 | [문서 안내](docs/README.md)에서 구분 |
+| `scripts/` | 연결 점검과 로컬 정리 | 재사용 분석 로직 배치 금지 |
+
+현재 상태와 바로 다음 작업은 [인수인계](docs/SESSION_HANDOFF.md), 전체 의존
+관계는 [아키텍처](docs/architecture.md)를 참고합니다.
 
 ## 프로젝트 범위와 구조
 
@@ -22,6 +46,31 @@ fiscal_dashboard       검증된 분석 산출물의 Streamlit 탐색 화면
 
 상세한 의존 방향, 데이터 계층과 팀 공유 마일스톤은
 [프로젝트 아키텍처](docs/architecture.md)를 참고합니다.
+
+## 작업 단위와 커밋
+
+자동 커밋 훅은 사용하지 않습니다. 훅은 작업 완료 여부를 판단하지 못하고
+사용자 수정이나 `.env`까지 잘못 묶을 수 있습니다. 구현과 검증이 끝난 작업만
+관련 경로를 명시적으로 스테이징해 작은 커밋으로 남깁니다.
+
+```powershell
+git add <이번 작업에서 바꾼 경로>
+git diff --cached --stat
+git commit -m "<작업 단위 요약>"
+```
+
+## 로컬 생성물 정리
+
+정리 대상을 먼저 확인한 뒤 실행합니다. 실제 데이터, `.env`, 정상 `.venv`는
+삭제하지 않습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/clean_workspace.ps1 -WhatIf
+powershell -ExecutionPolicy Bypass -File scripts/clean_workspace.ps1
+```
+
+깨진 가상환경까지 삭제하려면 관련 Python·VS Code 프로세스를 닫고
+`-IncludeBrokenVenv`를 추가합니다.
 
 ## 설치
 
