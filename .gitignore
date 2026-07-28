@@ -12,16 +12,65 @@ build/
 .ruff_cache/
 .DS_Store
 
+# Local exploration, notebook outputs, and generated deliverables.
+tmp/
+.tmp*/
+.ipynb_checkpoints/
+*.ipynb
+output/
+outputs/
+dataset/
+datasets/
+exports/
+results/
+
+# Data payloads stay local even when accidentally placed outside data/.
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.parquet
+*.feather
+*.arrow
+*.pickle
+*.pkl
+*.jsonl
+*.ndjson
+*.db
+*.sqlite
+*.sqlite3
+*.geojson
+*.npy
+*.npz
+*.avro
+*.orc
+*.dta
+*.sav
+*.sas7bdat
+*.hwp
+*.hwpx
+*.pdf
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+
 # Collected and generated data stay local. Only directory placeholders are tracked.
 data/**
 !data/**/
 !data/**/.gitkeep
 !data/README.md
 logs/*
+
+# Generated artifacts stay local. Only placeholders, documentation, and
+# deliberately curated presentation figures are tracked.
 artifacts/**
 !artifacts/**/
 !artifacts/**/.gitkeep
 !artifacts/README.md
+!artifacts/figures/presentation/**
 
 # Keep directory placeholders.
 !logs/.gitkeep
