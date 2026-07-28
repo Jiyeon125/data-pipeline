@@ -1,5 +1,6 @@
 """재정 분석 명령행 인터페이스."""
 
+import json
 from pathlib import Path
 
 import typer
@@ -15,6 +16,15 @@ from analytics.analysis_policy_decision_support import (
 from analytics.financial_eda import EDAPaths, build_financial_eda
 from analytics.m3_financial_signals import M3Paths, build_m3_analysis
 from analytics.m3_methodology_audit import AuditPaths, build_m3_methodology_audit
+from analytics.mss_priority_scenario_analysis import (
+    PriorityScenarioError,
+    PriorityScenarioPaths,
+    run_priority_scenario_analysis,
+)
+from analytics.mss_same_year_budget_check import (
+    SameYearBudgetCheckError,
+    run_same_year_budget_check,
+)
 from analytics.unknown_top16_review import (
     UnknownReviewPaths,
     build_unknown_review_workbook,
@@ -116,6 +126,102 @@ def validate_unknown_priority_review(
     )
     if result.status == "FAIL":
         raise typer.Exit(code=1)
+
+
+@app.command("analyze-mss-same-year-budget")
+def analyze_mss_same_year_budget(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    ministry_code: str = typer.Option("102"),
+    start_year: int = typer.Option(2022),
+    end_year: int = typer.Option(2024),
+    overwrite: bool = typer.Option(False, help="기존 산출물 덮어쓰기"),
+) -> None:
+    """중기부 성과와 재정을 프로그램-연도-회계유형 단위로 결합합니다."""
+    try:
+        result = run_same_year_budget_check(
+            indicator_path=root
+            / "data/processed/performance/analysis_ready/program_kpi_year_analysis_ready.parquet",
+            overall_financial_path=root / "data/processed/masters/program_year_financial.parquet",
+            project_financial_path=root
+            / "data/processed/masters/project_year_financial_v2.parquet",
+            output_dir=root / "data/analytics/mss_same_year_budget_check",
+            ministry_code=ministry_code,
+            start_year=start_year,
+            end_year=end_year,
+            overwrite=overwrite,
+        )
+    except (
+        SameYearBudgetCheckError,
+        FileExistsError,
+        OSError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"중기부 동년도 점검 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("analyze-manual-same-year-budget")
+def analyze_manual_same_year_budget(
+    indicator_path: Path = typer.Option(..., help="부처별 분석용 성과지표 파케이"),
+    output_dir: Path = typer.Option(..., help="부처별 동년도 분석 산출물 디렉터리"),
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    ministry_code: str = typer.Option(..., help="앞자리 0을 포함한 3자리 부처코드"),
+    start_year: int = typer.Option(2022),
+    end_year: int = typer.Option(2024),
+    overwrite: bool = typer.Option(False, help="기존 산출물 덮어쓰기"),
+) -> None:
+    """수기 골드셋 성과와 재정을 프로그램-연도-회계유형 단위로 결합합니다."""
+    try:
+        result = run_same_year_budget_check(
+            indicator_path=indicator_path,
+            overall_financial_path=root / "data/processed/masters/program_year_financial.parquet",
+            project_financial_path=root
+            / "data/processed/masters/project_year_financial_v2.parquet",
+            output_dir=output_dir,
+            ministry_code=ministry_code,
+            start_year=start_year,
+            end_year=end_year,
+            overwrite=overwrite,
+        )
+    except (
+        SameYearBudgetCheckError,
+        FileExistsError,
+        OSError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"수기 골드셋 동년도 점검 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("analyze-mss-priority-scenarios")
+def analyze_mss_priority_scenarios(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    overwrite: bool = typer.Option(False, help="기존 산출물 덮어쓰기"),
+) -> None:
+    """중기부 점검 후보군과 복수 시나리오 순위 안정성을 산출합니다."""
+    try:
+        result = run_priority_scenario_analysis(
+            PriorityScenarioPaths.from_root(root),
+            overwrite=overwrite,
+        )
+    except (
+        PriorityScenarioError,
+        FileExistsError,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"중기부 후보·시나리오 분석 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in (*result.output_paths, *result.figure_paths):
+        typer.echo(f"- {path}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,52 @@
+version: 1
+scope:
+  ministry_code: "102"
+  start_year: 2022
+  end_year: 2024
+
+thresholds:
+  execution_strong: 0.80
+  execution_moderate: 0.90
+  repeated_moderate_weight: 0.50
+  repeated_year_end_weight: 0.50
+
+top_k:
+  - 5
+  - 10
+
+components:
+  - performance_gap
+  - execution_management
+  - budget_performance_mismatch
+  - fiscal_impact
+
+scenarios:
+  equal:
+    performance_gap: 0.25
+    execution_management: 0.25
+    budget_performance_mismatch: 0.25
+    fiscal_impact: 0.25
+  performance_focus:
+    performance_gap: 0.50
+    execution_management: 0.20
+    budget_performance_mismatch: 0.20
+    fiscal_impact: 0.10
+  execution_focus:
+    performance_gap: 0.20
+    execution_management: 0.50
+    budget_performance_mismatch: 0.20
+    fiscal_impact: 0.10
+  fiscal_impact_adjusted:
+    performance_gap: 0.20
+    execution_management: 0.20
+    budget_performance_mismatch: 0.20
+    fiscal_impact: 0.40
+
+interpretation:
+  status: exploratory
+  missing_indicator_type: >
+    성과지표 유형은 아직 수기 분류가 완료되지 않아 현재 시나리오의 구성요소로
+    사용하지 않는다. 결측을 0점 처리하거나 남은 가중치로 재배분하지 않는다.
+  fiscal_impact_role: >
+    사업규모는 위험 자체가 아니라 검토 영향도 보정에만 사용하며, 사업규모만으로
+    시나리오 순위 대상이 되지 않는다.

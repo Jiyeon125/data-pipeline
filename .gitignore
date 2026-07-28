@@ -17,6 +17,7 @@ tmp/
 .tmp*/
 .ipynb_checkpoints/
 *.ipynb
+!notebooks/mss_priority_scenario_stability.ipynb
 output/
 outputs/
 dataset/

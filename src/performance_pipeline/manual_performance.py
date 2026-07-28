@@ -8,6 +8,7 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -598,3 +599,148 @@ def build_manual_performance_pilot(
         summary=summary,
         output_paths=output_paths,
     )
+
+
+def build_program_match_review(
+    *,
+    program_year_path: Path,
+    financial_path: Path,
+    output_dir: Path,
+    ministry_code: str,
+    candidate_count: int = 3,
+    overwrite: bool = False,
+) -> tuple[pd.DataFrame, dict[str, Any], tuple[Path, ...]]:
+    """미매칭 프로그램마다 같은 부처·연도의 명칭 유사 후보를 제시합니다."""
+    if candidate_count < 1:
+        raise ManualPerformanceError("후보 수는 1개 이상이어야 합니다.")
+    output_paths = (
+        output_dir / "program_match_candidates.csv",
+        output_dir / "program_match_review_summary.json",
+    )
+    existing = [path for path in output_paths if path.exists()]
+    if existing and not overwrite:
+        raise FileExistsError(
+            "기존 산출물이 있습니다. --overwrite를 지정하세요: "
+            + ", ".join(str(path) for path in existing)
+        )
+    for path in (program_year_path, financial_path):
+        if not path.is_file():
+            raise ManualPerformanceError(f"입력 파일을 찾을 수 없습니다: {path}")
+
+    source_hashes = {
+        str(path): _source_sha256(path) for path in (program_year_path, financial_path)
+    }
+    program_year = pd.read_parquet(program_year_path)
+    financial = _validate_financial(pd.read_parquet(financial_path))
+    required = {
+        "fiscal_year",
+        "performance_program_name",
+        "indicator_count",
+        "source_indicator_ids",
+        "program_match_status",
+        "program_match_eligible",
+    }
+    missing = sorted(required - set(program_year.columns))
+    if missing:
+        raise ManualPerformanceError(f"프로그램-연도 입력에 필수 컬럼이 없습니다: {missing}")
+
+    code = ministry_code.zfill(3)
+    review = program_year.loc[~program_year["program_match_eligible"].fillna(False)].copy()
+    candidates = financial.loc[
+        financial["ministry_code"].eq(code) & financial["program_code"].ne("UNKNOWN")
+    ].copy()
+    rows: list[dict[str, Any]] = []
+    for source in review.sort_values(["fiscal_year", "performance_program_name"]).itertuples():
+        same_year = candidates.loc[candidates["fiscal_year"].eq(source.fiscal_year)].copy()
+        normalized = normalize_program_name(source.performance_program_name)
+        same_year["name_similarity"] = same_year["program_name"].map(
+            lambda name, target=normalized: SequenceMatcher(
+                None,
+                target,
+                normalize_program_name(name),
+            ).ratio()
+        )
+        same_year = same_year.sort_values(
+            ["name_similarity", "original_budget", "program_code"],
+            ascending=[False, False, True],
+        ).head(candidate_count)
+        for rank, candidate in enumerate(same_year.itertuples(), start=1):
+            score = float(candidate.name_similarity)
+            rows.append(
+                {
+                    "review_key": (
+                        f"{code}|{source.fiscal_year}|{source.performance_program_name}"
+                    ),
+                    "ministry_code": code,
+                    "fiscal_year": int(source.fiscal_year),
+                    "performance_program_name": source.performance_program_name,
+                    "review_group": normalized,
+                    "indicator_count": int(source.indicator_count),
+                    "source_indicator_ids": source.source_indicator_ids,
+                    "source_match_status": source.program_match_status,
+                    "candidate_rank": rank,
+                    "candidate_fiscal_year": int(candidate.fiscal_year),
+                    "candidate_program_code": str(candidate.program_code),
+                    "candidate_program_name": candidate.program_name,
+                    "name_similarity": score,
+                    "candidate_quality": (
+                        "HIGH" if score >= 0.8 else "MEDIUM" if score >= 0.6 else "LOW"
+                    ),
+                    "candidate_original_budget": candidate.original_budget,
+                    "candidate_financial_linkage_status": candidate.financial_linkage_status,
+                    "auto_confirmed": False,
+                    "decision": "",
+                    "reviewer": "",
+                    "review_note": "",
+                }
+            )
+    result = pd.DataFrame(rows)
+    if len(review) and result.empty:
+        raise ManualPerformanceError("미매칭 프로그램의 같은 연도 재정 후보가 없습니다.")
+    if not result.empty:
+        if result["review_key"].nunique() != len(review):
+            raise ManualPerformanceError("일부 미매칭 프로그램에 후보가 생성되지 않았습니다.")
+        if result["auto_confirmed"].any():
+            raise ManualPerformanceError("후보를 자동 확정해서는 안 됩니다.")
+        if not result["ministry_code"].eq(code).all():
+            raise ManualPerformanceError("다른 부처 후보가 섞였습니다.")
+
+    source_hashes_after = {
+        str(path): _source_sha256(path) for path in (program_year_path, financial_path)
+    }
+    top = result.loc[result["candidate_rank"].eq(1)]
+    summary = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "ministry_code": code,
+        "source_unmatched_program_year_count": len(review),
+        "source_review_group_count": int(result["review_group"].nunique()),
+        "candidate_row_count": len(result),
+        "candidate_count_per_source": candidate_count,
+        "top_candidate_quality_counts": {
+            str(key): int(value) for key, value in top["candidate_quality"].value_counts().items()
+        },
+        "top_candidate_similarity": {
+            "min": float(top["name_similarity"].min()) if len(top) else None,
+            "median": float(top["name_similarity"].median()) if len(top) else None,
+            "max": float(top["name_similarity"].max()) if len(top) else None,
+        },
+        "source_sha256": source_hashes,
+        "validation": {
+            "all_source_rows_preserved": result["review_key"].nunique() == len(review),
+            "same_ministry_only": bool(result["ministry_code"].eq(code).all()),
+            "same_year_only": bool(result["fiscal_year"].eq(result["candidate_fiscal_year"]).all()),
+            "auto_confirmed_count": int(result["auto_confirmed"].sum()),
+            "input_files_unchanged": source_hashes == source_hashes_after,
+        },
+        "interpretation_limit": (
+            "명칭 유사도는 검토 순서를 위한 후보일 뿐 매칭 근거가 아닙니다. "
+            "프로그램 코드와 공식 문서 근거를 사람이 확인한 뒤 결정해야 합니다."
+        ),
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result.to_csv(output_paths[0], index=False, encoding="utf-8-sig")
+    output_paths[1].write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return result, summary, output_paths

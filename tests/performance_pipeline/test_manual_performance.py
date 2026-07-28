@@ -5,7 +5,10 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 
-from performance_pipeline.manual_performance import build_manual_performance_pilot
+from performance_pipeline.manual_performance import (
+    build_manual_performance_pilot,
+    build_program_match_review,
+)
 
 HEADERS = [
     "행ID",
@@ -265,3 +268,73 @@ def test_manual_pilot_preserves_rows_and_matches_unique_program_years(
     assert result.summary["validation"]["amounts_preserved"] is True
     assert result.summary["actual_value_missing_count"] == 1
     assert all(path.exists() for path in result.output_paths)
+
+
+def test_program_match_review_keeps_unmatched_rows_and_never_auto_confirms(
+    tmp_path: Path,
+) -> None:
+    program_year_path = tmp_path / "program_year.parquet"
+    financial_path = tmp_path / "financial.parquet"
+    pd.DataFrame(
+        [
+            {
+                "fiscal_year": 2023,
+                "performance_program_name": "과학기술인력양성",
+                "indicator_count": 2,
+                "source_indicator_ids": '["id-1", "id-2"]',
+                "program_match_status": "MANUAL_REVIEW_NO_MATCH",
+                "program_match_eligible": False,
+            },
+            {
+                "fiscal_year": 2023,
+                "performance_program_name": "매칭완료",
+                "indicator_count": 1,
+                "source_indicator_ids": '["id-3"]',
+                "program_match_status": "EXACT_NAME",
+                "program_match_eligible": True,
+            },
+        ]
+    ).to_parquet(program_year_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "fiscal_year": 2023,
+                "ministry_code": "162",
+                "ministry_name": "과학기술정보통신부",
+                "program_code": "1000",
+                "program_name": "과학기술혁신지원",
+                "original_budget": 100,
+                "current_budget": 100,
+                "settlement_expenditure": 90,
+                "execution_rate": 0.9,
+                "financial_linkage_status": "COMPLETE",
+                "financial_quality_level": "HIGH",
+            },
+            {
+                "fiscal_year": 2023,
+                "ministry_code": "075",
+                "ministry_name": "보건복지부",
+                "program_code": "9999",
+                "program_name": "과학기술인력양성",
+                "original_budget": 999,
+                "current_budget": 999,
+                "settlement_expenditure": 999,
+                "execution_rate": 1.0,
+                "financial_linkage_status": "COMPLETE",
+                "financial_quality_level": "HIGH",
+            },
+        ]
+    ).to_parquet(financial_path, index=False)
+
+    result, summary, paths = build_program_match_review(
+        program_year_path=program_year_path,
+        financial_path=financial_path,
+        output_dir=tmp_path / "review",
+        ministry_code="162",
+    )
+
+    assert result["review_key"].nunique() == 1
+    assert result["candidate_program_code"].tolist() == ["1000"]
+    assert not result["auto_confirmed"].any()
+    assert summary["validation"]["input_files_unchanged"]
+    assert all(path.exists() for path in paths)

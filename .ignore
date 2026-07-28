@@ -1,0 +1,16 @@
+# 이 파일은 .gitignore(커밋 대상)와는 별개로, Cursor/VS Code의 검색·Quick
+# Open(Ctrl+P) 인덱싱에만 영향을 줍니다. git 추적 여부는 전혀 바꾸지
+# 않습니다(그건 .gitignore가 그대로 담당).
+#
+# 배경: .gitignore가 data/**, *.xlsx, *.csv, *.parquet 등을 광범위하게
+# 커밋 대상에서 제외하다 보니, Cursor의 Ctrl+P 검색도 기본값
+# (search.useIgnoreFiles=true)으로 같은 규칙을 따라가서 실제 분석
+# 산출물(예: mss_performance_pdf_reconciliation.xlsx)을 검색으로 찾을 수
+# 없는 문제가 있었습니다. 아래 무시 해제 패턴으로 데이터 산출물만
+# 다시 검색되게 하고, .venv/__pycache__ 같은 잡음 폴더는 .gitignore
+# 규칙 그대로 계속 숨깁니다.
+
+!data/**
+!*.xlsx
+!*.csv
+!*.parquet

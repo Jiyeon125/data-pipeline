@@ -13,9 +13,12 @@ open_fiscal_pipeline   열린재정 OpenAPI 수집·정규화
 performance_pipeline   성과 문서 인벤토리
 master_engineering     전처리·조인·마스터·품질
 analytics              피처·순위·민감도·보고
+fiscal_dashboard       검증된 분석 산출물의 Streamlit 탐색 화면
 ```
 
-성과 문서 추출과 대시보드는 데이터 계약과 사용 방식이 확정된 뒤 구현합니다.
+성과 문서 자동 추출은 검수 구조가 확정된 뒤 확장합니다. 대시보드는 현재
+중기부 검증 산출물과 안정 상위 후보의 세부사업 재정 드릴다운만 읽는
+파일럿으로 구현돼 있습니다.
 
 상세한 의존 방향, 데이터 계층과 팀 공유 마일스톤은
 [프로젝트 아키텍처](docs/architecture.md)를 참고합니다.
@@ -361,6 +364,40 @@ fiscal-analytics build-analysis-policy-decision-support --root .
 - 편집 가능한 분석표: `data/analytics/decision_support/`
 - 발표용 정적 그래프: `artifacts/figures/decision_support/`
 - 그래프 읽는 법과 질의응답 근거: `docs/ANALYSIS_POLICY_DECISION_SUPPORT.md`
+
+## 중기부 점검 후보와 시나리오 안정성
+
+검수된 중기부 성과·재정 결합표에서 설명 가능한 후보군을 만들고,
+균등·성과중심·집행중심·재정영향 보정 순위가 얼마나 유지되는지 비교합니다.
+
+```powershell
+fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite
+```
+
+- 설정: `configs/mss_priority_scenarios.yaml`
+- 재현 노트북: `notebooks/mss_priority_scenario_stability.ipynb`
+- 결과표: `data/analytics/mss_priority_scenarios/`
+- 세부사업 원인표:
+  `data/analytics/mss_priority_scenarios/stable_top5_project_drilldown.csv`
+- 발표용 그림: `artifacts/figures/presentation/mss_priority_scenario_*.png`
+- 탐색 순위이며 최종 복합점수·정책 우선순위는 생성하지 않음
+
+## 중기부 Streamlit 대시보드
+
+후보·시나리오 분석을 재생성한 뒤 대시보드를 실행합니다.
+
+```powershell
+fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite
+python -m streamlit run src/fiscal_dashboard/app.py
+```
+
+- 기본 화면: 전 시나리오 안정 상위 3개 프로그램과 순위 민감도
+- 필터: 보기 범위, 회계연도, 회계유형, 점검단계
+- 탭: 핵심 요약, 후보 찾아보기, 시나리오 비교, 데이터 검증
+- 상세: 안정 상위 5행의 세부사업 94행 예산구성·집행·이월·불용
+- 다운로드: 현재 필터의 후보표 CSV
+- 입력: `data/analytics/mss_priority_scenarios/`의 검증 완료 산출물
+- 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
 
 ## UNKNOWN 예산 80% 커버리지 사람 검수
 

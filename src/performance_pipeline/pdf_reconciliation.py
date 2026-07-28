@@ -1,12 +1,15 @@
 """중기부 성과계획서·성과보고서 PDF 별첨과 수기 성과지표 63행을 원문 대조합니다.
 
-이 모듈은 다음 세 개의 실제 PDF 구간만 사용합니다 (2022~2024년, 각 계획서/보고서).
+이 모듈은 2022~2024년 계획서·보고서 별첨과, 같은 파일명의 보고서 전체본이
+있으면 본문의 성과지표 상세표를 함께 사용합니다.
 
 - 계획서 별첨1 "프로그램 성과지표 현황": 2022년은 표 셀이 이미지로 렌더링되어
   텍스트 레이어가 없어 OCR이 필요합니다. 2023·2024년은 실제 텍스트가 있습니다.
   (분리 PDF 자체가 별첨1로 시작하도록 잘려 있어 "별첨1" 글자 자체는 연도마다
   있거나 없습니다.)
-- 보고서 별첨3 "성과 달성도 현황"의 "3. 세부현황" 표: 프로그램목표별
+- 보고서 별첨3 "성과 달성도 현황"의 "3. 세부현황" 표와 보고서 본문:
+  부처에 따라 별첨3은 지표명만 있고 목표·실적·달성률 상세표는 본문에 있으므로
+  전체본이 있으면 본문의 완전한 표를 우선합니다. 프로그램목표별
   성과지표마다 최근 3개년(예: '22/'23/'24) 목표·실적·달성률을 나열합니다.
   "목표"/"실적"/"달성률" 줄 라벨을 앵커로 삼아 마지막(해당 연도) 값을
   추출합니다. 이 표가 63행과 실제로 대응하는 핵심 대조 표입니다.
@@ -29,6 +32,7 @@ import io
 import json
 import re
 import unicodedata
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +47,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 APPENDIX_ROOT = Path("data/raw/performance_docs/appendix")
+PERFORMANCE_DOC_ROOT = APPENDIX_ROOT.parent
 LOW_TEXT_CHAR_THRESHOLD = 100
 TESSERACT_LANG = "kor+eng"
 TESSERACT_PSM = "6"
@@ -138,11 +143,51 @@ PDF_DOC_SPECS: tuple[PdfDocSpec, ...] = (
 PLAN_TABLE_IS_IMAGE_ONLY: dict[int, bool] = {2022: True, 2023: False, 2024: False}
 
 
-def doc_spec(fiscal_year: int, doc_type: str) -> PdfDocSpec:
-    for spec in PDF_DOC_SPECS:
+def doc_spec(
+    fiscal_year: int,
+    doc_type: str,
+    doc_specs: tuple[PdfDocSpec, ...] = PDF_DOC_SPECS,
+) -> PdfDocSpec:
+    for spec in doc_specs:
         if spec.fiscal_year == fiscal_year and spec.doc_type == doc_type:
             return spec
     raise PdfReconciliationError(f"등록되지 않은 문서입니다: {fiscal_year} {doc_type}")
+
+
+def discover_pdf_doc_specs(
+    ministry_code: str,
+    *,
+    years: tuple[int, ...] = (2022, 2023, 2024),
+) -> tuple[PdfDocSpec, ...]:
+    """부처별 별첨 폴더에서 연도별 계획서·보고서 파일을 하나씩 찾습니다."""
+    ministry_code = str(ministry_code).zfill(3)
+    specs: list[PdfDocSpec] = []
+    for year in years:
+        root = APPENDIX_ROOT / f"year={year}" / f"ministry_code={ministry_code}"
+        for doc_type, token in (("plan", "성과계획서"), ("report", "성과보고서")):
+            matches = sorted(root.glob(f"*{token}*.pdf"))
+            if len(matches) != 1:
+                raise PdfReconciliationError(
+                    f"{ministry_code} {year} {doc_type} PDF가 1개여야 합니다 "
+                    f"(실제 {len(matches)}개): {root}"
+                )
+            page_match = re.search(r"-(\d+)-(\d+)\.pdf$", matches[0].name)
+            if page_match is None:
+                raise PdfReconciliationError(
+                    f"파일명 끝에서 원본 페이지 범위를 읽을 수 없습니다: {matches[0].name}"
+                )
+            start, end = map(int, page_match.groups())
+            specs.append(
+                PdfDocSpec(
+                    year,
+                    doc_type,
+                    matches[0].name,
+                    start,
+                    end,
+                    ministry_code=ministry_code,
+                )
+            )
+    return tuple(specs)
 
 
 def sha256_file(path: Path) -> str:
@@ -153,11 +198,17 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def all_source_hashes(manual_excel_path: Path) -> dict[str, str]:
+def all_source_hashes(
+    manual_excel_path: Path,
+    doc_specs: tuple[PdfDocSpec, ...] = PDF_DOC_SPECS,
+) -> dict[str, str]:
     """원본 PDF 6개와 수기 엑셀의 SHA-256을 실행 전후 비교하기 위해 계산합니다."""
     hashes = {str(manual_excel_path): sha256_file(manual_excel_path)}
-    for spec in PDF_DOC_SPECS:
+    for spec in doc_specs:
         hashes[str(spec.path)] = sha256_file(spec.path)
+        full_path = full_document_path(spec) if spec.doc_type == "report" else None
+        if full_path is not None:
+            hashes[str(full_path)] = sha256_file(full_path)
     return hashes
 
 
@@ -215,10 +266,14 @@ def ocr_page_text(path: Path, page_index: int, *, dpi: int = 300) -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_page_inventory(*, run_ocr: bool = True) -> pd.DataFrame:
+def build_page_inventory(
+    *,
+    run_ocr: bool = True,
+    doc_specs: tuple[PdfDocSpec, ...] = PDF_DOC_SPECS,
+) -> pd.DataFrame:
     """6개 PDF 전체 페이지의 분리·원본·인쇄 페이지, 텍스트량, 추출 방식을 기록합니다."""
     rows: list[dict[str, Any]] = []
-    for spec in PDF_DOC_SPECS:
+    for spec in doc_specs:
         pages = load_page_texts(spec.path)
         for split_pdf_page, text in enumerate(pages, start=1):
             char_count = len(text.strip())
@@ -440,6 +495,7 @@ class AchievementEvidence:
     actual_values_raw: list[str]
     rate_values_raw: list[str]
     extraction_method: str = "TEXT"
+    source_file: str | None = None
 
     @property
     def target_raw(self) -> str | None:
@@ -455,9 +511,14 @@ class AchievementEvidence:
 
 
 def _collect_values_after_label(
-    lines: list[str], start_line: int, label: str, *, max_scan: int = 40
+    lines: list[str],
+    start_line: int,
+    label: str,
+    *,
+    max_scan: int = 40,
+    max_values: int = 3,
 ) -> tuple[list[str], int]:
-    """`label` 줄을 찾아 그 다음에 오는 값 줄(최대 3개, 연도별)을 모읍니다.
+    """`label` 줄을 찾아 그 다음에 오는 연도별 값을 모읍니다.
 
     일부 페이지는 두 연도의 값이 한 줄에 공백으로 붙어 렌더링됩니다
     (예: "100.0% 144.3%"). 이런 줄을 하나의 값으로 처리하면 남은 값이 다음
@@ -467,10 +528,11 @@ def _collect_values_after_label(
     n = len(lines)
     i = start_line
     while i < min(n, start_line + max_scan):
-        if lines[i].strip() == label:
+        compact = lines[i].strip().replace(" ", "")
+        if compact == label or compact.startswith(f"{label}("):
             values: list[str] = []
             j = i + 1
-            while j < n and len(values) < 3:
+            while j < n and len(values) < max_values:
                 stripped = lines[j].strip()
                 if stripped == "":
                     j += 1
@@ -479,13 +541,94 @@ def _collect_values_after_label(
                     break
                 tokens = stripped.split()
                 if len(tokens) > 1 and all(STANDALONE_NUMERIC_RE.match(t) for t in tokens):
-                    values.extend(tokens[: 3 - len(values)])
+                    values.extend(tokens[: max_values - len(values)])
                 else:
                     values.append(stripped)
                 j += 1
-            return values, j
+            allowed_text = {
+                "-",
+                "(-)",
+                "N/A",
+                "신규",
+                "집계중",
+                "미산출",
+                "해당없음",
+                "미정",
+                "X",
+            }
+            if values and all(
+                parse_numeric(value) is not None or value.strip().upper() in allowed_text
+                for value in values
+            ):
+                return values, j
         i += 1
     return [], start_line
+
+
+def full_document_path(spec: PdfDocSpec) -> Path | None:
+    """분리 별첨 파일명에 대응하는 원본 전체 PDF가 있으면 반환합니다."""
+    full_name = re.sub(r"-\d+-\d+(?=\.pdf$)", "", spec.filename)
+    path = PERFORMANCE_DOC_ROOT / full_name
+    return path if path.is_file() else None
+
+
+def _extract_text_achievement_evidence(
+    pages: list[str],
+    page_indexes: range,
+    candidate_names: list[str],
+    *,
+    source_file: str,
+    source_page: Callable[[int], int],
+    require_complete_values: bool,
+    extraction_method: str,
+) -> dict[str, AchievementEvidence]:
+    norm_lookup = {normalize_indicator_name(name): name for name in candidate_names}
+    results: dict[str, AchievementEvidence] = {}
+    for page_offset in page_indexes:
+        raw_text = pages[page_offset]
+        lines = raw_text.split("\n")
+        flat_norm, line_map = _normalize_with_line_map(lines)
+        matches: list[tuple[int, int, str]] = []
+        for norm_name, original_name in norm_lookup.items():
+            if not norm_name or original_name in results:
+                continue
+            cursor = 0
+            while (start := flat_norm.find(norm_name, cursor)) != -1:
+                matches.append((start, start + len(norm_name), original_name))
+                cursor = start + len(norm_name)
+        matches.sort(key=lambda item: item[0])
+
+        for start, end, original_name in matches:
+            line_end = line_map[end - 1] if end > 0 else 0
+            year_count = len(set(re.findall(r"['’]?(\d{2})년", raw_text)))
+            max_values = min(4, max(3, year_count))
+            target_values, cursor = _collect_values_after_label(
+                lines, line_end, "목표", max_values=max_values
+            )
+            actual_values, cursor = _collect_values_after_label(
+                lines, cursor, "실적", max_values=max_values
+            )
+            rate_values, cursor = _collect_values_after_label(
+                lines, cursor, "달성률", max_values=max_values
+            )
+            if require_complete_values and not (target_values and actual_values and rate_values):
+                continue
+            source_text = "\n".join(
+                line for line in lines[max(line_end - 1, 0) : cursor] if line.strip()
+            )[:600]
+            results[original_name] = AchievementEvidence(
+                matched_name=original_name,
+                split_pdf_page=page_offset + 1,
+                source_pdf_page=source_page(page_offset + 1),
+                printed_page=printed_page_number(raw_text),
+                source_text=source_text,
+                target_values_raw=target_values,
+                actual_values_raw=actual_values,
+                rate_values_raw=rate_values,
+                extraction_method=extraction_method,
+                source_file=source_file,
+            )
+    return results
 
 
 def extract_report_achievement_evidence(
@@ -507,48 +650,41 @@ def extract_report_achievement_evidence(
         {name for name in indicator_names if name},
         key=lambda n: -len(normalize_indicator_name(n)),
     )
-    norm_lookup = {normalize_indicator_name(n): n for n in candidate_names}
+    source_filename = getattr(report_spec, "filename", report_spec.path.name)
+    results = _extract_text_achievement_evidence(
+        pages,
+        range(start_idx, end_idx + 1),
+        candidate_names,
+        source_file=source_filename,
+        source_page=report_spec.source_pdf_page,
+        require_complete_values=False,
+        extraction_method="TEXT",
+    )
 
-    results: dict[str, AchievementEvidence] = {}
-    for page_offset in range(start_idx, end_idx + 1):
-        raw_text = pages[page_offset]
-        lines = raw_text.split("\n")
-        flat_norm, line_map = _normalize_with_line_map(lines)
-
-        matches: list[tuple[int, int, str]] = []
-        for norm_name, original_name in norm_lookup.items():
-            if not norm_name or original_name in results:
-                continue
-            start = flat_norm.find(norm_name)
-            if start != -1:
-                matches.append((start, start + len(norm_name), original_name))
-        matches.sort(key=lambda item: item[0])
-
-        for start, end, original_name in matches:
-            line_end = line_map[end - 1] if end > 0 else 0
-            target_values, cursor = _collect_values_after_label(lines, line_end, "목표")
-            actual_values, cursor = _collect_values_after_label(lines, cursor, "실적")
-            rate_values, cursor = _collect_values_after_label(lines, cursor, "달성률")
-            source_text = "\n".join(
-                ln for ln in lines[max(line_end - 1, 0) : cursor] if ln.strip()
-            )[:600]
-            results[original_name] = AchievementEvidence(
-                matched_name=original_name,
-                split_pdf_page=page_offset + 1,
-                source_pdf_page=report_spec.source_pdf_page(page_offset + 1),
-                printed_page=printed_page_number(raw_text),
-                source_text=source_text,
-                target_values_raw=target_values,
-                actual_values_raw=actual_values,
-                rate_values_raw=rate_values,
-                extraction_method="TEXT",
+    # 별첨3은 부처에 따라 지표명만 싣고 목표·실적·달성률 상세표는 본문 앞부분에
+    # 둡니다. 같은 파일의 전체본이 있으면 별첨 시작 전 본문에서 세 값이 모두
+    # 확인되는 근거만 채택해, 지표명만 잡힌 빈 별첨 근거를 대체합니다.
+    full_path = full_document_path(report_spec) if isinstance(report_spec, PdfDocSpec) else None
+    if full_path is not None:
+        full_pages = load_page_texts(full_path)
+        detail_end = min(len(full_pages), report_spec.source_page_start - 1)
+        results.update(
+            _extract_text_achievement_evidence(
+                full_pages,
+                range(detail_end),
+                candidate_names,
+                source_file=full_path.name,
+                source_page=lambda page: page,
+                require_complete_values=True,
+                extraction_method="FULL_TEXT",
             )
+        )
 
     # 텍스트 검색으로 찾지 못한 지표는, 해당 구간에 PUA(개인용 영역) 글자가
     # 있는 페이지에서만 OCR로 재시도합니다. 표 구조가 OCR에서 깨지므로
     # 목표·실적·달성률 3분류 라벨 앵커 없이 원문 창만 확보하고, 호출부에서
     # `ocr_status`를 `OCR_REQUIRED`로 표시해 사람 검토를 요구해야 합니다.
-    still_missing = {name for name in norm_lookup.values() if name not in results}
+    still_missing = {name for name in candidate_names if name not in results}
     if still_missing:
         for page_offset in range(start_idx, end_idx + 1):
             if not still_missing:
@@ -579,6 +715,7 @@ def extract_report_achievement_evidence(
                         actual_values_raw=[],
                         rate_values_raw=[],
                         extraction_method="OCR",
+                        source_file=source_filename,
                     )
                     still_missing.discard(original_name)
     return results
@@ -615,6 +752,9 @@ CATEGORY_LINE_TOKENS = frozenset(
         "융자",
         "보증",
         "기타",
+        "정보",
+        "화",
+        "정보화",
         "특별회계",
         "일반회계",
         "공제",
@@ -686,9 +826,21 @@ def find_change_evidence(report_spec: PdfDocSpec, indicator_name: str) -> Change
         reason_line = None
         category_line = None
         for j in range(line_after_match, min(len(lines), line_after_match + 25)):
+            stripped_j = lines[j].strip()
+            if (
+                category_line is not None
+                and reason_line is None
+                and BUDGET_LINE_RE.match(stripped_j.replace(" ", ""))
+            ):
+                # 이 지표의 "분야" 줄까지는 찾았는데 <사유> 토큰이 아직 없는
+                # 상태에서 다음 지표 행의 예산(변경전/변경후) 숫자 줄이 나오면,
+                # 이 지표의 수정사유 칸은 원문에서 실제로 빈 칸입니다. 계속
+                # 찾으면 다음 지표의 <사유>를 이 지표의 사유로 잘못 흡수하게
+                # 되므로 여기서 멈추고 reason_line=None을 유지합니다.
+                break
             if reason_line is None and REASON_TOKEN_RE.search(lines[j]):
                 reason_line = j
-            if category_line is None and lines[j].strip() in CATEGORY_LINE_TOKENS:
+            if category_line is None and stripped_j in CATEGORY_LINE_TOKENS:
                 category_line = j
             if reason_line is not None and category_line is not None:
                 break
@@ -756,7 +908,11 @@ class PlanEvidence:
 
 
 def extract_plan_evidence(
-    plan_spec: PdfDocSpec, indicator_names: list[str]
+    plan_spec: PdfDocSpec,
+    indicator_names: list[str],
+    *,
+    image_only: bool | None = None,
+    max_page_count: int | None = None,
 ) -> dict[str, PlanEvidence]:
     """별첨1(세부현황)에서 지표명별 원문 근거와 목표치 후보를 찾습니다.
 
@@ -772,6 +928,8 @@ def extract_plan_evidence(
     # 나오는 페이지 전까지만 사용합니다.
     start_idx = 0
     end_idx = len(pages) - 1
+    if max_page_count is not None:
+        end_idx = min(end_idx, max_page_count - 1)
     for i in range(1, len(pages)):
         if "별첨2" in pages[i]:
             end_idx = i - 1
@@ -783,7 +941,11 @@ def extract_plan_evidence(
     )
     norm_lookup = {normalize_indicator_name(n): n for n in candidate_names}
     results: dict[str, PlanEvidence] = {}
-    is_image_only = PLAN_TABLE_IS_IMAGE_ONLY.get(plan_spec.fiscal_year, True)
+    is_image_only = (
+        PLAN_TABLE_IS_IMAGE_ONLY.get(plan_spec.fiscal_year, True)
+        if image_only is None
+        else image_only
+    )
 
     with fitz.open(plan_spec.path) as document:
         for page_offset in range(start_idx, end_idx + 1):
@@ -795,6 +957,10 @@ def extract_plan_evidence(
                     ocr_text = ocr_page_text(plan_spec.path, page_offset)
                 except Exception:  # noqa: BLE001
                     ocr_text = ""
+                # 텍스트 레이어가 깨진 PDF는 위의 별첨2 탐색이 실패합니다.
+                # OCR에서 별첨2가 보이면 그 페이지부터는 별첨1 근거가 아니므로 중단합니다.
+                if page_offset > 0 and "별첨2" in normalize_indicator_name(ocr_text):
+                    break
                 blocks_text = [ocr_text]
                 extraction_method = "OCR"
             else:
@@ -922,11 +1088,14 @@ def reconcile_row(
     plan_specs_valid_pages: dict[int, tuple[int, int]],
     report_specs_valid_pages: dict[int, tuple[int, int]],
     report_has_pua_by_year: dict[int, bool] | None = None,
+    report_structure_review_by_year: dict[int, bool] | None = None,
+    plan_image_only_by_year: dict[int, bool] | None = None,
+    doc_specs: tuple[PdfDocSpec, ...] = PDF_DOC_SPECS,
 ) -> dict[str, Any]:
     """수기 63행 중 한 행을 PDF 근거와 대조해 최종 스키마 한 행을 만듭니다."""
     year = int(row["fiscal_year"])
-    plan_spec = doc_spec(year, "plan")
-    report_spec = doc_spec(year, "report")
+    plan_spec = doc_spec(year, "plan", doc_specs)
+    report_spec = doc_spec(year, "report", doc_specs)
 
     manual_target = row.get("planned_target_numeric")
     manual_actual = row.get("actual_value_numeric")
@@ -951,7 +1120,7 @@ def reconcile_row(
     if plan_change_ev is None and row.get("indicator_name_report"):
         plan_change_ev = find_change_evidence(report_spec, row["indicator_name_report"])
 
-    is_plan_image_only = PLAN_TABLE_IS_IMAGE_ONLY.get(year, True)
+    is_plan_image_only = (plan_image_only_by_year or PLAN_TABLE_IS_IMAGE_ONLY).get(year, True)
     plan_target_source = "NONE"
     pdf_plan_target_raw: str | None = None
     pdf_plan_indicator_name: str | None = None
@@ -977,10 +1146,6 @@ def reconcile_row(
     if pdf_plan_target_raw is None and plan_change_ev is not None:
         pdf_plan_indicator_name = pdf_plan_indicator_name or plan_change_ev.matched_name
         pdf_plan_target_raw = plan_change_ev.target_after_raw
-        plan_source_text = plan_source_text or plan_change_ev.source_text
-        plan_split_page = plan_split_page or plan_change_ev.split_pdf_page
-        plan_source_page = plan_source_page or plan_change_ev.source_pdf_page
-        plan_printed_page = plan_printed_page or plan_change_ev.printed_page
         plan_extraction_method = plan_extraction_method if plan_ev is not None else "TEXT"
         plan_target_source = "별첨1+별첨6" if plan_ev is not None else "별첨6만"
         review_reasons.append(
@@ -1010,6 +1175,7 @@ def reconcile_row(
     documented_change_split_pdf_page = (
         plan_change_ev.split_pdf_page if plan_change_ev is not None else None
     )
+    documented_change_source_file = report_spec.filename if plan_change_ev is not None else None
     documented_change_source_pdf_page = (
         plan_change_ev.source_pdf_page if plan_change_ev is not None else None
     )
@@ -1054,6 +1220,7 @@ def reconcile_row(
     pdf_report_rate_raw: str | None = None
     pdf_report_indicator_name: str | None = None
     report_source_text: str | None = None
+    report_source_file = report_spec.filename
     report_split_page: int | None = None
     report_source_page: int | None = None
     report_printed_page: int | None = None
@@ -1069,6 +1236,7 @@ def reconcile_row(
         report_source_page = report_ev.source_pdf_page
         report_printed_page = report_ev.printed_page
         report_extraction_method = report_ev.extraction_method
+        report_source_file = report_ev.source_file or report_spec.filename
 
     actual_value_numeric_pdf = parse_numeric(pdf_report_actual_raw)
     report_target_numeric_pdf = parse_numeric(pdf_report_target_raw)
@@ -1086,11 +1254,19 @@ def reconcile_row(
         review_reasons.append("CHANGE_TABLE_TARGET_CONTRADICTS_REPORT_TABLE")
 
     if report_ev is None:
+        structure_review = (report_structure_review_by_year or {}).get(year, False)
         # 텍스트 검색으로 못 찾았어도, 이 연도 별첨3 구간에 폰트 매핑이 불완전한
         # PUA 글자가 있으면 "지표가 없다"가 아니라 "OCR로 사람이 확인해야
         # 한다"가 맞는 판정입니다.
         has_pua = (report_has_pua_by_year or {}).get(year, False)
-        if has_pua:
+        if structure_review:
+            report_name_match_status = "MANUAL_REVIEW"
+            report_target_match_status = "MANUAL_REVIEW"
+            report_actual_match_status = "MANUAL_REVIEW"
+            report_achievement_rate_match_status = "MANUAL_REVIEW"
+            report_ocr_status = "NOT_APPLICABLE"
+            review_reasons.append("REPORT_APPENDIX_STRUCTURE_REVIEW")
+        elif has_pua:
             report_name_match_status = "OCR_REQUIRED"
             report_target_match_status = "OCR_REQUIRED"
             report_actual_match_status = "OCR_REQUIRED"
@@ -1108,6 +1284,24 @@ def reconcile_row(
         report_target_match_status = classify_numeric_match(
             manual_target, report_target_numeric_pdf
         )
+        # 계획서 원문 목표치(수기값)와 보고서 자체 표의 목표치가 다르면 1차로는
+        # VALUE_MISMATCH지만, 별첨6 "성과계획서 변경 사항"표가 정확히 같은
+        # 변경전→변경후 값을 문서화하고 있으면 이는 추출 오류가 아니라 목표치
+        # 사후 개정입니다(실적 확정 반영, 기재부 검토 반영, 단순 오기 정정 등
+        # 사유는 documented_change_reason_raw에 별도 보존). 이 경우에만
+        # MATCH_AFTER_CHANGE로 재분류합니다 — 명칭 유사도가 아니라 공식 변경표
+        # 숫자가 정확히 일치할 때만 적용되므로 임의 확정이 아닙니다.
+        if (
+            report_target_match_status == "VALUE_MISMATCH"
+            and documented_change_target_before_numeric is not None
+            and documented_change_target_after_numeric is not None
+            and manual_target is not None
+            and report_target_numeric_pdf is not None
+            and abs(documented_change_target_before_numeric - manual_target) <= 1e-6
+            and abs(documented_change_target_after_numeric - report_target_numeric_pdf) <= 1e-6
+        ):
+            report_target_match_status = "MATCH_AFTER_CHANGE"
+            review_reasons.append("REPORT_TARGET_CHANGE_CONFIRMED_BY_별첨6")
         report_actual_match_status = classify_numeric_match(manual_actual, actual_value_numeric_pdf)
         report_achievement_rate_match_status = classify_rate_match(
             manual_rate, official_rate_numeric_pdf
@@ -1164,14 +1358,20 @@ def reconcile_row(
     # --- 페이지 근거 상태 --------------------------------------------------
     plan_lo, plan_hi = plan_specs_valid_pages.get(year, (1, 10**6))
     report_lo, report_hi = report_specs_valid_pages.get(year, (1, 10**6))
-    plan_page_ok = plan_source_page is None or plan_lo <= plan_source_page <= plan_hi
+    plan_evidence_source_page = plan_source_page or documented_change_source_pdf_page
+    plan_page_ok = (
+        plan_lo <= plan_source_page <= plan_hi
+        if plan_source_page is not None
+        else documented_change_source_pdf_page is None
+        or report_lo <= documented_change_source_pdf_page <= report_hi
+    )
     report_page_ok = report_source_page is None or report_lo <= report_source_page <= report_hi
-    if plan_source_page is None and report_source_page is None:
+    if plan_evidence_source_page is None and report_source_page is None:
         page_evidence_status = "PDF_NOT_FOUND"
     elif not plan_page_ok or not report_page_ok:
         page_evidence_status = "MANUAL_REVIEW"
         review_reasons.append("PAGE_OUT_OF_RANGE")
-    elif plan_source_page is None or report_source_page is None:
+    elif plan_evidence_source_page is None or report_source_page is None:
         page_evidence_status = (
             "MANUAL_MISSING_PDF_PRESENT" if False else "PDF_MISSING_MANUAL_PRESENT"
         )
@@ -1195,7 +1395,7 @@ def reconcile_row(
 
     return {
         "source_indicator_id": row.get("source_indicator_id"),
-        "ministry_code": "102",
+        "ministry_code": plan_spec.ministry_code,
         "ministry_name": row.get("ministry_name"),
         "fiscal_year": year,
         "strategic_goal_number": row.get("strategic_goal_number"),
@@ -1217,6 +1417,7 @@ def reconcile_row(
         "documented_change_target_before_raw": documented_change_target_before_raw,
         "documented_change_target_after_raw": documented_change_target_after_raw,
         "documented_change_reason_raw": documented_change_reason_raw,
+        "documented_change_source_file": documented_change_source_file,
         "documented_change_split_pdf_page": documented_change_split_pdf_page,
         "documented_change_source_pdf_page": documented_change_source_pdf_page,
         "documented_change_printed_page": documented_change_printed_page,
@@ -1255,14 +1456,20 @@ def reconcile_row(
         "ocr_status": ocr_status,
         "overall_reconciliation_status": overall_status,
         "review_reason": ";".join(review_reasons) if review_reasons else None,
+        # review_instruction은 build_reconciliation_table에서 이 행이 최종
+        # overall_reconciliation_status로 확정된 뒤(AMBIGUOUS 재분류 포함)
+        # 일괄 계산해 채웁니다. 여기서는 자리표시자로 None을 둡니다.
+        "review_instruction": None,
         "reviewer": None,
         "review_status": None,
+        "review_note": None,
+        "review_confirmed_at": None,
         "plan_source_file": plan_spec.filename,
         "plan_split_pdf_page": plan_split_page,
         "plan_source_pdf_page": plan_source_page,
         "plan_printed_page": plan_printed_page,
         "plan_source_text": plan_source_text,
-        "report_source_file": report_spec.filename,
+        "report_source_file": report_source_file,
         "report_split_pdf_page": report_split_page,
         "report_source_pdf_page": report_source_page,
         "report_printed_page": report_printed_page,
@@ -1341,8 +1548,148 @@ def _flag_indicator_name_collisions(
     return result_df
 
 
-def build_reconciliation_table(manual_df: pd.DataFrame) -> pd.DataFrame:
-    """수기 63행 전체를 PDF 근거와 대조해 최종 스키마 DataFrame으로 만듭니다."""
+def _fmt_page(value: Any) -> str:
+    """페이지 번호를 사람이 읽기 좋은 정수 문자열로 만듭니다. 결측이면 물음표."""
+    if value is None:
+        return "?"
+    if isinstance(value, float) and pd.isna(value):
+        return "?"
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _build_review_instruction(row: Mapping[str, Any]) -> str | None:
+    """ "어느 파일 몇 쪽을 보라"를 한 줄로 모읍니다.
+
+    `review_reason`은 문제 유형(코드)만 담고 있어 사람이 매번 plan_source_file·
+    plan_split_pdf_page 등 여러 컬럼을 직접 조합해야 했습니다. 이 함수는 새 값을
+    추정하지 않고, 이미 계산된 plan/report/documented_change 파일·쪽번호 컬럼만
+    골라 붙여서 검토자가 바로 파일을 열어볼 수 있게 합니다.
+    """
+    status = row.get("overall_reconciliation_status")
+    if status in (None, "EXACT_MATCH", "NOT_APPLICABLE"):
+        return None
+
+    ok_statuses = {"EXACT_MATCH", "NOT_APPLICABLE", None}
+    plan_issue = (
+        row.get("plan_name_match_status") not in ok_statuses
+        or row.get("plan_target_match_status") not in ok_statuses
+    )
+    report_issue = (
+        row.get("report_name_match_status") not in ok_statuses
+        or row.get("report_target_match_status") not in ok_statuses
+        or row.get("report_actual_match_status") not in ok_statuses
+        or row.get("report_achievement_rate_match_status") not in ok_statuses
+    )
+    before_raw = row.get("documented_change_target_before_raw")
+    after_raw = row.get("documented_change_target_after_raw")
+    has_change_table = (before_raw not in (None, "")) or (after_raw not in (None, ""))
+
+    parts: list[str] = []
+    review_reason = str(row.get("review_reason") or "")
+    if status == "AMBIGUOUS" and "INDICATOR_NAME_AMBIGUOUS" in review_reason:
+        parts.append("동일 연도 내 지표명 중복 - 프로그램별 위치를 직접 대조하세요.")
+
+    if plan_issue and row.get("plan_source_file"):
+        parts.append(
+            f"[계획서] {row['plan_source_file']} {_fmt_page(row.get('plan_split_pdf_page'))}쪽"
+            f"(원본 {_fmt_page(row.get('plan_source_pdf_page'))}쪽)"
+        )
+    if report_issue and row.get("report_source_file"):
+        parts.append(
+            f"[보고서] {row['report_source_file']} "
+            f"{_fmt_page(row.get('report_split_pdf_page'))}쪽"
+            f"(원본 {_fmt_page(row.get('report_source_pdf_page'))}쪽)"
+        )
+    if has_change_table and row.get("documented_change_split_pdf_page") is not None:
+        change_file = row.get("documented_change_source_file")
+        parts.append(
+            f"[별첨6 변경표]{f' {change_file}' if change_file else ''} "
+            f"{_fmt_page(row.get('documented_change_split_pdf_page'))}쪽"
+            f"(원본 {_fmt_page(row.get('documented_change_source_pdf_page'))}쪽)"
+        )
+    if not parts:
+        # PDF_NOT_FOUND처럼 볼 페이지 자체가 없는 경우 review_reason을 그대로 노출합니다.
+        return row.get("review_reason")
+    return " / ".join(parts)
+
+
+MANUAL_REVIEW_CONFIRMATIONS_COLUMNS: tuple[str, ...] = (
+    "source_indicator_id",
+    "reviewer",
+    "review_status",
+    "review_note",
+    "review_confirmed_at",
+)
+
+DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH = Path(
+    "data/manual/performance/pdf_reconciliation_manual_confirmations.csv"
+)
+
+
+def load_manual_review_confirmations(path: Path) -> pd.DataFrame:
+    """사람이 원문을 직접 확인한 뒤 채운 검수 확정 파일을 읽습니다.
+
+    이 파일은 파이프라인이 자동 생성하지 않습니다. 사람(또는 사람을 대신해
+    화면을 같이 보고 확인받은 에이전트)이 원본 PDF·이미지를 직접 봐서 값이
+    맞는지 확인한 뒤에만 행을 추가하는, 검수 결과를 담는 별도 입력 파일입니다.
+    파일이 없으면 아직 확정된 검수가 없다는 뜻으로 빈 DataFrame을 돌려줍니다.
+    """
+    if not path.is_file():
+        return pd.DataFrame(columns=MANUAL_REVIEW_CONFIRMATIONS_COLUMNS)
+    df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    missing = [c for c in MANUAL_REVIEW_CONFIRMATIONS_COLUMNS if c not in df.columns]
+    if missing:
+        raise PdfReconciliationError(f"검수 확정 파일에 필수 컬럼이 없습니다: {missing}")
+    bad_status = sorted({s for s in df["review_status"] if s not in REVIEW_STATUS_VALUES})
+    if bad_status:
+        raise PdfReconciliationError(
+            f"검수 확정 파일의 review_status에 허용되지 않는 값이 있습니다: {bad_status}"
+        )
+    dup = df.loc[df["source_indicator_id"].duplicated(), "source_indicator_id"].tolist()
+    if dup:
+        raise PdfReconciliationError(f"검수 확정 파일에 중복 source_indicator_id가 있습니다: {dup}")
+    return df
+
+
+def apply_manual_review_confirmations(
+    result_df: pd.DataFrame, confirmations_df: pd.DataFrame
+) -> pd.DataFrame:
+    """검수 확정 파일 내용을 reviewer/review_status/review_note/review_confirmed_at에 반영합니다.
+
+    - 확정 파일에 없는 행은 손대지 않습니다(아직 미확정이라는 뜻으로 None 유지).
+    - 확정 파일에 result_df에 없는 source_indicator_id가 있으면 조용히 무시하지
+      않고 즉시 오류를 냅니다(오탈자·행 삭제로 인한 검수 유실을 막기 위함).
+    - overall_reconciliation_status나 수치값은 절대 바꾸지 않습니다. 검수는
+      "확인했다"는 사람의 기록일 뿐, 원본 데이터를 대체하지 않습니다.
+    """
+    result_df = result_df.copy()
+    if confirmations_df.empty:
+        return result_df
+    unknown_ids = sorted(
+        set(confirmations_df["source_indicator_id"]) - set(result_df["source_indicator_id"])
+    )
+    if unknown_ids:
+        raise PdfReconciliationError(
+            f"검수 확정 파일에 result_df에 없는 source_indicator_id가 있습니다: {unknown_ids}"
+        )
+    confirmations_indexed = confirmations_df.set_index("source_indicator_id")
+    for col in ("reviewer", "review_status", "review_note", "review_confirmed_at"):
+        mapped = result_df["source_indicator_id"].map(confirmations_indexed[col].to_dict())
+        result_df[col] = mapped.where(mapped.notna(), result_df.get(col))
+    return result_df
+
+
+def build_reconciliation_table(
+    manual_df: pd.DataFrame,
+    *,
+    doc_specs: tuple[PdfDocSpec, ...] = PDF_DOC_SPECS,
+    plan_image_only_by_year: dict[int, bool] | None = None,
+    plan_max_page_count_by_year: dict[int, int] | None = None,
+) -> pd.DataFrame:
+    """수기 성과지표 전체를 지정한 PDF 근거와 대조합니다."""
     missing_cols = [c for c in REQUIRED_MANUAL_COLUMNS if c not in manual_df.columns]
     if missing_cols:
         raise PdfReconciliationError(f"수기 데이터에 필수 컬럼이 없습니다: {missing_cols}")
@@ -1353,20 +1700,37 @@ def build_reconciliation_table(manual_df: pd.DataFrame) -> pd.DataFrame:
     plan_valid_pages: dict[int, tuple[int, int]] = {}
     report_valid_pages: dict[int, tuple[int, int]] = {}
     report_has_pua_by_year: dict[int, bool] = {}
+    report_structure_review_by_year: dict[int, bool] = {}
 
     for year in years:
         year = int(year)
         sub = manual_df[manual_df["fiscal_year"] == year]
-        plan_spec = doc_spec(year, "plan")
-        report_spec = doc_spec(year, "report")
+        plan_spec = doc_spec(year, "plan", doc_specs)
+        report_spec = doc_spec(year, "report", doc_specs)
         plan_evidence_by_year[year] = extract_plan_evidence(
-            plan_spec, sub["indicator_name_plan"].dropna().tolist()
+            plan_spec,
+            sub["indicator_name_plan"].dropna().tolist(),
+            image_only=(plan_image_only_by_year or PLAN_TABLE_IS_IMAGE_ONLY).get(year, True),
+            max_page_count=(plan_max_page_count_by_year or {}).get(year),
         )
         report_evidence_by_year[year] = extract_report_achievement_evidence(
             report_spec, sub["indicator_name_report"].dropna().tolist()
         )
+        report_names = sub["indicator_name_report"].dropna().tolist()
+        full_report_text = normalize_indicator_name("".join(load_page_texts(report_spec.path)))
+        report_structure_review_by_year[year] = not report_evidence_by_year[year] and any(
+            normalize_indicator_name(name) in full_report_text for name in report_names
+        )
         plan_valid_pages[year] = (plan_spec.source_page_start, plan_spec.source_page_end)
-        report_valid_pages[year] = (report_spec.source_page_start, report_spec.source_page_end)
+        full_report_path = full_document_path(report_spec)
+        if full_report_path is None:
+            report_valid_pages[year] = (
+                report_spec.source_page_start,
+                report_spec.source_page_end,
+            )
+        else:
+            with fitz.open(full_report_path) as full_report:
+                report_valid_pages[year] = (1, len(full_report))
         report_has_pua_by_year[year] = report_section_has_pua_glyphs(report_spec)
 
     rows = [
@@ -1377,11 +1741,21 @@ def build_reconciliation_table(manual_df: pd.DataFrame) -> pd.DataFrame:
             plan_specs_valid_pages=plan_valid_pages,
             report_specs_valid_pages=report_valid_pages,
             report_has_pua_by_year=report_has_pua_by_year,
+            report_structure_review_by_year=report_structure_review_by_year,
+            plan_image_only_by_year=plan_image_only_by_year,
+            doc_specs=doc_specs,
         )
         for row in manual_df.to_dict("records")
     ]
     result_df = pd.DataFrame(rows)
-    return _flag_indicator_name_collisions(manual_df, result_df)
+    result_df = _flag_indicator_name_collisions(manual_df, result_df)
+    # AMBIGUOUS 재분류까지 끝난 뒤의 overall_reconciliation_status를 기준으로
+    # "어느 파일 몇 쪽을 보라"는 안내문을 만듭니다(먼저 만들면 재분류 전 상태로
+    # 안내문이 굳어버립니다).
+    result_df["review_instruction"] = [
+        _build_review_instruction(r) for r in result_df.to_dict("records")
+    ]
+    return result_df
 
 
 # ---------------------------------------------------------------------------
@@ -1412,6 +1786,7 @@ FINAL_SCHEMA_COLUMNS: tuple[str, ...] = (
     "documented_change_target_before_raw",
     "documented_change_target_after_raw",
     "documented_change_reason_raw",
+    "documented_change_source_file",
     "documented_change_split_pdf_page",
     "documented_change_source_pdf_page",
     "documented_change_printed_page",
@@ -1450,8 +1825,11 @@ FINAL_SCHEMA_COLUMNS: tuple[str, ...] = (
     "ocr_status",
     "overall_reconciliation_status",
     "review_reason",
+    "review_instruction",
     "reviewer",
     "review_status",
+    "review_note",
+    "review_confirmed_at",
     "plan_source_file",
     "plan_split_pdf_page",
     "plan_source_pdf_page",
@@ -1547,6 +1925,7 @@ def build_reconciliation_summary(
         "manual_review_csv_row_count": int(
             (result_df["overall_reconciliation_status"] != "EXACT_MATCH").sum()
         ),
+        "review_status_counts": _count_by(result_df["review_status"]),
         "plan_vs_report_target_change": _target_change_summary(result_df),
         "source_file_sha256": source_hashes_after,
         "source_file_hash_unchanged": len(hash_mismatches) == 0,
@@ -1561,10 +1940,13 @@ def _target_change_summary(result_df: pd.DataFrame) -> dict[str, Any]:
     보여줍니다. 10%p/50%p 구간은 절대 기준이 아니라 스캔을 돕는 서술적
     구간이며, 정책적 임계값이 아닙니다.
     """
-    sub = result_df[result_df["plan_vs_report_target_change_abs"].notna()].copy()
+    all_sub = result_df[result_df["plan_vs_report_target_change_abs"].notna()].copy()
+    unverified_ocr = all_sub[all_sub["ocr_status"].eq("OCR_REQUIRED")]
+    sub = all_sub[~all_sub["ocr_status"].eq("OCR_REQUIRED")].copy()
     if sub.empty:
         return {
             "rows_with_both_pdf_targets": 0,
+            "rows_excluded_unverified_ocr": len(unverified_ocr),
             "rows_unchanged": 0,
             "rows_changed": 0,
             "abs_pct_over_10": 0,
@@ -1579,6 +1961,7 @@ def _target_change_summary(result_df: pd.DataFrame) -> dict[str, Any]:
     top = with_pct.sort_values("abs_pct", ascending=False).head(10)
     return {
         "rows_with_both_pdf_targets": len(sub),
+        "rows_excluded_unverified_ocr": len(unverified_ocr),
         "rows_unchanged": int(len(sub) - len(changed)),
         "rows_changed": len(changed),
         "abs_pct_over_10": int((with_pct["abs_pct"] >= 10).sum()),
@@ -1611,14 +1994,15 @@ def write_reconciliation_outputs(
     source_hashes_before: dict[str, str],
     source_hashes_after: dict[str, str],
     output_dir: Path,
+    output_stem: str = "mss_performance",
     overwrite: bool = False,
 ) -> dict[str, Path]:
     """10.1~10.3절 산출물(Parquet, 검토 CSV, 요약 JSON)을 씁니다."""
     output_dir.mkdir(parents=True, exist_ok=True)
     ordered = result_df.reindex(columns=list(FINAL_SCHEMA_COLUMNS))
 
-    parquet_path = output_dir / "mss_performance_pdf_reconciliation.parquet"
-    csv_path = output_dir / "mss_performance_pdf_manual_review.csv"
+    parquet_path = output_dir / f"{output_stem}_pdf_reconciliation.parquet"
+    csv_path = output_dir / f"{output_stem}_pdf_manual_review.csv"
     summary_path = output_dir / "reconciliation_summary.json"
 
     for path in (parquet_path, csv_path, summary_path):
@@ -1641,12 +2025,98 @@ def write_reconciliation_outputs(
     return {"parquet": parquet_path, "manual_review_csv": csv_path, "summary_json": summary_path}
 
 
+KNOWN_PLAN_IMAGE_ONLY_YEARS: dict[str, set[int]] = {
+    "019": {2022},
+    "075": {2022, 2024},
+    "162": {2022},
+}
+KNOWN_PLAN_MAX_PAGE_COUNTS: dict[tuple[str, int], int] = {
+    # 2024 복지부 계획서는 텍스트 레이어가 깨져 별첨2 문자열 탐색이 불가능합니다.
+    # 렌더링 전수 점검 결과 별첨1은 분리 PDF 1~55쪽, 별첨2는 56쪽부터입니다.
+    ("075", 2024): 55,
+}
+
+
+def run_ministry_pdf_reconciliation(
+    ministry_code: str,
+    *,
+    manual_parquet_path: Path | None = None,
+    manual_excel_path: Path = Path("data/manual/LLM_문서구조화_3개부처_최종제출본.xlsx"),
+    output_root: Path = Path("data/processed/performance/pdf_reconciliation"),
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """한 부처의 2022~2024 수기 성과지표를 분리 PDF 원문과 대조합니다."""
+    ministry_code = str(ministry_code).zfill(3)
+    if ministry_code not in KNOWN_PLAN_IMAGE_ONLY_YEARS:
+        raise PdfReconciliationError(
+            f"계획서 렌더링 상태를 검증하지 않은 부처입니다: {ministry_code}"
+        )
+    manual_parquet_path = manual_parquet_path or Path(
+        f"data/processed/performance/by_ministry/ministry_code={ministry_code}/"
+        "program_kpi_year.parquet"
+    )
+    if not manual_parquet_path.is_file():
+        raise PdfReconciliationError(f"기준 파일을 찾을 수 없습니다: {manual_parquet_path}")
+    if not manual_excel_path.is_file():
+        raise PdfReconciliationError(f"수기 원본을 찾을 수 없습니다: {manual_excel_path}")
+
+    manual_df = pd.read_parquet(manual_parquet_path)
+    if manual_df.empty:
+        raise PdfReconciliationError(f"기준 파일이 비어 있습니다: {manual_parquet_path}")
+    doc_specs = discover_pdf_doc_specs(ministry_code)
+    image_only = {
+        year: year in KNOWN_PLAN_IMAGE_ONLY_YEARS[ministry_code] for year in (2022, 2023, 2024)
+    }
+    max_pages = {
+        year: count
+        for (code, year), count in KNOWN_PLAN_MAX_PAGE_COUNTS.items()
+        if code == ministry_code
+    }
+
+    hashes_before = all_source_hashes(manual_excel_path, doc_specs)
+    hashes_before[str(manual_parquet_path)] = sha256_file(manual_parquet_path)
+    result_df = build_reconciliation_table(
+        manual_df,
+        doc_specs=doc_specs,
+        plan_image_only_by_year=image_only,
+        plan_max_page_count_by_year=max_pages,
+    )
+    hashes_after = all_source_hashes(manual_excel_path, doc_specs)
+    hashes_after[str(manual_parquet_path)] = sha256_file(manual_parquet_path)
+
+    output_dir = output_root / f"ministry_code={ministry_code}"
+    output_paths = write_reconciliation_outputs(
+        result_df,
+        manual_input_rows=len(manual_df),
+        source_hashes_before=hashes_before,
+        source_hashes_after=hashes_after,
+        output_dir=output_dir,
+        output_stem=f"{ministry_code}_performance",
+        overwrite=overwrite,
+    )
+    inventory_path = output_dir / "pdf_page_inventory.csv"
+    if inventory_path.exists() and not overwrite:
+        raise FileExistsError(f"이미 존재합니다 (overwrite=False): {inventory_path}")
+    build_page_inventory(run_ocr=False, doc_specs=doc_specs).to_csv(
+        inventory_path, index=False, encoding="utf-8-sig"
+    )
+    output_paths["page_inventory_csv"] = inventory_path
+    summary = build_reconciliation_summary(
+        result_df,
+        manual_input_rows=len(manual_df),
+        source_hashes_before=hashes_before,
+        source_hashes_after=hashes_after,
+    )
+    return {"output_paths": output_paths, "summary": summary, "result_df": result_df}
+
+
 def run_pdf_reconciliation(
     *,
     manual_parquet_path: Path = Path("data/processed/performance/program_kpi_year.parquet"),
     manual_excel_path: Path = Path("data/manual/LLM_문서구조화_중기부_최종.xlsx"),
     output_dir: Path = Path("data/processed/performance/pdf_reconciliation"),
     export_dir: Path = Path("data/exports/performance"),
+    manual_review_confirmations_path: Path = DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     """63행 전체 대조 파이프라인을 실행하고 산출물·요약을 반환합니다."""
@@ -1664,6 +2134,8 @@ def run_pdf_reconciliation(
     hashes_before[str(manual_parquet_path)] = sha256_file(manual_parquet_path)
 
     result_df = build_reconciliation_table(manual_df)
+    confirmations_df = load_manual_review_confirmations(manual_review_confirmations_path)
+    result_df = apply_manual_review_confirmations(result_df, confirmations_df)
 
     hashes_after = all_source_hashes(manual_excel_path)
     hashes_after[str(manual_parquet_path)] = sha256_file(manual_parquet_path)
@@ -1951,7 +2423,9 @@ def write_reconciliation_excel(
 
     ordered = result_df.reindex(columns=list(FINAL_SCHEMA_COLUMNS))
     review_df = ordered[ordered["overall_reconciliation_status"] != "EXACT_MATCH"].copy()
-    review_df["review_note"] = ""
+    # 이미 검수 확정 파일로 채워진 review_note는 보존하고, 아직 미확정인 행만
+    # 엑셀에서 사람이 바로 타이핑할 수 있게 빈 문자열로 둡니다.
+    review_df["review_note"] = review_df["review_note"].fillna("")
 
     workbook = Workbook()
     _write_readme_sheet(workbook, summary)
@@ -1970,9 +2444,14 @@ def write_reconciliation_excel(
 
 __all__ = [
     "ALLOWED_STATUS_VALUES",
+    "DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH",
     "FINAL_SCHEMA_COLUMNS",
+    "KNOWN_PLAN_IMAGE_ONLY_YEARS",
+    "KNOWN_PLAN_MAX_PAGE_COUNTS",
+    "MANUAL_REVIEW_CONFIRMATIONS_COLUMNS",
     "PDF_DOC_SPECS",
     "REQUIRED_MANUAL_COLUMNS",
+    "REVIEW_STATUS_VALUES",
     "STATUS_PRIORITY",
     "AchievementEvidence",
     "ChangeEvidence",
@@ -1980,6 +2459,7 @@ __all__ = [
     "PdfReconciliationError",
     "PlanEvidence",
     "all_source_hashes",
+    "apply_manual_review_confirmations",
     "build_page_inventory",
     "build_reconciliation_summary",
     "build_reconciliation_table",
@@ -1987,10 +2467,12 @@ __all__ = [
     "classify_rate_match",
     "clean_direction",
     "compute_achievement_rate",
+    "discover_pdf_doc_specs",
     "doc_spec",
     "extract_plan_evidence",
     "extract_report_achievement_evidence",
     "find_change_evidence",
+    "load_manual_review_confirmations",
     "load_page_texts",
     "normalize_indicator_name",
     "normalize_numeric_raw",
@@ -2000,6 +2482,7 @@ __all__ = [
     "printed_page_number",
     "reconcile_row",
     "report_section_has_pua_glyphs",
+    "run_ministry_pdf_reconciliation",
     "run_pdf_reconciliation",
     "select_plan_target",
     "sha256_file",

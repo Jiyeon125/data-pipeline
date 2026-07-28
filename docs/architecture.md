@@ -29,7 +29,7 @@ OpenAPI 자료와 결합해 분석용 마스터 테이블을 만든 뒤, 검증�
                                       ↓
                               data/exports
                                       ↓
-                           대시보드(구현 예정)
+                       대시보드(중기부 MVP 구현)
 ```
 
 ## 코드 경계
@@ -41,14 +41,26 @@ OpenAPI 자료와 결합해 분석용 마스터 테이블을 만든 뒤, 검증�
 
 ### `performance_pipeline`
 
-성과계획서·성과보고서만 다룹니다. 현재는 문서 인벤토리까지만 구현돼 있습니다.
-사용자가 외부 LLM 사용을 허용하고 추출 계약이 확정된 뒤 나머지를 구현합니다.
+성과계획서·성과보고서와 사람이 구조화한 성과지표 자료만 다룹니다. 외부 LLM을
+호출하지 않는 중기부 파일럿은 다음 단계까지 구현돼 있습니다.
 
 - `ingest`: 문서 목록, 유형 분류, 페이지 분할
-- 추후 구현: 성과지표 추출, JSON·원문 근거 검증, 버전별 프롬프트
+- `manual_performance`: 수기 구조화 엑셀을 원본 그대로 읽어 성과지표·
+  프로그램-연도 마스터 생성
+- `pdf_reconciliation`: 수기 63행과 계획서·보고서 PDF를 대조하고 페이지
+  근거와 사람 검수 상태 보존. 별첨에 상세 수치가 없는 부처는 같은 파일명의
+  전체 보고서 본문에서 목표·실적·달성률이 모두 있는 표만 보강 근거로 사용
+- `analysis_ready_performance`: 원본 수기값을 변경하지 않고, 수기 결측이면서
+  PDF 원문 검수가 `CONFIRMED`인 실적·공식 달성률만 별도 분석값으로 채택
 
 LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원시 추출값입니다.
 문서에 없는 값은 추정하지 않고 `null`과 검토 상태로 남깁니다.
+
+중기부 분석용 성과지표 마스터는
+`data/processed/performance/analysis_ready/program_kpi_year_analysis_ready.parquet`
+에 생성합니다. 계획 목표와 보고서 개정 목표를 분리하고, 공식 달성률을
+재계산값으로 덮어쓰지 않습니다. 일반 산식으로 재현되지 않는 달성률은 원문값을
+보존하되 산식 검토 플래그를 남깁니다.
 
 ### `master_engineering`
 
@@ -66,17 +78,42 @@ LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원�
 
 탐색 코드는 `notebooks/`에 둘 수 있지만, 확정된 계산은 이 패키지로 옮깁니다.
 
+- `mss_same_year_budget_check`: 검수 확정 성과지표를 프로그램-연도로 집계하고
+  일반회계·특별회계·기금을 분리한 재정 마스터와 결합합니다. 공식 달성률의
+  평균·합산은 만들지 않고 산식 비교 적격 지표의 100% 미만·이상 건수만
+  프로그램 신호로 사용합니다.
+- `mss_priority_scenario_analysis`: 중기부 결합표와 기존 M3 재정 신호를
+  프로그램-연도-회계유형으로 연결해 점검 후보군을 만들고, 균등·성과중심·
+  집행중심·재정영향 보정 시나리오의 Spearman 순위상관, 상위 K 중복,
+  후보별 순위 범위를 산출합니다. 전 시나리오 Top 5 후보는 부처·프로그램·
+  연도·회계유형 키로 M3 세부사업 재정 신호와 연결하며, 성과를 세부사업에
+  귀속하지 않습니다. 최종 복합점수나 정책 판정은 만들지 않습니다.
+
 ### 대시보드
 
-아직 구현하지 않습니다. `data/exports` 계약이 확정되면 원본·중간 테이블을
-직접 읽지 않는 별도 소비자로 구현하고 기술을 선택합니다.
+`fiscal_dashboard`는 검증 완료된
+`data/analytics/mss_priority_scenarios/`만 읽는 Streamlit 소비자입니다.
+후보 생성·가중치·순위 계산을 화면에 복사하지 않고, 다음 기능만 담당합니다.
+
+- 연도·회계유형·점검단계 필터
+- 후보별 시나리오 순위 범위
+- 시나리오 순위상관과 상위 K 중복
+- 후보 구성요소와 근거 상세
+- 안정 상위 후보의 세부사업 예산구성·집행·이월·불용 드릴다운
+- 데이터 검증 큐 분리
+- 현재 필터 후보표 다운로드
+
+현재 MVP는 중기부 단일 표본용입니다. 다른 부처와 최종 제출용 데이터 계약이
+승인되면 입력 경로만 `data/exports` 계약으로 교체하고 화면의 분석 정의는
+늘리지 않습니다.
 
 ## 의존 방향
 
 ```text
 open_fiscal_pipeline ─┐
-                      ├→ master_engineering → analytics → data/exports
-performance_pipeline ─┘
+                      ├→ master_engineering → analytics → fiscal_dashboard
+performance_pipeline ─┘                          ↓
+                                           data/exports(승인 후)
 ```
 
 역방향 import는 허용하지 않습니다. 공통 계약이 필요하면 소비자 패키지에 복사하지
@@ -116,7 +153,21 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 - `fiscal-master build-project-year-budget`: 예산 기준 사업-연도 중간 테이블 구축
 - `fiscal-master build-project-year-financial`: 월별 집행 외부 결합
 
-`performance_pipeline.cli`는 OpenAI API 키가 준비될 때까지 실행하지 않습니다.
+외부 LLM을 사용하지 않는 성과자료 명령은 다음과 같습니다.
+
+- `fiscal-performance normalize-manual`
+- `fiscal-performance build-verified-manual-analysis-ready`
+- `fiscal-performance prepare-program-match-review`
+- `fiscal-performance reconcile-ministry-performance-pdfs <019|075|162> --overwrite`
+- `fiscal-performance reconcile-mss-performance-pdfs`
+- `fiscal-performance build-mss-analysis-ready`
+- `fiscal-analytics analyze-mss-same-year-budget --root . --overwrite`
+- `fiscal-analytics analyze-manual-same-year-budget`
+- `fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite`
+
+이 명령들은 OpenAI API 키 없이 로컬 파일만으로 실행합니다. 수기 골드셋 경로는
+보고서 최종 목표가 없으면 계획 목표로 대체하지 않고 결측으로 유지합니다. 향후 LLM 추출
+명령은 사용자가 외부 호출을 명시적으로 허용한 뒤 별도 경계로 추가합니다.
 예산 기준 중간 테이블은 결산·성과 자료가 결합되기 전에는 최종 마스터로
 간주하지 않습니다.
 
