@@ -40,9 +40,8 @@ analytics              피처·순위·민감도·보고
 fiscal_dashboard       검증된 분석 산출물의 Streamlit 탐색 화면
 ```
 
-성과 문서 자동 추출은 검수 구조가 확정된 뒤 확장합니다. 대시보드는 현재
-중기부 검증 산출물과 안정 상위 후보의 세부사업 재정 드릴다운만 읽는
-파일럿으로 구현돼 있습니다.
+성과 문서 외부 LLM 추출은 검수 구조가 확정된 뒤 확장합니다. 대시보드는 현재
+3개 부처 성과·재정 탐색 순위와 PDF 원문 사람 검수 큐를 읽는 파일럿입니다.
 
 상세한 의존 방향, 데이터 계층과 팀 공유 마일스톤은
 [프로젝트 아키텍처](docs/architecture.md)를 참고합니다.
@@ -431,21 +430,23 @@ fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite
 - 발표용 그림: `artifacts/figures/presentation/mss_priority_scenario_*.png`
 - 탐색 순위이며 최종 복합점수·정책 우선순위는 생성하지 않음
 
-## 중기부 Streamlit 대시보드
+## 3개 부처 Streamlit 대시보드
 
 후보·시나리오 분석을 재생성한 뒤 대시보드를 실행합니다.
 
 ```powershell
-fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite
+fiscal-analytics analyze-three-ministry-priority-scenarios --root . --overwrite
 python -m streamlit run src/fiscal_dashboard/app.py
 ```
 
-- 기본 화면: 전 시나리오 안정 상위 3개 프로그램과 순위 민감도
-- 필터: 보기 범위, 회계연도, 회계유형, 점검단계
-- 탭: 핵심 요약, 후보 찾아보기, 시나리오 비교, 데이터 검증
-- 상세: 안정 상위 5행의 세부사업 94행 예산구성·집행·이월·불용
+- 기본 화면: 결합 현황과 다음 작업을 보여주는 단계형 작업대
+- 작업 순서: 시작 → 데이터 확인 → 후보 분석 → 기준 비교 → 원문 검수
+- 필터: 부처, 후보 분석 범위, 회계연도, 회계유형, 점검단계
+- 후보 연결: 선택 프로그램에서 해당 성과지표 PDF 검수 화면으로 바로 이동
+- 원문 검수: 수기값·PDF값·근거 페이지 이미지와 사람 검수 상태 연속 저장
+- 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
 - 다운로드: 현재 필터의 후보표 CSV
-- 입력: `data/analytics/mss_priority_scenarios/`의 검증 완료 산출물
+- 입력: `data/analytics/three_ministry_priority_scenarios/`의 검증 완료 산출물
 - 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
 
 ## UNKNOWN 예산 80% 커버리지 사람 검수

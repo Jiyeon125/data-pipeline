@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pandas as pd
 import typer
 
 from analytics.analysis_definition_validation import (
@@ -221,6 +222,65 @@ def analyze_mss_priority_scenarios(
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
     for path in (*result.output_paths, *result.figure_paths):
+        typer.echo(f"- {path}")
+
+
+@app.command("analyze-three-ministry-priority-scenarios")
+def analyze_three_ministry_priority_scenarios(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    overwrite: bool = typer.Option(False, help="기존 산출물 덮어쓰기"),
+) -> None:
+    """019·075·162 동년도 결합과 전체·부처내 시나리오 순위를 한 번에 산출합니다."""
+    codes = ("019", "075", "162")
+    combined_dir = root / "data/analytics/three_ministry_same_year_budget_check"
+    combined_path = combined_dir / "program_year_account_type_check.csv"
+    if combined_path.exists() and not overwrite:
+        typer.echo(f"3개 부처 결합표가 이미 있습니다: {combined_path}", err=True)
+        raise typer.Exit(code=1)
+
+    frames: list[pd.DataFrame] = []
+    try:
+        for code in codes:
+            result = run_same_year_budget_check(
+                indicator_path=root
+                / f"data/processed/performance/by_ministry/ministry_code={code}/"
+                "analysis_ready/program_kpi_year_analysis_ready.parquet",
+                overall_financial_path=root
+                / "data/processed/masters/program_year_financial.parquet",
+                project_financial_path=root
+                / "data/processed/masters/project_year_financial_v2.parquet",
+                output_dir=root / f"data/analytics/by_ministry/ministry_code={code}/"
+                "same_year_budget_check",
+                ministry_code=code,
+                start_year=2022,
+                end_year=2024,
+                overwrite=overwrite,
+            )
+            frames.append(result.analysis)
+        combined = pd.concat(frames, ignore_index=True).convert_dtypes()
+        key = ["ministry_code", "fiscal_year", "performance_program_name", "account_type"]
+        if combined.duplicated(key).any():
+            raise PriorityScenarioError("3개 부처 결합표의 분석 키가 중복되었습니다.")
+        combined_dir.mkdir(parents=True, exist_ok=True)
+        combined.to_csv(combined_path, index=False, encoding="utf-8-sig")
+        priority = run_priority_scenario_analysis(
+            PriorityScenarioPaths.three_ministry_from_root(root),
+            overwrite=overwrite,
+        )
+    except (
+        SameYearBudgetCheckError,
+        PriorityScenarioError,
+        FileExistsError,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"3개 부처 후보·시나리오 분석 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(json.dumps(priority.summary, ensure_ascii=False, indent=2))
+    typer.echo(f"- {combined_path}")
+    for path in (*priority.output_paths, *priority.figure_paths):
         typer.echo(f"- {path}")
 
 

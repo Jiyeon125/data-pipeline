@@ -1,4 +1,4 @@
-"""중기부 점검 후보와 복수 시나리오 안정성 Streamlit 대시보드."""
+"""3개 부처 점검 후보·순위 안정성·성과 원문 검수 Streamlit 대시보드."""
 
 from __future__ import annotations
 
@@ -11,8 +11,21 @@ import pandas as pd
 import streamlit as st
 from matplotlib import font_manager
 
+from performance_pipeline.pdf_reconciliation import (
+    DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH,
+    REVIEW_STATUS_VALUES,
+    apply_manual_review_confirmations,
+    load_manual_review_confirmations,
+    upsert_manual_review_confirmation,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = Path("data/analytics/mss_priority_scenarios")
+DATA_DIR = Path("data/analytics/three_ministry_priority_scenarios")
+MINISTRY_LABELS = {
+    "019": "고용노동부",
+    "075": "보건복지부",
+    "162": "과학기술정보통신부",
+}
 
 ACCOUNT_LABELS = {
     "GENERAL_ACCOUNT": "일반회계",
@@ -58,6 +71,19 @@ FINANCIAL_SIGNAL_LABELS = {
     "DATA_VALIDATION_PRIORITY": "데이터 검증 우선",
     "NONE": "추가 재정신호 없음",
 }
+WORKFLOW_STEPS = [
+    "1. 시작",
+    "2. 데이터 확인",
+    "3. 후보 분석",
+    "4. 기준 비교",
+    "5. 원문 검수",
+]
+REVIEW_STATUS_LABELS = {
+    "PENDING": "보류",
+    "CONFIRMED": "원문과 일치",
+    "CORRECTED": "수정 필요",
+    "NOT_RESOLVABLE": "현재 문서로 확인 불가",
+}
 
 
 class DashboardDataError(ValueError):
@@ -80,13 +106,19 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     if missing:
         raise FileNotFoundError(
             "대시보드 입력이 없습니다. 먼저 "
-            "`fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite`를 "
+            "`fiscal-analytics analyze-three-ministry-priority-scenarios "
+            "--root . --overwrite`를 "
             f"실행하세요: {', '.join(str(path) for path in missing)}"
         )
 
     data: dict[str, Any] = {
         key: pd.read_csv(base / filename) for key, filename in filenames.items()
     }
+    for frame in data.values():
+        if "ministry_code" in frame:
+            frame["ministry_code"] = frame["ministry_code"].astype("string").str.zfill(3)
+        if "program_code" in frame:
+            frame["program_code"] = frame["program_code"].astype("string").str.zfill(4)
     data["candidates"]["account_type"] = data["candidates"]["account_type"].fillna("NOT_AVAILABLE")
     data["summary"] = json.loads((base / "analysis_summary.json").read_text(encoding="utf-8"))
     required_columns = {
@@ -149,6 +181,45 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     return data
 
 
+@st.cache_data
+def load_pdf_review_queue(root: Path = PROJECT_ROOT) -> pd.DataFrame:
+    """3개 부처 PDF 대조 결과와 현재 사람 검수 상태를 읽습니다."""
+    frames = []
+    for code in MINISTRY_LABELS:
+        path = (
+            root
+            / "data/processed/performance/pdf_reconciliation"
+            / f"ministry_code={code}"
+            / f"{code}_performance_pdf_reconciliation.parquet"
+        )
+        if path.exists():
+            frames.append(pd.read_parquet(path).astype(object))
+    if not frames:
+        raise FileNotFoundError("3개 부처 PDF 대조 결과가 없습니다.")
+    queue = pd.concat(frames, ignore_index=True).convert_dtypes()
+    confirmations_path = root / DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH
+    confirmations = load_manual_review_confirmations(confirmations_path)
+    relevant = confirmations.loc[
+        confirmations["source_indicator_id"].isin(queue["source_indicator_id"])
+    ]
+    return apply_manual_review_confirmations(queue, relevant)
+
+
+@st.cache_data
+def render_pdf_page(root: Path, source_file: str, page_number: int) -> bytes:
+    """원본 PDF의 1개 페이지를 검수용 PNG로 렌더링합니다."""
+    import fitz
+
+    matches = list((root / "data/raw/performance_docs").rglob(source_file))
+    if len(matches) != 1:
+        raise FileNotFoundError(f"PDF 파일을 하나로 특정할 수 없습니다: {source_file}")
+    with fitz.open(matches[0]) as document:
+        if not 1 <= page_number <= document.page_count:
+            raise ValueError(f"{source_file} 페이지 범위 오류: {page_number}/{document.page_count}")
+        pixmap = document[page_number - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        return pixmap.tobytes("png")
+
+
 def filter_candidates(
     candidates: pd.DataFrame,
     *,
@@ -156,6 +227,7 @@ def filter_candidates(
     years: list[int],
     account_types: list[str],
     tiers: list[str],
+    ministry_codes: list[str] | None = None,
 ) -> pd.DataFrame:
     """화면 필터만 적용하고 후보·점수 정의는 변경하지 않습니다."""
     if scope == "순위 적격 후보":
@@ -164,8 +236,14 @@ def filter_candidates(
         mask = candidates["review_candidate"].fillna(False)
     else:
         mask = pd.Series(True, index=candidates.index)
+    ministry_mask = (
+        candidates["ministry_code"].isin(ministry_codes)
+        if ministry_codes is not None
+        else pd.Series(True, index=candidates.index)
+    )
     return candidates.loc[
         mask
+        & ministry_mask
         & candidates["fiscal_year"].isin(years)
         & candidates["account_type"].isin(account_types)
         & candidates["priority_tier"].isin(tiers)
@@ -199,15 +277,22 @@ def _set_korean_font() -> None:
     plt.rcParams["axes.unicode_minus"] = False
 
 
-def _rank_range_figure(stability: pd.DataFrame) -> plt.Figure:
+def _rank_range_figure(
+    stability: pd.DataFrame,
+    *,
+    within_ministry: bool = False,
+) -> plt.Figure:
     _set_korean_font()
-    plot = (
-        stability.sort_values("mean_scenario_rank")
-        .head(15)
-        .sort_values("mean_scenario_rank", ascending=False)
+    mean_column = "mean_scenario_rank_within_ministry" if within_ministry else "mean_scenario_rank"
+    best_column = "best_scenario_rank_within_ministry" if within_ministry else "best_scenario_rank"
+    worst_column = (
+        "worst_scenario_rank_within_ministry" if within_ministry else "worst_scenario_rank"
     )
+    plot = stability.sort_values(mean_column).head(15).sort_values(mean_column, ascending=False)
     labels = (
-        plot["fiscal_year"].astype(str)
+        plot["ministry_code"].astype(str).map(MINISTRY_LABELS).fillna(plot["ministry_code"])
+        + " · "
+        + plot["fiscal_year"].astype(str)
         + " "
         + plot["performance_program_name"].astype(str)
         + " / "
@@ -216,13 +301,13 @@ def _rank_range_figure(stability: pd.DataFrame) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(11, max(4.5, len(plot) * 0.48)))
     ax.hlines(
         range(len(plot)),
-        plot["best_scenario_rank"],
-        plot["worst_scenario_rank"],
+        plot[best_column],
+        plot[worst_column],
         color="#9CA3AF",
         linewidth=3,
     )
     ax.scatter(
-        plot["mean_scenario_rank"],
+        plot[mean_column],
         range(len(plot)),
         color="#245A8D",
         edgecolor="#17324D",
@@ -231,7 +316,13 @@ def _rank_range_figure(stability: pd.DataFrame) -> plt.Figure:
     )
     ax.set_yticks(range(len(plot)), labels)
     ax.set_xlabel("시나리오 순위 (낮을수록 상위)")
-    ax.set_title("후보별 시나리오 순위 범위", loc="left", fontweight="bold", pad=22)
+    scope_label = "부처 내부" if within_ministry else "3개 부처 전체"
+    ax.set_title(
+        f"{scope_label} 후보별 순위 범위",
+        loc="left",
+        fontweight="bold",
+        pad=22,
+    )
     ax.text(
         0,
         1.01,
@@ -287,29 +378,41 @@ def _spearman_figure(spearman: pd.DataFrame) -> plt.Figure:
     return fig
 
 
-def _scenario_top_figure(scores: pd.DataFrame, scenario: str) -> plt.Figure:
+def _scenario_top_figure(
+    scores: pd.DataFrame,
+    scenario: str,
+    *,
+    within_ministry: bool = False,
+) -> plt.Figure:
     _set_korean_font()
+    rank_column = (
+        "scenario_rank_average_within_ministry" if within_ministry else "scenario_rank_average"
+    )
+    score_column = "scenario_score_within_ministry" if within_ministry else "scenario_score"
     plot = (
         scores.loc[scores["scenario"].eq(scenario)]
-        .sort_values(["scenario_rank_average", "performance_program_name"])
+        .sort_values([rank_column, "performance_program_name"])
         .head(10)
-        .sort_values("scenario_score")
+        .sort_values(score_column)
     )
     labels = (
-        plot["fiscal_year"].astype(str)
+        plot["ministry_code"].astype(str).map(MINISTRY_LABELS).fillna(plot["ministry_code"])
+        + " · "
+        + plot["fiscal_year"].astype(str)
         + " "
         + plot["performance_program_name"].astype(str)
         + " / "
         + plot["account_type"].map(ACCOUNT_LABELS).fillna(plot["account_type"])
     )
     fig, ax = plt.subplots(figsize=(9, max(4.2, len(plot) * 0.48)))
-    bars = ax.barh(range(len(plot)), plot["scenario_score"], color="#D3A62C")
+    bars = ax.barh(range(len(plot)), plot[score_column], color="#D3A62C")
     ax.bar_label(bars, fmt="%.3f", padding=4, color="#263445")
     ax.set_yticks(range(len(plot)), labels)
     ax.set_xlabel("탐색 점수 (0~1)")
-    ax.set_xlim(0, max(1, float(plot["scenario_score"].max()) * 1.15))
+    ax.set_xlim(0, max(1, float(plot[score_column].max()) * 1.15))
+    scope_label = "부처 내부" if within_ministry else "3개 부처 전체"
     ax.set_title(
-        f"{SCENARIO_LABELS.get(scenario, scenario)} 상위 후보",
+        f"{scope_label} · {SCENARIO_LABELS.get(scenario, scenario)} 상위 후보",
         loc="left",
         fontweight="bold",
         pad=22,
@@ -318,28 +421,6 @@ def _scenario_top_figure(scores: pd.DataFrame, scenario: str) -> plt.Figure:
         0,
         1.01,
         "점수는 해당 시나리오 안의 정렬용이며 최종 정책점수가 아님",
-        transform=ax.transAxes,
-        color="#596579",
-    )
-    ax.grid(axis="x", color="#E5E7EB")
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    fig.tight_layout()
-    return fig
-
-
-def _tier_figure(candidates: pd.DataFrame) -> plt.Figure:
-    _set_korean_font()
-    counts = candidates["priority_tier"].map(TIER_LABELS).value_counts().sort_values()
-    fig, ax = plt.subplots(figsize=(6, max(3.5, len(counts) * 0.55)))
-    bars = ax.barh(counts.index, counts.values, color="#245A8D")
-    ax.bar_label(bars, padding=4, color="#263445")
-    ax.set_xlabel("프로그램-연도-회계유형 행")
-    ax.set_xlim(0, max(1, float(counts.max()) * 1.18))
-    ax.set_title("점검단계 분포", loc="left", fontweight="bold", pad=22)
-    ax.text(
-        0,
-        1.01,
-        "현재 필터 기준",
         transform=ax.transAxes,
         color="#596579",
     )
@@ -406,6 +487,9 @@ def _project_table_view(projects: pd.DataFrame) -> pd.DataFrame:
 
 def _table_view(frame: pd.DataFrame) -> pd.DataFrame:
     table = frame.copy()
+    table["부처"] = (
+        table["ministry_code"].astype(str).map(MINISTRY_LABELS).fillna(table["ministry_code"])
+    )
     table["회계유형"] = table["account_type"].map(ACCOUNT_LABELS).fillna(table["account_type"])
     table["점검단계"] = table["priority_tier"].map(TIER_LABELS).fillna(table["priority_tier"])
     table["점검근거"] = table["priority_reason"].map(_reason_text)
@@ -422,6 +506,7 @@ def _table_view(frame: pd.DataFrame) -> pd.DataFrame:
     }
     table = table.rename(columns=rename)
     columns = [
+        "부처",
         "연도",
         "프로그램",
         "회계유형",
@@ -440,6 +525,71 @@ def _table_view(frame: pd.DataFrame) -> pd.DataFrame:
     return table[columns]
 
 
+def _data_review_table(frame: pd.DataFrame) -> pd.DataFrame:
+    table = _table_view(frame)
+    issues = pd.DataFrame(index=frame.index)
+    issues["재정신호 미연결"] = frame["financial_signal_join_status"].ne("both")
+    issues["회계별 본예산 불일치"] = frame["financial_signal_join_status"].eq("both") & ~frame[
+        "financial_signal_budget_reconciled"
+    ].fillna(False)
+    issues["성과·재정 공동분석 제한"] = frame["analysis_status"].ne("JOINT_ANALYSIS")
+    issue_text = issues.apply(
+        lambda row: " · ".join(row.index[row].tolist()) or "세부사업 데이터 품질 신호",
+        axis=1,
+    )
+    table["확인할 내용"] = issue_text.to_numpy()
+    table["본예산 차이(억원)"] = (
+        pd.to_numeric(
+            frame["financial_signal_budget_difference"],
+            errors="coerce",
+        )
+        .div(100_000_000)
+        .to_numpy()
+    )
+    columns = [
+        "부처",
+        "연도",
+        "프로그램",
+        "회계유형",
+        "확인할 내용",
+        "본예산 차이(억원)",
+        "점검근거",
+    ]
+    return table[columns]
+
+
+def _component_summary(label: str, value: object) -> tuple[str, str]:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return "자료 없음", "이 값이 없어 현재 순위 비교에서 제한될 수 있습니다."
+    numeric = float(numeric)
+    if label == "성과":
+        return f"{numeric:.0%}", "비교 가능한 성과지표 중 목표 미달 비중"
+    if label == "집행":
+        level = "강한 확인 필요" if numeric >= 0.75 else "확인 필요" if numeric > 0 else "신호 없음"
+        return level, f"현재·반복 집행 신호 강도 {numeric:.2f}"
+    if label == "예산 흐름":
+        level = "확인 필요" if numeric > 0 else "신호 없음"
+        return level, f"성과와 예산 증감의 불일치 정도 {numeric:.2f}"
+    upper_share = max(1, round((1 - numeric) * 100))
+    return f"상위 약 {upper_share}%", "같은 비교집단에서의 본예산 규모"
+
+
+def _go_to_step(step: str) -> None:
+    st.session_state["workflow_step"] = step
+
+
+def _go_to_review(program_name: str, ministry_code: str) -> None:
+    st.session_state["review_program_filter"] = program_name
+    st.session_state["review_ministry_filter"] = ministry_code
+    _go_to_step("5. 원문 검수")
+
+
+def _clear_review_focus() -> None:
+    st.session_state.pop("review_program_filter", None)
+    st.session_state.pop("review_ministry_filter", None)
+
+
 def stable_program_summary(
     candidates: pd.DataFrame,
     stability: pd.DataFrame,
@@ -455,8 +605,8 @@ def stable_program_summary(
         validate="one_to_one",
     )
     rows: list[dict[str, Any]] = []
-    for (program_code, program_name), group in stable.groupby(
-        ["program_code", "performance_program_name"],
+    for (ministry_code, program_code, program_name), group in stable.groupby(
+        ["ministry_code", "program_code", "performance_program_name"],
         sort=False,
         dropna=False,
     ):
@@ -472,6 +622,7 @@ def stable_program_summary(
         }
         rows.append(
             {
+                "ministry_code": ministry_code,
                 "program_code": program_code,
                 "program_name": program_name,
                 "stable_row_count": len(group),
@@ -482,21 +633,61 @@ def stable_program_summary(
                 "best_mean_rank": group["mean_scenario_rank"].min(),
             }
         )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "ministry_code",
+                "program_code",
+                "program_name",
+                "stable_row_count",
+                "observations",
+                "reasons",
+                "best_mean_rank",
+            ]
+        )
     return pd.DataFrame(rows).sort_values(
         ["best_mean_rank", "program_name"],
         ignore_index=True,
     )
 
 
+def review_page_specs(row: pd.Series) -> list[tuple[str, str, int]]:
+    """검수행에서 실제로 열 수 있는 PDF 파일·쪽 목록만 만듭니다."""
+    candidates = (
+        ("계획서", "plan_source_file", "plan_split_pdf_page"),
+        ("보고서", "report_source_file", "report_split_pdf_page"),
+        (
+            "성과계획 변경표",
+            "documented_change_source_file",
+            "documented_change_split_pdf_page",
+        ),
+    )
+    result: list[tuple[str, str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for label, file_column, page_column in candidates:
+        source_file = row.get(file_column)
+        page = pd.to_numeric(pd.Series([row.get(page_column)]), errors="coerce").iloc[0]
+        if pd.isna(source_file) or not str(source_file).strip() or pd.isna(page):
+            continue
+        key = (str(source_file), int(page))
+        if key not in seen:
+            result.append((label, *key))
+            seen.add(key)
+    return result
+
+
 def main() -> None:
     st.set_page_config(
-        page_title="중기부 재정사업 점검 후보",
-        page_icon="🔎",
+        page_title="재정사업 점검 작업대",
+        page_icon=":material/fact_check:",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
-    st.title("중기부 재정사업 점검 후보")
-    st.caption("중기부 2022–2024 파일럿 · 발표용 초안 · 최종 5개 부처 통합본 아님")
+    st.title("재정사업 점검 작업대")
+    st.caption(
+        "고용노동부·보건복지부·과학기술정보통신부 2022–2024 파일럿 · "
+        "데이터 확인부터 PDF 원문 검수까지 순서대로 진행합니다."
+    )
 
     try:
         data = load_dashboard_data()
@@ -511,38 +702,34 @@ def main() -> None:
     summary = data["summary"]
     counts = summary["counts"]
     top_k = summary["stability"]["all_scenario_top_k"]
-    stable_programs = stable_program_summary(candidates, stability)
-
-    st.subheader("지금 봐야 할 결과")
-    st.success(
-        "네 시나리오 모두에서 상위 5위에 남은 후보는 **5개 행, 3개 프로그램**입니다. "
-        "따라서 아래 3개 프로그램부터 원문과 세부사업 원인을 확인하는 것이 현재의 결론입니다."
-    )
-    card_columns = st.columns(len(stable_programs))
-    for column, row in zip(card_columns, stable_programs.itertuples(), strict=True):
-        with column.container(border=True):
-            st.markdown(f"**{row.program_name}**")
-            st.caption(f"전 시나리오 Top 5 · {row.stable_row_count}개 행")
-            st.write(row.observations)
-            st.write(f"점검 근거: {row.reasons}")
-    st.caption(
-        "프로그램 자체의 확정 순위가 아니라, 여러 연도·회계 행 중 가중치를 바꿔도 "
-        "상위권에 남은 행을 프로그램명으로 묶은 보기입니다."
-    )
 
     st.sidebar.header("필터")
+    ministry_codes = sorted(candidates["ministry_code"].dropna().astype(str).unique())
+    selected_ministries = st.sidebar.multiselect(
+        "부처",
+        ministry_codes,
+        default=ministry_codes,
+        format_func=lambda value: MINISTRY_LABELS.get(value, value),
+        key="global_ministries",
+    )
     scope = st.sidebar.radio(
-        "보기 범위",
-        ["순위 적격 후보", "전체 점검 후보", "데이터 검증 포함 전체"],
+        "후보 분석 범위",
+        ["전체 점검 후보", "순위 적격 후보", "데이터 검증 포함 전체"],
     )
     years = sorted(candidates["fiscal_year"].dropna().astype(int).unique().tolist())
-    selected_years = st.sidebar.multiselect("회계연도", years, default=years)
+    selected_years = st.sidebar.multiselect(
+        "회계연도",
+        years,
+        default=years,
+        key="global_years",
+    )
     account_types = sorted(candidates["account_type"].dropna().astype(str).unique())
     selected_accounts = st.sidebar.multiselect(
         "회계유형",
         account_types,
         default=account_types,
         format_func=_format_account,
+        key="global_accounts",
     )
     tiers = sorted(
         candidates["priority_tier"].dropna().astype(str).unique(),
@@ -553,6 +740,15 @@ def main() -> None:
         tiers,
         default=tiers,
         format_func=lambda value: TIER_LABELS.get(value, value),
+        key="global_tiers",
+    )
+    filtered_all = filter_candidates(
+        candidates,
+        scope="데이터 검증 포함 전체",
+        years=selected_years,
+        account_types=selected_accounts,
+        tiers=selected_tiers,
+        ministry_codes=selected_ministries,
     )
     filtered = filter_candidates(
         candidates,
@@ -560,51 +756,150 @@ def main() -> None:
         years=selected_years,
         account_types=selected_accounts,
         tiers=selected_tiers,
+        ministry_codes=selected_ministries,
     )
-    filtered_stability = stability.loc[
-        stability["candidate_id"].isin(filtered["candidate_id"])
-    ].copy()
-    filtered_scores = scores.loc[scores["candidate_id"].isin(filtered["candidate_id"])].copy()
-
-    metric_columns = st.columns(4)
-    metric_columns[0].metric("점검 후보", f"{counts['review_candidate_rows']:,}행")
-    metric_columns[1].metric("순위 비교 가능", f"{counts['scenario_ranking_eligible_rows']:,}행")
-    metric_columns[2].metric("안정 상위", f"{len(stable_programs):,}개 프로그램")
-    metric_columns[3].metric("데이터 검증 우선", f"{counts['data_review_rows']:,}행")
-
-    summary_tab, candidates_tab, scenario_tab, quality_tab = st.tabs(
-        ["핵심 요약", "후보 찾아보기", "시나리오 비교", "데이터 검증"]
+    workflow_step = st.segmented_control(
+        "작업 단계",
+        WORKFLOW_STEPS,
+        default=WORKFLOW_STEPS[0],
+        key="workflow_step",
+        width="stretch",
     )
-    with summary_tab:
-        left, right = st.columns([2, 1])
-        with left:
-            figure = _rank_range_figure(stability)
-            st.pyplot(figure, width="stretch")
-            plt.close(figure)
-        with right:
-            st.markdown("#### 이렇게 읽으시면 됩니다")
-            st.markdown(
-                f"""
-                1. **상위 5위는 안정적입니다.** 공통 {top_k["5"]["intersection_count"]}행,
-                   합집합 {top_k["5"]["union_count"]}행입니다.
-                2. **상위 10위 경계는 흔들립니다.** 공통 {top_k["10"]["intersection_count"]}행,
-                   합집합 {top_k["10"]["union_count"]}행입니다.
-                3. **가중치 영향은 후보마다 다릅니다.** 선이 길수록 시나리오 변경에
-                   따라 순위가 크게 달라집니다.
-                """
-            )
-            st.warning(
-                "상위 3개 프로그램은 우선 원문 검토 대상으로 쓸 수 있지만, "
-                "그 아래 순서를 하나의 최종 순위처럼 사용하면 안 됩니다."
-            )
-        st.markdown("#### 아직 완성되지 않은 부분")
-        st.info(
-            "현재는 중기부 파일럿입니다. 안정 상위 후보의 세부사업 재정 드릴다운은 "
-            "연결됐지만, 성과지표 유형·자율평가 의견과 나머지 부처 데이터가 "
-            "추가되어야 최종 대시보드가 됩니다."
+    if st.session_state.pop("review_saved", False):
+        st.toast("검수 결과를 저장했습니다.", icon=":material/check_circle:")
+
+    st.caption(
+        f"현재 필터: {len(filtered_all):,}행 · "
+        f"{filtered_all['program_code'].dropna().nunique():,}개 프로그램"
+    )
+    with st.container(horizontal=True):
+        st.metric("분석행", f"{len(filtered_all):,}", border=True)
+        st.metric(
+            "점검 신호 있음",
+            f"{filtered_all['review_candidate'].fillna(False).sum():,}",
+            border=True,
+        )
+        st.metric(
+            "순위 비교 가능",
+            f"{filtered_all['scenario_ranking_eligible'].fillna(False).sum():,}",
+            border=True,
+        )
+        st.metric(
+            "데이터 먼저 확인",
+            f"{filtered_all['data_validation_signal'].fillna(False).sum():,}",
+            border=True,
         )
 
-    with candidates_tab:
+    if workflow_step == "1. 시작":
+        st.subheader("이제 무엇을 하면 되는지 순서대로 보여드립니다")
+        st.info(
+            "먼저 데이터 연결을 확인하고, 후보의 근거를 본 뒤, 기준을 바꿔도 "
+            "순위가 유지되는지 확인합니다. 발표에 쓸 후보만 마지막에 PDF 원문을 검수합니다.",
+            icon=":material/route:",
+        )
+        try:
+            queue = load_pdf_review_queue()
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            queue = None
+            st.warning(f"PDF 검수 현황을 불러오지 못했습니다: {exc}")
+        done_reviews = (
+            0
+            if queue is None
+            else int(queue["review_status"].isin(["CONFIRMED", "CORRECTED"]).sum())
+        )
+        total_reviews = 0 if queue is None else len(queue)
+        status_columns = st.columns(4, border=True)
+        status_columns[0].metric("1. 결합 완료", f"{counts['analysis_rows']:,}행")
+        status_columns[0].caption("성과와 재정을 프로그램·연도·회계별로 연결했습니다.")
+        status_columns[1].metric("2. 데이터 확인", f"{counts['data_review_rows']:,}행 남음")
+        status_columns[1].caption("매칭이나 회계별 금액을 먼저 확인할 행입니다.")
+        status_columns[2].metric(
+            "3. 순위 비교",
+            f"{counts['scenario_ranking_eligible_rows']:,}행",
+        )
+        status_columns[2].caption("네 기준을 모두 계산할 수 있는 후보입니다.")
+        status_columns[3].metric("4. 원문 검수", f"{done_reviews:,}/{total_reviews:,}행")
+        status_columns[3].caption("발표 사례로 쓸 성과지표를 사람이 확인합니다.")
+        st.warning(
+            f"전체 Top 5는 안정적이지 않습니다. 네 기준의 공통 후보는 "
+            f"{top_k['5']['intersection_count']}행, 한 번이라도 포함된 후보는 "
+            f"{top_k['5']['union_count']}행입니다. 단일 최종 순위로 확정하지 않습니다.",
+            icon=":material/warning:",
+        )
+        action_columns = st.columns(4)
+        for column, label, icon, step in (
+            (action_columns[0], "데이터부터 확인", ":material/database:", "2. 데이터 확인"),
+            (action_columns[1], "후보 근거 보기", ":material/search:", "3. 후보 분석"),
+            (
+                action_columns[2],
+                "기준 비교하기",
+                ":material/compare_arrows:",
+                "4. 기준 비교",
+            ),
+            (
+                action_columns[3],
+                "PDF 검수 시작",
+                ":material/description:",
+                "5. 원문 검수",
+            ),
+        ):
+            column.button(
+                label,
+                icon=icon,
+                on_click=_go_to_step,
+                args=(step,),
+                width="stretch",
+            )
+
+    elif workflow_step == "2. 데이터 확인":
+        review = filtered_all.loc[filtered_all["data_validation_signal"].fillna(False)].copy()
+        st.subheader("분석 전에 데이터부터 확인합니다")
+        st.caption(
+            "여기에 나온 행은 문제가 큰 사업이 아니라, 매칭이나 금액을 확인하기 전에는 "
+            "정책 순위에 넣으면 안 되는 행입니다."
+        )
+        if review.empty:
+            st.success("현재 필터에는 먼저 확인할 데이터가 없습니다.")
+        else:
+            with st.container(horizontal=True):
+                st.metric("확인할 행", f"{len(review):,}", border=True)
+                st.metric(
+                    "재정신호 미연결",
+                    f"{review['financial_signal_join_status'].ne('both').sum():,}",
+                    border=True,
+                )
+                st.metric(
+                    "회계별 본예산 불일치",
+                    (
+                        review["financial_signal_join_status"].eq("both")
+                        & ~review["financial_signal_budget_reconciled"].fillna(False)
+                    ).sum(),
+                    border=True,
+                )
+                st.metric(
+                    "공동분석 제한",
+                    f"{review['analysis_status'].ne('JOINT_ANALYSIS').sum():,}",
+                    border=True,
+                )
+            st.dataframe(
+                _data_review_table(
+                    review.sort_values(["ministry_code", "fiscal_year", "performance_program_name"])
+                ),
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "본예산 차이(억원)": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+        st.button(
+            "확인 후 후보 분석으로 이동",
+            icon=":material/arrow_forward:",
+            on_click=_go_to_step,
+            args=("3. 후보 분석",),
+        )
+
+    elif workflow_step == "3. 후보 분석":
+        st.subheader("후보 하나를 골라 왜 올라왔는지 확인합니다")
         if filtered.empty:
             st.warning("현재 필터에 해당하는 후보가 없습니다.")
         else:
@@ -612,19 +907,6 @@ def main() -> None:
                 f"현재 필터: {len(filtered)}행 · "
                 f"{filtered['program_code'].dropna().nunique()}개 프로그램"
             )
-            left, right = st.columns(2)
-            with left:
-                if filtered_stability.empty:
-                    st.warning("현재 필터에는 시나리오 순위 적격 후보가 없습니다.")
-                else:
-                    figure = _rank_range_figure(filtered_stability)
-                    st.pyplot(figure, width="stretch")
-                    plt.close(figure)
-            with right:
-                figure = _tier_figure(filtered)
-                st.pyplot(figure, width="stretch")
-                plt.close(figure)
-
             joined = filtered.merge(
                 stability[
                     [
@@ -643,52 +925,48 @@ def main() -> None:
                 ascending=[True, True, False],
                 na_position="last",
             )
-            st.subheader("후보를 골라 근거 확인")
-            stable_ids = set(
-                stability.loc[
-                    stability["all_scenario_top_5"].fillna(False),
-                    "candidate_id",
-                ]
-            )
-            option_frame = filtered.assign(
-                stable_top5=filtered["candidate_id"].isin(stable_ids)
-            ).sort_values(
+            option_frame = filtered.sort_values(
                 [
-                    "stable_top5",
                     "scenario_ranking_eligible",
                     "priority_tier_order",
                     "account_original_budget",
                 ],
-                ascending=[False, False, True, False],
+                ascending=[False, True, False],
             )
-            option_ids = option_frame["candidate_id"].tolist()
             option_labels = {
                 row.candidate_id: (
+                    f"{MINISTRY_LABELS.get(str(row.ministry_code), row.ministry_code)} · "
                     f"{int(row.fiscal_year)} {row.performance_program_name} / "
                     f"{_format_account(row.account_type)}"
                 )
                 for row in option_frame.itertuples()
             }
             selected_id = st.selectbox(
-                "후보 선택",
-                option_ids,
+                "확인할 후보",
+                option_frame["candidate_id"].tolist(),
                 format_func=lambda value: option_labels[value],
+                key="selected_candidate",
             )
             row = candidates.loc[candidates["candidate_id"].eq(selected_id)].iloc[0]
-            st.write(
-                f"**점검 단계:** {TIER_LABELS.get(row['priority_tier'], row['priority_tier'])}"
+            tier_label = TIER_LABELS.get(row["priority_tier"], row["priority_tier"])
+            st.info(
+                f"**{tier_label}** · {_reason_text(row['priority_reason'])}",
+                icon=":material/flag:",
             )
-            st.write(f"**점검 근거:** {_reason_text(row['priority_reason'])}")
-            detail_metrics = st.columns(4)
             component_specs = [
-                ("성과미달 비중", "performance_gap"),
-                ("집행관리 신호", "execution_management"),
-                ("성과·예산 불일치", "budget_performance_mismatch"),
-                ("재정영향도", "fiscal_impact"),
+                ("성과", row.get("performance_gap")),
+                ("집행", row.get("execution_management")),
+                ("예산 흐름", row.get("budget_performance_mismatch")),
+                ("재정 규모", row.get("fiscal_impact")),
             ]
-            for column, (label, field) in zip(detail_metrics, component_specs, strict=True):
-                value = pd.to_numeric(pd.Series([row.get(field)]), errors="coerce").iloc[0]
-                column.metric(label, "자료 없음" if pd.isna(value) else f"{value:.2f}")
+            with st.container(horizontal=True):
+                for label, value in component_specs:
+                    metric_value, help_text = _component_summary(label, value)
+                    st.metric(label, metric_value, help=help_text, border=True)
+            st.caption(
+                "성과는 목표 미달 지표 비중, 집행은 현재·반복 집행 신호, 예산 흐름은 "
+                "성과와 예산 증감의 불일치, 재정 규모는 비교집단 내 본예산 위치입니다."
+            )
 
             candidate_scores = scores.loc[scores["candidate_id"].eq(selected_id)].copy()
             if candidate_scores.empty:
@@ -698,16 +976,20 @@ def main() -> None:
                 candidate_scores = candidate_scores.rename(
                     columns={
                         "scenario_score": "탐색점수",
-                        "scenario_rank_average": "순위",
+                        "scenario_rank_average": "전체순위",
+                        "scenario_rank_average_within_ministry": "부처내순위",
                     }
                 )
                 st.dataframe(
-                    candidate_scores[["시나리오", "탐색점수", "순위"]].sort_values("순위"),
+                    candidate_scores[
+                        ["시나리오", "탐색점수", "전체순위", "부처내순위"]
+                    ].sort_values("전체순위"),
                     hide_index=True,
                     width="stretch",
                     column_config={
                         "탐색점수": st.column_config.NumberColumn(format="%.3f"),
-                        "순위": st.column_config.NumberColumn(format="%.1f"),
+                        "전체순위": st.column_config.NumberColumn(format="%.1f"),
+                        "부처내순위": st.column_config.NumberColumn(format="%.1f"),
                     },
                 )
             st.caption(
@@ -720,13 +1002,11 @@ def main() -> None:
                 )
             )
             projects = drilldown.loc[drilldown["candidate_id"].eq(selected_id)].copy()
-            st.subheader("세부사업 재정 원인")
-            if projects.empty:
-                st.info("세부사업 원인표는 현재 전 시나리오 Top 5 후보에만 준비되어 있습니다.")
-            else:
+            if not projects.empty:
+                st.subheader("세부사업 재정 원인")
                 st.warning(
-                    "프로그램 성과미달을 아래 세부사업의 성과로 귀속하지 않습니다. "
-                    "아래 표는 예산구성·집행·이월·불용 원인을 확인하는 용도입니다."
+                    "아래 표는 재정 원인만 확인합니다. 프로그램 성과를 세부사업 성과로 "
+                    "귀속하지 않습니다."
                 )
                 total_remaining = float(projects["project_remaining_amount"].sum())
                 top_remaining = float(projects["project_remaining_amount"].max())
@@ -771,7 +1051,25 @@ def main() -> None:
                         "불용(억원)": st.column_config.NumberColumn(format="%.1f"),
                     },
                 )
-            with st.expander("현재 필터의 전체 후보표와 CSV"):
+            action_columns = st.columns(2)
+            action_columns[0].button(
+                "기준을 바꿨을 때 순위 확인",
+                icon=":material/compare_arrows:",
+                on_click=_go_to_step,
+                args=("4. 기준 비교",),
+                width="stretch",
+            )
+            action_columns[1].button(
+                "이 프로그램 PDF 원문 확인",
+                icon=":material/description:",
+                on_click=_go_to_review,
+                args=(str(row["performance_program_name"]), str(row["ministry_code"])),
+                width="stretch",
+            )
+            with st.expander(
+                "현재 필터의 전체 후보표와 CSV",
+                icon=":material/table_chart:",
+            ):
                 display_table = _table_view(joined)
                 st.dataframe(
                     display_table,
@@ -787,58 +1085,244 @@ def main() -> None:
                 st.download_button(
                     "현재 후보표 CSV 내려받기",
                     display_table.to_csv(index=False).encode("utf-8-sig"),
-                    file_name="mss_priority_candidates_filtered.csv",
+                    file_name="three_ministry_priority_candidates_filtered.csv",
                     mime="text/csv",
+                    icon=":material/download:",
                 )
 
-    with scenario_tab:
-        if filtered_scores.empty:
-            st.warning("현재 필터에는 시나리오 순위 적격 후보가 없습니다.")
+    elif workflow_step == "4. 기준 비교":
+        eligible = filtered_all.loc[filtered_all["scenario_ranking_eligible"].fillna(False)].copy()
+        eligible_stability = stability.loc[
+            stability["candidate_id"].isin(eligible["candidate_id"])
+        ].copy()
+        eligible_scores = scores.loc[scores["candidate_id"].isin(eligible["candidate_id"])].copy()
+        st.subheader("기준을 바꿔도 계속 상위인지 확인합니다")
+        if eligible_scores.empty:
+            st.warning("현재 필터에는 순위를 비교할 수 있는 후보가 없습니다.")
         else:
+            rank_options = ["3개 부처 전체"]
+            if len(selected_ministries) == 1:
+                rank_options.append("선택 부처 내부")
+            rank_basis = st.segmented_control(
+                "순위 기준",
+                rank_options,
+                default=rank_options[0],
+            )
+            within_ministry = rank_basis == "선택 부처 내부"
+            scenario = st.selectbox(
+                "강조할 기준",
+                list(SCENARIO_LABELS),
+                format_func=lambda value: SCENARIO_LABELS[value],
+            )
             left, right = st.columns(2)
             with left:
-                scenario = st.selectbox(
-                    "상위 후보 시나리오",
-                    list(SCENARIO_LABELS),
-                    format_func=lambda value: SCENARIO_LABELS[value],
+                figure = _rank_range_figure(
+                    eligible_stability,
+                    within_ministry=within_ministry,
                 )
-                figure = _scenario_top_figure(filtered_scores, scenario)
                 st.pyplot(figure, width="stretch")
                 plt.close(figure)
+                st.caption("선이 짧을수록 네 기준을 바꿔도 순위가 안정적입니다.")
             with right:
+                figure = _scenario_top_figure(
+                    eligible_scores,
+                    scenario,
+                    within_ministry=within_ministry,
+                )
+                st.pyplot(figure, width="stretch")
+                plt.close(figure)
+                st.caption("점수는 선택한 기준 안에서 후보를 정렬하기 위한 값입니다.")
+            st.warning(
+                f"전체 164행 기준 공통 Top 5는 {top_k['5']['intersection_count']}행입니다. "
+                "특정 기준의 1~5위를 최종 순위로 확정하지 마세요.",
+                icon=":material/warning:",
+            )
+            with st.expander(
+                "전체 164행의 순위 안정성 근거",
+                icon=":material/analytics:",
+            ):
                 figure = _spearman_figure(data["spearman"])
                 st.pyplot(figure, width="stretch")
                 plt.close(figure)
-            all_overlap = data["overlap"].loc[
-                data["overlap"]["comparison_type"].eq("ALL_SCENARIOS")
-            ]
-            overlap_columns = st.columns(len(all_overlap))
-            for column, row in zip(overlap_columns, all_overlap.itertuples(), strict=True):
-                column.metric(
-                    f"Top {int(row.top_k)} 공통/합집합",
-                    f"{int(row.intersection_count)} / {int(row.union_count)}",
-                    delta=f"Jaccard {float(row.jaccard_overlap):.2f}",
-                    delta_color="off",
-                )
-            st.caption(
-                "순위상관과 Top K 중복은 전체 38개 순위 적격 행 기준입니다. "
-                "상위 5행은 3개 고유 프로그램의 여러 연도·회계를 포함합니다."
-            )
+                all_overlap = data["overlap"].loc[
+                    data["overlap"]["comparison_type"].eq("ALL_SCENARIOS")
+                ]
+                overlap_columns = st.columns(len(all_overlap))
+                for column, overlap_row in zip(
+                    overlap_columns,
+                    all_overlap.itertuples(),
+                    strict=True,
+                ):
+                    column.metric(
+                        f"Top {int(overlap_row.top_k)} 공통/합집합",
+                        f"{int(overlap_row.intersection_count)} / {int(overlap_row.union_count)}",
+                        delta=f"Jaccard {float(overlap_row.jaccard_overlap):.2f}",
+                        delta_color="off",
+                    )
 
-    with quality_tab:
-        review = candidates.loc[candidates["data_validation_signal"].fillna(False)].copy()
-        st.subheader(f"정책 신호보다 먼저 확인할 데이터 검증 {len(review)}행")
-        st.dataframe(
-            _table_view(
-                review.sort_values(["fiscal_year", "performance_program_name", "account_type"])
-            ),
-            hide_index=True,
-            width="stretch",
-        )
+    elif workflow_step == "5. 원문 검수":
+        st.subheader("발표에 쓸 성과지표만 PDF 원문으로 확인합니다")
         st.caption(
-            "재정 연결 제한 또는 프로그램 매칭 검토 행은 순위에서 제외했으며 "
-            "결측을 0점으로 대체하지 않았습니다."
+            "수기값과 PDF값을 나란히 보고 검수 결과를 별도 감사 CSV에 저장합니다. "
+            "원본 PDF와 자동 추출값은 덮어쓰지 않습니다."
         )
+        try:
+            queue = load_pdf_review_queue()
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            st.error(str(exc))
+        else:
+            review_base = queue.loc[
+                queue["ministry_code"].isin(selected_ministries)
+                & queue["fiscal_year"].isin(selected_years)
+            ].copy()
+            focus_program = st.session_state.get("review_program_filter")
+            focus_ministry = st.session_state.get("review_ministry_filter")
+            if focus_program:
+                review_base = review_base.loc[
+                    review_base["performance_program_name"].eq(focus_program)
+                    & review_base["ministry_code"].eq(focus_ministry)
+                ]
+                st.info(
+                    f"후보 분석에서 선택한 **{focus_program}** 프로그램의 지표만 보고 있습니다.",
+                    icon=":material/filter_alt:",
+                )
+                st.button(
+                    "프로그램 필터 해제",
+                    icon=":material/filter_alt_off:",
+                    on_click=_clear_review_focus,
+                )
+
+            completed = int(review_base["review_status"].isin(["CONFIRMED", "CORRECTED"]).sum())
+            with st.container(horizontal=True):
+                st.metric("검수 대상", f"{len(review_base):,}", border=True)
+                st.metric("사람 검수 완료", f"{completed:,}", border=True)
+                st.metric(
+                    "OCR 확인 필요",
+                    f"{review_base['overall_reconciliation_status'].eq('OCR_REQUIRED').sum():,}",
+                    border=True,
+                )
+                st.metric(
+                    "불일치·모호",
+                    (
+                        review_base["overall_reconciliation_status"]
+                        .isin(["VALUE_MISMATCH", "AMBIGUOUS"])
+                        .sum()
+                    ),
+                    border=True,
+                )
+            progress = 0.0 if review_base.empty else completed / len(review_base)
+            st.progress(progress, text=f"사람 검수 진행률 {progress:.1%}")
+            unresolved_only = st.toggle("검수하지 않은 지표만 보기", value=True)
+            review_queue = review_base.copy()
+            if unresolved_only:
+                review_queue = review_queue.loc[
+                    ~review_queue["review_status"].isin(
+                        ["CONFIRMED", "CORRECTED", "NOT_RESOLVABLE"]
+                    )
+                ]
+            review_queue = review_queue.sort_values(
+                ["overall_reconciliation_status", "ministry_code", "fiscal_year"]
+            )
+            if review_queue.empty:
+                st.success("현재 필터에서 남은 검수행이 없습니다.")
+            else:
+                labels = {
+                    row.source_indicator_id: (
+                        f"{MINISTRY_LABELS.get(str(row.ministry_code), row.ministry_code)} · "
+                        f"{int(row.fiscal_year)} · {row.performance_program_name} · "
+                        f"{row.manual_indicator_name_report} "
+                        f"[{row.overall_reconciliation_status}]"
+                    )
+                    for row in review_queue.itertuples()
+                }
+                selected_review_id = st.selectbox(
+                    "검수할 성과지표",
+                    review_queue["source_indicator_id"].tolist(),
+                    format_func=lambda value: labels[value],
+                )
+                review_row = review_queue.loc[
+                    review_queue["source_indicator_id"].eq(selected_review_id)
+                ].iloc[0]
+                st.info(
+                    str(review_row.get("review_instruction") or "근거 페이지 안내 없음"),
+                    icon=":material/find_in_page:",
+                )
+                comparison = pd.DataFrame(
+                    {
+                        "확인할 값": ["지표명", "계획 목표", "보고 목표", "실적", "공식 달성률"],
+                        "수기 입력": [
+                            review_row.get("manual_indicator_name_report"),
+                            review_row.get("manual_planned_target_raw"),
+                            None,
+                            review_row.get("manual_actual_value_raw"),
+                            review_row.get("manual_official_achievement_rate_raw"),
+                        ],
+                        "PDF 자동 추출": [
+                            review_row.get("pdf_report_indicator_name"),
+                            review_row.get("pdf_plan_target_raw"),
+                            review_row.get("pdf_report_target_raw"),
+                            review_row.get("pdf_report_actual_raw"),
+                            review_row.get("pdf_report_official_achievement_rate_raw"),
+                        ],
+                    }
+                )
+                st.dataframe(comparison, hide_index=True, width="stretch")
+                pages = review_page_specs(review_row)
+                if not pages:
+                    st.warning("자동으로 특정된 원문 페이지가 없습니다. 검수 사유를 확인해 주세요.")
+                else:
+                    page_columns = st.columns(min(len(pages), 3))
+                    for column, (label, source_file, page) in zip(
+                        page_columns, pages[:3], strict=True
+                    ):
+                        with column:
+                            try:
+                                image = render_pdf_page(PROJECT_ROOT, source_file, page)
+                            except (FileNotFoundError, OSError, ValueError) as exc:
+                                st.error(str(exc))
+                            else:
+                                st.image(
+                                    image,
+                                    caption=f"{label} · {page}쪽",
+                                    width="stretch",
+                                )
+                with st.expander("자동 판정과 추출 근거", icon=":material/code:"):
+                    st.write(f"자동 판정: {review_row['overall_reconciliation_status']}")
+                    st.write(f"검수 사유: {review_row.get('review_reason')}")
+                    st.code(str(review_row.get("report_source_text") or "보고서 추출 텍스트 없음"))
+
+                with st.form("pdf_review_form"):
+                    reviewer = st.text_input("검수자")
+                    review_status = st.selectbox(
+                        "검수 결과",
+                        [value for value in REVIEW_STATUS_VALUES if value],
+                        index=1,
+                        format_func=lambda value: REVIEW_STATUS_LABELS[value],
+                    )
+                    review_note = st.text_area(
+                        "검수 메모",
+                        placeholder="확인한 파일·쪽·값과 수정 이유를 적어 주세요.",
+                    )
+                    submitted = st.form_submit_button(
+                        "저장하고 다음 지표 보기",
+                        type="primary",
+                        icon=":material/save:",
+                    )
+                if submitted:
+                    try:
+                        upsert_manual_review_confirmation(
+                            PROJECT_ROOT / DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH,
+                            source_indicator_id=selected_review_id,
+                            reviewer=reviewer,
+                            review_status=review_status,
+                            review_note=review_note,
+                        )
+                    except (OSError, ValueError) as exc:
+                        st.error(str(exc))
+                    else:
+                        load_pdf_review_queue.clear()
+                        st.session_state["review_saved"] = True
+                        st.rerun()
 
     with st.expander("분석 정의와 출처"):
         st.markdown(
@@ -846,14 +1330,14 @@ def main() -> None:
             - **분석 단위:** 부처 × 프로그램 × 회계연도 × 회계유형
             - **시나리오:** 균등가중, 성과중심, 집행중심, 재정영향 보정
             - **금지 해석:** 실패·낭비·삭감 대상 자동 판정
-             - **원천:** 중기부 수기 검수 성과표와 검증된 M3 재정 신호
-             - **드릴다운:** 안정 상위 5행의 세부사업 94행, 금액 합계 보존
-             - **제한:** 성과지표 유형·자율평가 의견 미포함, 특별회계 소표본
-             - **현재 상태:** 중기부 파일럿 발표용 초안, 최종 통합 대시보드 아님
+             - **원천:** 3개 부처 수기 성과표, PDF 자동 대조 결과, 검증된 M3 재정 신호
+             - **전체/부처별:** 전체는 연도 내, 부처별은 부처·연도 내 재정규모 백분위 사용
+             - **제한:** 사람 PDF 검수·성과지표 유형·자율평가 의견 미반영
+             - **현재 상태:** 3개 부처 파일럿이며 최종 정책 순위가 아님
              """
         )
         st.code(
-            "fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite",
+            "fiscal-analytics analyze-three-ministry-priority-scenarios --root . --overwrite",
             language="powershell",
         )
         st.caption(f"분석 생성 시각(UTC): {summary.get('generated_at', '확인 불가')}")

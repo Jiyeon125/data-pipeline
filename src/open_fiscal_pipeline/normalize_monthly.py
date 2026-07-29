@@ -21,50 +21,45 @@ AMOUNT_FIELD_MAP: dict[str, str] = {
     "THISM_AGGR_EP_NAMT": "cumulative_net_expenditure_amount",
 }
 
-# VWFOEM2 공식 출력항목 설명이 저장소에 없어, 동일 필드명을 쓰는 관련 Open API
-# (예금보험공사 일별 상환기금 운용상황) 및 부처 월별 집행 공개표 표기를 잠정 참고합니다.
-# mentoring_amount_type / aggregation_basis는 docs/MENTORING_GUIDE.md §6 금액유형 체계와의
-# 잠정 대응이며, 공식 명세 확인 전까지 확정값이 아닙니다.
+# VWFOEM2 공식 명세와 열린재정 월별 집행 화면의 회계·기금 공통 정의를 따릅니다.
+# 원 단위는 API-결산 금액 배수 검증으로 확인했습니다.
 AMOUNT_FIELD_MEANINGS: dict[str, dict[str, str]] = {
     "ANEXP_BDG_AMT": {
         "provisional_meaning": "세출예산액(원)",
-        "confidence": "provisional",
-        "basis": "관련 Open API(일별 상환기금) anexpBdgamt 항목명 교차확인",
+        "confidence": "confirmed",
+        "basis": "VWFOEM2 공식 명세 ANEXP_BDG_AMT=예산액(세출예산금액), 원 단위 검증",
         "mentoring_amount_type": "national_assembly_final_budget_or_initial_plan",
         "aggregation_basis": "unspecified",
         "notes": "본예산·당초계획 후보. 예산현액과 혼합·대체 금지(§6)",
     },
     "ANEXP_BDG_CAMT": {
         "provisional_meaning": "세출예산현액(원)",
-        "confidence": "provisional",
-        "basis": "관련 Open API(일별 상환기금) anexpBdgCamt 항목명 교차확인",
+        "confidence": "confirmed",
+        "basis": "VWFOEM2 공식 명세 ANEXP_BDG_CAMT=예산현액(세출예산현액), 원 단위 검증",
         "mentoring_amount_type": "current_budget",
         "aggregation_basis": "unspecified",
-        "notes": "집행률 분모 후보(일반·특별회계). 본예산과 별도 보존(§6.2)",
+        "notes": "일반·특별회계 예산현액 및 기금 지출계획현액 대응 분모. 본예산과 별도 보존(§6.2)",
     },
     "EP_AMT": {
         "provisional_meaning": "당월 지출액(원)",
-        "confidence": "provisional",
-        "basis": (
-            "관련 Open API epAmt='당일지출금액'을 월별 API 맥락에 맞게 잠정 해석. "
-            "부처 공개표의 '당월 집행액' 표기와 대응"
-        ),
+        "confidence": "confirmed",
+        "basis": "VWFOEM2 공식 명세 EP_AMT=당월지출금액, 원 단위 검증",
         "mentoring_amount_type": "expenditure",
         "aggregation_basis": "monthly",
         "notes": "당월분. 누계·결산과 혼합 금지. 낮은 집행은 실패가 아니라 집행설명필요 신호(§10)",
     },
     "THISM_AGGR_EP_AMT": {
         "provisional_meaning": "당년도 누계 지출금액(총계, 원)",
-        "confidence": "provisional",
-        "basis": "관련 Open API thismAggrEpAmt='당년도누계지출금액(총계)' 교차확인",
+        "confidence": "confirmed",
+        "basis": "VWFOEM2 공식 명세 THISM_AGGR_EP_AMT=누계지출금액, 원 단위 검증",
         "mentoring_amount_type": "expenditure",
         "aggregation_basis": "gross_ytd",
         "notes": "총계. 순계·총지출과 혼용 금지(§6.4)",
     },
     "THISM_AGGR_EP_NAMT": {
         "provisional_meaning": "당년도 누계 지출금액(순계, 원)",
-        "confidence": "provisional",
-        "basis": "관련 Open API thismAggrEpNamt='당년도누계지출금액(순계)' 교차확인",
+        "confidence": "confirmed",
+        "basis": "VWFOEM2 공식 명세 THISM_AGGR_EP_NAMT=누계지출순계금액, 원 단위 검증",
         "mentoring_amount_type": "net_expenditure",
         "aggregation_basis": "net_ytd",
         "notes": "순계. 총계와 별도 컬럼으로만 보존하며 서로 대체하지 않음(§6.4)",
@@ -190,7 +185,9 @@ def parse_amount(value: Any) -> tuple[int | None, str | None, bool]:
         return None, text, False
 
 
-def extract_rows_from_document(document: dict[str, Any], *, service_name: str = "VWFOEM2") -> list[dict[str, Any]]:
+def extract_rows_from_document(
+    document: dict[str, Any], *, service_name: str = "VWFOEM2"
+) -> list[dict[str, Any]]:
     response = document.get("response", document)
     parsed = parse_api_payload(response, service_name=service_name)
     return list(parsed.records)
@@ -381,16 +378,20 @@ def apply_validation_flags(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     # 5) 중복 복합키 — 완전 동일 / 금액 상이 구분
     key_cols = list(COMPOSITE_KEY_FIELDS)
     amount_cols = list(AMOUNT_FIELD_MAP.values())
-    compare_cols = key_cols + amount_cols + [
-        "ministry_name",
-        "account_name",
-        "field_code",
-        "sector_code",
-        "program_name",
-        "activity_name",
-        "subactivity_name",
-        "masked_raw_values",
-    ]
+    compare_cols = (
+        key_cols
+        + amount_cols
+        + [
+            "ministry_name",
+            "account_name",
+            "field_code",
+            "sector_code",
+            "program_name",
+            "activity_name",
+            "subactivity_name",
+            "masked_raw_values",
+        ]
+    )
     result["_dup_count"] = result.groupby(key_cols, dropna=False)["source_file"].transform("count")
     result["duplicate_key_flag"] = result["_dup_count"] > 1
     for key, group in result[result["duplicate_key_flag"]].groupby(key_cols, dropna=False):
@@ -405,10 +406,7 @@ def apply_validation_flags(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
                 _issue_row(
                     row,
                     "duplicate_key",
-                    (
-                        f"데이터 불확실성: {detail}; "
-                        f"occurrences={int(row['_dup_count'])}; key={key}"
-                    ),
+                    (f"데이터 불확실성: {detail}; occurrences={int(row['_dup_count'])}; key={key}"),
                 )
             )
 
@@ -564,7 +562,7 @@ def build_normalization_summary(
     issues: pd.DataFrame,
     failed_files: Iterable[FailedFile],
 ) -> dict[str, Any]:
-    failed = [ {"path": item.path, "error": item.error} for item in failed_files ]
+    failed = [{"path": item.path, "error": item.error} for item in failed_files]
     if frame.empty:
         return {
             "created_at": datetime.now(UTC).isoformat(),
@@ -603,9 +601,7 @@ def build_normalization_summary(
         for item in parsed or []:
             masked_field_counts[str(item)] += 1
 
-    ministry_counts = (
-        frame.groupby("ministry_code", dropna=False).size().astype(int).to_dict()
-    )
+    ministry_counts = frame.groupby("ministry_code", dropna=False).size().astype(int).to_dict()
     year_counts = (
         frame.groupby(frame["fiscal_year"].astype("string"), dropna=False)
         .size()
@@ -613,7 +609,11 @@ def build_normalization_summary(
         .to_dict()
     )
     ministry_year = (
-        frame.assign(_my=frame["ministry_code"].astype("string") + ":" + frame["fiscal_year"].astype("string"))
+        frame.assign(
+            _my=frame["ministry_code"].astype("string")
+            + ":"
+            + frame["fiscal_year"].astype("string")
+        )
         .groupby("_my")
         .size()
         .astype(int)
@@ -640,12 +640,8 @@ def build_normalization_summary(
         "masked_field_counts": dict(masked_field_counts),
         "duplicate_key_row_count": int(frame["duplicate_key_flag"].sum()),
         "cumulative_decrease_count": int(frame["cumulative_decrease_flag"].sum()),
-        "execution_month_year_mismatch_count": int(
-            frame["execution_month_year_mismatch"].sum()
-        ),
-        "monthly_cumulative_mismatch_count": int(
-            frame["monthly_cumulative_mismatch_flag"].sum()
-        ),
+        "execution_month_year_mismatch_count": int(frame["execution_month_year_mismatch"].sum()),
+        "monthly_cumulative_mismatch_count": int(frame["monthly_cumulative_mismatch_flag"].sum()),
         "gross_net_difference_row_count": int(gross_net_diff.sum()),
         "manual_review_required_count": int(frame["manual_review_required"].sum()),
         "raw_vs_normalized_difference": int(raw_record_count - len(frame)),
@@ -888,9 +884,7 @@ def write_outputs(
 
     def _ensure_writable(path: Path) -> None:
         if path.exists() and not overwrite:
-            raise FileExistsError(
-                f"출력 파일이 이미 있습니다. --overwrite를 사용하세요: {path}"
-            )
+            raise FileExistsError(f"출력 파일이 이미 있습니다. --overwrite를 사용하세요: {path}")
 
     for fmt in formats:
         combined = output_dir / f"{stem}.{fmt if fmt == 'csv' else 'parquet'}"
@@ -910,9 +904,7 @@ def write_outputs(
 
     dictionary_path = output_dir / "data_dictionary.csv"
     _ensure_writable(dictionary_path)
-    pd.DataFrame(data_dictionary_rows()).to_csv(
-        dictionary_path, index=False, encoding="utf-8-sig"
-    )
+    pd.DataFrame(data_dictionary_rows()).to_csv(dictionary_path, index=False, encoding="utf-8-sig")
     written.append(dictionary_path)
 
     summary_path = output_dir / "normalization_summary.json"
@@ -956,12 +948,8 @@ def normalize_monthly(
         frame["execution_month"] = frame["execution_month"].astype("string")
         for column in AMOUNT_FIELD_MAP.values():
             frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
-        frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce").astype(
-            "Int64"
-        )
-        frame["source_page"] = pd.to_numeric(frame["source_page"], errors="coerce").astype(
-            "Int64"
-        )
+        frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce").astype("Int64")
+        frame["source_page"] = pd.to_numeric(frame["source_page"], errors="coerce").astype("Int64")
 
     frame, issues = apply_validation_flags(frame)
     summary = build_normalization_summary(

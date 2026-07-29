@@ -1654,6 +1654,43 @@ def load_manual_review_confirmations(path: Path) -> pd.DataFrame:
     return df
 
 
+def upsert_manual_review_confirmation(
+    path: Path,
+    *,
+    source_indicator_id: str,
+    reviewer: str,
+    review_status: str,
+    review_note: str,
+    review_confirmed_at: str | None = None,
+) -> pd.DataFrame:
+    """대시보드에서 한 건의 사람 검수 결과를 기존 감사 CSV에 안전하게 반영합니다."""
+    if not source_indicator_id.strip():
+        raise PdfReconciliationError("source_indicator_id는 비어 있을 수 없습니다.")
+    if not reviewer.strip():
+        raise PdfReconciliationError("검수자 이름은 비어 있을 수 없습니다.")
+    if review_status not in REVIEW_STATUS_VALUES or not review_status:
+        raise PdfReconciliationError(f"허용되지 않는 review_status입니다: {review_status}")
+    if not review_note.strip():
+        raise PdfReconciliationError("검수 메모는 비어 있을 수 없습니다.")
+
+    current = load_manual_review_confirmations(path)
+    row = {
+        "source_indicator_id": source_indicator_id.strip(),
+        "reviewer": reviewer.strip(),
+        "review_status": review_status,
+        "review_note": review_note.strip(),
+        "review_confirmed_at": review_confirmed_at or datetime.now(UTC).isoformat(),
+    }
+    current = current.loc[current["source_indicator_id"].ne(row["source_indicator_id"])].copy()
+    updated = pd.concat([current, pd.DataFrame([row])], ignore_index=True)
+    updated = updated.sort_values("source_indicator_id", kind="stable").reset_index(drop=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    updated.to_csv(temporary, index=False, encoding="utf-8-sig")
+    temporary.replace(path)
+    return updated
+
+
 def apply_manual_review_confirmations(
     result_df: pd.DataFrame, confirmations_df: pd.DataFrame
 ) -> pd.DataFrame:
@@ -2042,6 +2079,7 @@ def run_ministry_pdf_reconciliation(
     *,
     manual_parquet_path: Path | None = None,
     manual_excel_path: Path = Path("data/manual/LLM_문서구조화_3개부처_최종제출본.xlsx"),
+    manual_review_confirmations_path: Path = DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH,
     output_root: Path = Path("data/processed/performance/pdf_reconciliation"),
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -2081,6 +2119,11 @@ def run_ministry_pdf_reconciliation(
         plan_image_only_by_year=image_only,
         plan_max_page_count_by_year=max_pages,
     )
+    confirmations = load_manual_review_confirmations(manual_review_confirmations_path)
+    relevant = confirmations.loc[
+        confirmations["source_indicator_id"].isin(result_df["source_indicator_id"])
+    ]
+    result_df = apply_manual_review_confirmations(result_df, relevant)
     hashes_after = all_source_hashes(manual_excel_path, doc_specs)
     hashes_after[str(manual_parquet_path)] = sha256_file(manual_parquet_path)
 
@@ -2486,6 +2529,7 @@ __all__ = [
     "run_pdf_reconciliation",
     "select_plan_target",
     "sha256_file",
+    "upsert_manual_review_confirmation",
     "write_reconciliation_excel",
     "write_reconciliation_outputs",
 ]

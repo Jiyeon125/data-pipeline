@@ -1,0 +1,55 @@
+version: 1
+scope:
+  ministry_codes:
+    - "019"
+    - "075"
+    - "162"
+  start_year: 2022
+  end_year: 2024
+
+thresholds:
+  execution_strong: 0.80
+  execution_moderate: 0.90
+  repeated_moderate_weight: 0.50
+  repeated_year_end_weight: 0.50
+
+top_k:
+  - 5
+  - 10
+
+components:
+  - performance_gap
+  - execution_management
+  - budget_performance_mismatch
+  - fiscal_impact
+
+scenarios:
+  equal:
+    performance_gap: 0.25
+    execution_management: 0.25
+    budget_performance_mismatch: 0.25
+    fiscal_impact: 0.25
+  performance_focus:
+    performance_gap: 0.50
+    execution_management: 0.20
+    budget_performance_mismatch: 0.20
+    fiscal_impact: 0.10
+  execution_focus:
+    performance_gap: 0.20
+    execution_management: 0.50
+    budget_performance_mismatch: 0.20
+    fiscal_impact: 0.10
+  fiscal_impact_adjusted:
+    performance_gap: 0.20
+    execution_management: 0.20
+    budget_performance_mismatch: 0.20
+    fiscal_impact: 0.40
+
+interpretation:
+  status: exploratory
+  evidence_boundary: >
+    3개 부처 수기 성과표는 PDF 자동 대조까지만 끝났으며 사람 확정 전입니다.
+    순위는 파일럿 탐색 결과로만 사용하고 원문 검수 상태를 별도 표시합니다.
+  fiscal_impact_role: >
+    전체 순위는 연도 내 전체 3개 부처 예산 백분위, 부처별 순위는
+    부처-연도 내 예산 백분위를 사용합니다.

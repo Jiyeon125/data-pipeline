@@ -51,6 +51,7 @@ class PriorityScenarioPaths:
     config: Path
     output_dir: Path
     figure_dir: Path
+    figure_prefix: str = "mss_priority_scenario"
 
     @classmethod
     def from_root(cls, root: Path) -> PriorityScenarioPaths:
@@ -61,6 +62,18 @@ class PriorityScenarioPaths:
             config=root / "configs/mss_priority_scenarios.yaml",
             output_dir=root / "data/analytics/mss_priority_scenarios",
             figure_dir=root / "artifacts/figures/presentation",
+        )
+
+    @classmethod
+    def three_ministry_from_root(cls, root: Path) -> PriorityScenarioPaths:
+        return cls(
+            same_year_analysis=root / "data/analytics/three_ministry_same_year_budget_check/"
+            "program_year_account_type_check.csv",
+            financial_features=root / "data/analytics/m3/financial_signal_features.parquet",
+            config=root / "configs/three_ministry_priority_scenarios.yaml",
+            output_dir=root / "data/analytics/three_ministry_priority_scenarios",
+            figure_dir=root / "artifacts/figures/presentation",
+            figure_prefix="three_ministry_priority_scenario",
         )
 
 
@@ -129,7 +142,8 @@ def _weighted_share(part: pd.DataFrame, flag: str, weights: pd.Series) -> float:
 def aggregate_program_account_signals(
     features: pd.DataFrame,
     *,
-    ministry_code: str,
+    ministry_code: str | None = None,
+    ministry_codes: tuple[str, ...] | None = None,
     start_year: int,
     end_year: int,
 ) -> pd.DataFrame:
@@ -146,8 +160,15 @@ def aggregate_program_account_signals(
         },
         "M3 재정 신호 feature",
     )
+    if (ministry_code is None) == (ministry_codes is None):
+        raise PriorityScenarioError("ministry_code 또는 ministry_codes 중 하나만 지정해야 합니다.")
+    codes = (
+        (str(ministry_code).zfill(3),)
+        if ministry_code is not None
+        else tuple(str(code).zfill(3) for code in ministry_codes or ())
+    )
     source = features.loc[
-        features["ministry_code"].astype("string").eq(str(ministry_code))
+        features["ministry_code"].astype("string").str.zfill(3).isin(codes)
         & features["fiscal_year"].between(start_year, end_year)
         & features["program_code"].notna()
         & features["account_type"].notna()
@@ -504,30 +525,38 @@ def build_candidate_population(
         },
         "중기부 성과·재정 결합표",
     )
-    if analysis.duplicated(KEY).any():
-        raise PriorityScenarioError("중기부 성과·재정 결합표의 분석 키가 중복되었습니다.")
+    analysis = analysis.copy()
+    analysis["ministry_code"] = analysis["ministry_code"].astype("string")
+    analysis["program_code"] = analysis["program_code"].astype("string")
+    complete_key = analysis[KEY].notna().all(axis=1)
+    if analysis.loc[complete_key].duplicated(KEY).any():
+        raise PriorityScenarioError("성과·재정 결합표의 유효 분석 키가 중복되었습니다.")
 
-    merged = analysis.copy()
-    merged["ministry_code"] = merged["ministry_code"].astype("string")
-    merged["program_code"] = merged["program_code"].astype("string")
-    merged = merged.merge(
+    merged = analysis.loc[complete_key].merge(
         program_signals,
         on=KEY,
         how="left",
         validate="one_to_one",
         indicator="financial_signal_join_status",
     )
+    incomplete = analysis.loc[~complete_key].copy()
+    for column in program_signals.columns:
+        if column not in KEY:
+            incomplete[column] = pd.NA
+    incomplete["financial_signal_join_status"] = "left_only"
+    if not incomplete.empty:
+        merged = pd.concat(
+            [merged, incomplete.dropna(axis=1, how="all")],
+            ignore_index=True,
+        )
     joint = merged["analysis_status"].eq("JOINT_ANALYSIS")
-    if merged.loc[joint, "financial_signal_join_status"].ne("both").any():
-        missing = merged.loc[
-            joint & merged["financial_signal_join_status"].ne("both"), KEY
-        ].to_dict("records")
-        raise PriorityScenarioError(f"공동분석 행의 M3 재정 신호가 누락되었습니다: {missing}")
-    budget_difference = pd.to_numeric(
-        merged.loc[joint, "project_signal_budget"], errors="coerce"
-    ) - pd.to_numeric(merged.loc[joint, "account_original_budget"], errors="coerce")
-    if not budget_difference.fillna(0).eq(0).all():
-        raise PriorityScenarioError("성과 결합표와 M3 재정 신호의 본예산 합계가 다릅니다.")
+    signal_joined = merged["financial_signal_join_status"].eq("both")
+    merged["financial_signal_budget_difference"] = pd.to_numeric(
+        merged["project_signal_budget"], errors="coerce"
+    ) - pd.to_numeric(merged["account_original_budget"], errors="coerce")
+    merged["financial_signal_budget_reconciled"] = signal_joined & merged[
+        "financial_signal_budget_difference"
+    ].fillna(0).eq(0)
 
     comparable = pd.to_numeric(merged["comparable_rate_count"], errors="coerce")
     merged["performance_gap"] = (
@@ -579,10 +608,28 @@ def build_candidate_population(
         .rank(method="average", pct=True)
         .astype("Float64")
     )
+    merged["fiscal_impact_within_ministry"] = pd.Series(pd.NA, index=merged.index, dtype="Float64")
+    merged.loc[joint, "fiscal_impact_within_ministry"] = (
+        pd.to_numeric(
+            merged.loc[joint, "account_original_budget"],
+            errors="coerce",
+        )
+        .groupby(
+            [
+                merged.loc[joint, "ministry_code"],
+                merged.loc[joint, "fiscal_year"],
+            ]
+        )
+        .rank(method="average", pct=True)
+        .astype("Float64")
+    )
 
-    merged["data_validation_signal"] = merged["analysis_status"].ne("JOINT_ANALYSIS") | merged[
-        "type_data_validation_priority_budget_share"
-    ].fillna(0).gt(0)
+    merged["data_validation_signal"] = (
+        merged["analysis_status"].ne("JOINT_ANALYSIS")
+        | ~signal_joined
+        | ~merged["financial_signal_budget_reconciled"]
+        | merged["type_data_validation_priority_budget_share"].fillna(0).gt(0)
+    )
     merged["performance_signal"] = merged["performance_gap"].fillna(0).gt(0)
     merged["execution_signal"] = merged["execution_management"].fillna(0).gt(0)
     merged["budget_mismatch_signal"] = merged["budget_performance_mismatch"].fillna(0).gt(0)
@@ -632,12 +679,15 @@ def build_candidate_population(
     ] = "MULTIPLE_SIGNAL_REVIEW"
     merged.loc[merged["data_validation_signal"], "priority_tier"] = "DATA_REVIEW"
     merged["priority_reason"] = merged.apply(_build_priority_reason, axis=1)
+    program_identity = merged["program_code"].fillna(
+        merged["performance_program_name"].astype("string")
+    )
     merged["candidate_id"] = (
         merged["ministry_code"].fillna("NA").astype(str)
         + ":"
         + merged["fiscal_year"].astype(str)
         + ":"
-        + merged["program_code"].fillna("NA").astype(str)
+        + program_identity.fillna("NA").astype(str)
         + ":"
         + merged["account_type"].fillna("NA").astype(str)
     )
@@ -677,12 +727,18 @@ def score_scenarios(
                 "priority_tier",
                 "priority_reason",
                 "account_original_budget",
+                "fiscal_impact_within_ministry",
                 *COMPONENTS,
             ]
         ].copy()
         part["scenario"] = scenario
         part["scenario_score"] = sum(
             part[component].astype(float) * weight for component, weight in weights.items()
+        )
+        part["scenario_score_within_ministry"] = (
+            part["scenario_score"]
+            - part["fiscal_impact"].astype(float) * weights["fiscal_impact"]
+            + part["fiscal_impact_within_ministry"].astype(float) * weights["fiscal_impact"]
         )
         part["scenario_rank_min"] = part["scenario_score"].rank(method="min", ascending=False)
         part["scenario_rank_average"] = part["scenario_score"].rank(
@@ -691,6 +747,16 @@ def score_scenarios(
         part["scenario_rank_max"] = part["scenario_score"].rank(method="max", ascending=False)
         denominator = max(len(part) - 1, 1)
         part["scenario_rank_percentile"] = 1 - (part["scenario_rank_average"] - 1) / denominator
+        grouped = part.groupby("ministry_code")["scenario_score_within_ministry"]
+        part["scenario_rank_min_within_ministry"] = grouped.rank(method="min", ascending=False)
+        part["scenario_rank_average_within_ministry"] = grouped.rank(
+            method="average", ascending=False
+        )
+        part["scenario_rank_max_within_ministry"] = grouped.rank(method="max", ascending=False)
+        ministry_counts = part.groupby("ministry_code")["candidate_id"].transform("size")
+        part["scenario_rank_percentile_within_ministry"] = 1 - (
+            part["scenario_rank_average_within_ministry"] - 1
+        ) / (ministry_counts - 1).clip(lower=1)
         part["scenario_weights"] = json.dumps(weights, ensure_ascii=False, sort_keys=True)
         rows.append(part)
     result = pd.concat(rows, ignore_index=True).convert_dtypes()
@@ -737,6 +803,27 @@ def build_rank_stability(
     stability["scenario_rank_range"] = (
         stability["worst_scenario_rank"] - stability["best_scenario_rank"]
     )
+    within_rank_pivot = scenario_scores.pivot(
+        index="candidate_id",
+        columns="scenario",
+        values="scenario_rank_average_within_ministry",
+    )
+    stability = stability.merge(
+        within_rank_pivot[scenario_names].add_prefix("rank_within_ministry_").reset_index(),
+        on="candidate_id",
+        validate="one_to_one",
+    )
+    within_rank_columns = [f"rank_within_ministry_{name}" for name in scenario_names]
+    stability["mean_scenario_rank_within_ministry"] = stability[within_rank_columns].mean(axis=1)
+    stability["scenario_rank_std_within_ministry"] = stability[within_rank_columns].std(
+        axis=1, ddof=0
+    )
+    stability["best_scenario_rank_within_ministry"] = stability[within_rank_columns].min(axis=1)
+    stability["worst_scenario_rank_within_ministry"] = stability[within_rank_columns].max(axis=1)
+    stability["scenario_rank_range_within_ministry"] = (
+        stability["worst_scenario_rank_within_ministry"]
+        - stability["best_scenario_rank_within_ministry"]
+    )
     for top_k in config["top_k"]:
         k = int(top_k)
         top_membership = (
@@ -750,6 +837,19 @@ def build_rank_stability(
         stability[f"all_scenario_top_{k}"] = stability[f"top_{k}_scenario_count"].eq(
             len(scenario_names)
         )
+        within_top_membership = (
+            scenario_scores.assign(
+                in_top_k=scenario_scores["scenario_rank_min_within_ministry"].le(k)
+            )
+            .pivot(index="candidate_id", columns="scenario", values="in_top_k")[scenario_names]
+            .sum(axis=1)
+        )
+        stability[f"top_{k}_scenario_count_within_ministry"] = (
+            stability["candidate_id"].map(within_top_membership).astype("Int64")
+        )
+        stability[f"all_scenario_top_{k}_within_ministry"] = stability[
+            f"top_{k}_scenario_count_within_ministry"
+        ].eq(len(scenario_names))
     stability = stability.sort_values(
         ["mean_scenario_rank", "scenario_rank_std", "account_original_budget"],
         ascending=[True, True, False],
@@ -861,7 +961,9 @@ def _plot_rank_range(stability: pd.DataFrame, output: Path) -> None:
     _set_korean_font()
     plot = stability.head(15).sort_values("mean_scenario_rank", ascending=False).copy()
     labels = (
-        plot["fiscal_year"].astype(str)
+        plot["ministry_code"].astype(str)
+        + " · "
+        + plot["fiscal_year"].astype(str)
         + " "
         + plot["performance_program_name"].astype(str)
         + " / "
@@ -896,7 +998,7 @@ def _plot_rank_range(stability: pd.DataFrame, output: Path) -> None:
     ax.set_yticks(range(len(plot)), labels)
     ax.set_xlabel("시나리오 순위 (낮을수록 상위)")
     ax.set_title(
-        "중기부 점검 후보의 시나리오별 순위 범위",
+        "점검 후보의 시나리오별 순위 범위",
         loc="left",
         pad=30,
         fontweight="bold",
@@ -951,7 +1053,7 @@ def _plot_spearman_heatmap(
     ax.set_xticks(range(len(scenario_names)), labels, rotation=25, ha="right")
     ax.set_yticks(range(len(scenario_names)), labels)
     ax.set_title(
-        "중기부 점검 후보 시나리오 간 Spearman 순위상관",
+        "점검 후보 시나리오 간 Spearman 순위상관",
         loc="left",
         pad=30,
         fontweight="bold",
@@ -984,6 +1086,49 @@ def _build_summary(
         "spearman_rank_correlation",
     ]
     all_overlap = top_k_overlap.loc[top_k_overlap["comparison_type"].eq("ALL_SCENARIOS")]
+    scenario_names = list(config["scenarios"])
+    within_ministry: dict[str, Any] = {}
+    for code, score_part in scenario_scores.groupby("ministry_code", sort=True):
+        stability_part = stability.loc[stability["ministry_code"].eq(code)]
+        pivot = score_part.pivot(
+            index="candidate_id",
+            columns="scenario",
+            values="scenario_rank_average_within_ministry",
+        )[scenario_names]
+        correlations = [
+            float(pivot[left].corr(pivot[right], method="pearson"))
+            for left, right in combinations(scenario_names, 2)
+        ]
+        top_k_summary = {}
+        for raw_top_k in config["top_k"]:
+            top_k = int(raw_top_k)
+            sets = {
+                scenario: set(
+                    score_part.loc[
+                        score_part["scenario"].eq(scenario)
+                        & score_part["scenario_rank_min_within_ministry"].le(top_k),
+                        "candidate_id",
+                    ]
+                )
+                for scenario in scenario_names
+            }
+            intersection = set.intersection(*(sets[name] for name in scenario_names))
+            union = set.union(*(sets[name] for name in scenario_names))
+            top_k_summary[str(top_k)] = {
+                "intersection_count": len(intersection),
+                "union_count": len(union),
+                "jaccard_overlap": len(intersection) / len(union) if union else 1.0,
+            }
+        within_ministry[str(code)] = {
+            "eligible_rows": len(stability_part),
+            "minimum_off_diagonal_spearman": min(correlations),
+            "maximum_off_diagonal_spearman": max(correlations),
+            "rank_range_median": float(
+                stability_part["scenario_rank_range_within_ministry"].median()
+            ),
+            "rank_range_max": float(stability_part["scenario_rank_range_within_ministry"].max()),
+            "all_scenario_top_k": top_k_summary,
+        }
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "scope": config["scope"],
@@ -1018,6 +1163,7 @@ def _build_summary(
             },
             "rank_range_median": float(stability["scenario_rank_range"].median()),
             "rank_range_max": float(stability["scenario_rank_range"].max()),
+            "within_ministry": within_ministry,
         },
         "components": {
             "performance_gap": "below_target_count / comparable_rate_count",
@@ -1029,12 +1175,26 @@ def _build_summary(
                 "max(performance gap x rapid-increase budget share, "
                 "(1-performance gap) x rapid-decrease budget share)"
             ),
-            "fiscal_impact": "within-year percentile rank of original budget",
+            "fiscal_impact": (
+                "overall: within-year percentile; ministry view: within-ministry-year percentile"
+            ),
         },
         "scenario_weights": config["scenarios"],
         "unavailable_components": ["performance_indicator_type"],
         "validation": {
-            "analysis_key_unique": not candidates.duplicated(KEY).any(),
+            "analysis_key_unique": not candidates.loc[candidates[KEY].notna().all(axis=1)]
+            .duplicated(KEY)
+            .any(),
+            "candidate_id_unique": not candidates["candidate_id"].duplicated().any(),
+            "m3_signal_missing_rows": int(
+                candidates["financial_signal_join_status"].ne("both").sum()
+            ),
+            "m3_account_budget_mismatch_rows": int(
+                (
+                    candidates["financial_signal_join_status"].eq("both")
+                    & ~candidates["financial_signal_budget_reconciled"]
+                ).sum()
+            ),
             "joint_financial_signal_join_complete": bool(
                 candidates.loc[
                     candidates["analysis_status"].eq("JOINT_ANALYSIS"),
@@ -1070,7 +1230,7 @@ def _build_summary(
         "input_sha256": input_hashes,
         "interpretation_limits": [
             "성과지표 유형과 자율평가 의견은 현재 시나리오에 포함되지 않음",
-            "시나리오 순위는 중기부 수기 성과 표본의 탐색 결과이며 최종 정책 우선순위가 아님",
+            "시나리오 순위는 수기 성과 표본의 탐색 결과이며 최종 정책 우선순위가 아님",
             "프로그램 성과를 세부사업 성과로 귀속하지 않음",
             "사업규모는 위험 자체가 아니라 영향도 보정에만 사용",
             "동률을 보존하므로 상위 K 집합 크기는 K보다 클 수 있음",
@@ -1097,9 +1257,13 @@ def run_priority_scenario_analysis(
         dtype={"ministry_code": "string", "program_code": "string"},
     )
     features = pd.read_parquet(paths.financial_features)
+    ministry_codes = scope.get("ministry_codes")
     program_signals = aggregate_program_account_signals(
         features,
-        ministry_code=str(scope["ministry_code"]),
+        ministry_code=(str(scope["ministry_code"]) if ministry_codes is None else None),
+        ministry_codes=(
+            tuple(str(code) for code in ministry_codes) if ministry_codes is not None else None
+        ),
         start_year=int(scope["start_year"]),
         end_year=int(scope["end_year"]),
     )
@@ -1146,8 +1310,8 @@ def run_priority_scenario_analysis(
     }
     output_paths = tuple(paths.output_dir / name for name in output_map)
     summary_path = paths.output_dir / "analysis_summary.json"
-    rank_figure = paths.figure_dir / "mss_priority_scenario_rank_range.png"
-    spearman_figure = paths.figure_dir / "mss_priority_scenario_spearman.png"
+    rank_figure = paths.figure_dir / f"{paths.figure_prefix}_rank_range.png"
+    spearman_figure = paths.figure_dir / f"{paths.figure_prefix}_spearman.png"
     targets = (*output_paths, summary_path, rank_figure, spearman_figure)
     existing = [path for path in targets if path.exists()]
     if existing and not overwrite:

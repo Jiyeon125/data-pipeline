@@ -922,6 +922,41 @@ def test_load_manual_review_confirmations_rejects_duplicate_ids(tmp_path) -> Non
         pr.load_manual_review_confirmations(path)
 
 
+def test_upsert_manual_review_confirmation_adds_and_replaces_one_row(tmp_path) -> None:
+    path = tmp_path / "confirmations.csv"
+    pr.upsert_manual_review_confirmation(
+        path,
+        source_indicator_id="MOEL-2022-I1-01",
+        reviewer="검수자",
+        review_status="CONFIRMED",
+        review_note="원문과 일치",
+        review_confirmed_at="2026-07-29T10:00:00+00:00",
+    )
+    updated = pr.upsert_manual_review_confirmation(
+        path,
+        source_indicator_id="MOEL-2022-I1-01",
+        reviewer="검수자",
+        review_status="CORRECTED",
+        review_note="목표치 수정 필요",
+        review_confirmed_at="2026-07-29T11:00:00+00:00",
+    )
+    assert len(updated) == 1
+    assert updated.loc[0, "review_status"] == "CORRECTED"
+    assert updated.loc[0, "review_note"] == "목표치 수정 필요"
+    assert pr.load_manual_review_confirmations(path).equals(updated)
+
+
+def test_upsert_manual_review_confirmation_requires_reviewer_and_note(tmp_path) -> None:
+    with pytest.raises(pr.PdfReconciliationError, match="검수자"):
+        pr.upsert_manual_review_confirmation(
+            tmp_path / "confirmations.csv",
+            source_indicator_id="MOEL-2022-I1-01",
+            reviewer="",
+            review_status="CONFIRMED",
+            review_note="원문과 일치",
+        )
+
+
 def test_apply_manual_review_confirmations_merges_by_id_without_touching_others() -> None:
     result_df = pd.DataFrame(
         [

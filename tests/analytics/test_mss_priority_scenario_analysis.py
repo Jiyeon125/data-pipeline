@@ -100,6 +100,8 @@ def test_manual_scenario_rank_stability() -> None:
     assert len(stability) == 2
     assert scores.groupby("candidate_id")["scenario"].nunique().eq(len(scenarios)).all()
     assert scores["scenario_score"].between(0, 1).all()
+    assert scores["scenario_rank_average"].equals(scores["scenario_rank_average_within_ministry"])
+    assert stability["scenario_rank_range"].equals(stability["scenario_rank_range_within_ministry"])
     assert len(spearman) == len(scenarios) ** 2
     assert overlap["comparison_type"].eq("ALL_SCENARIOS").sum() == 1
 

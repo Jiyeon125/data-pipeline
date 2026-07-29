@@ -99,3 +99,17 @@ data/processed/performance/pdf_reconciliation/ministry_code=<부처코드>/
 2. 공식 프로그램코드를 원문 또는 공식 프로그램 체계표에서 보완합니다.
 3. 확정된 행만 분석용 성과 마스터로 승격한 뒤 재정 마스터와 다시 연결합니다.
 4. 그다음 복수 시나리오 우선순위와 대시보드에 반영합니다.
+
+## 2026-07-29 후속 연결
+
+- `src/fiscal_dashboard/app.py`에 `성과 원문 검수` 탭을 추가했습니다.
+- 361행을 부처·미검수 여부로 필터링하고, 수기값·PDF값·자동 판정·근거
+  페이지 이미지를 같은 화면에서 확인할 수 있습니다.
+- 검수 결과는 기존
+  `data/manual/performance/pdf_reconciliation_manual_confirmations.csv`에
+  검수자·상태·메모·시각으로 저장됩니다.
+- 현재 3개 부처 사람 확정은 `0/361행`입니다. 따라서 자동 대조 완료와 사람
+  원문 검수 완료를 구분하며, `quality.three-ministry-source-reconciliation`
+  작업은 미완료 상태로 유지합니다.
+- 성과·재정 결합과 탐색 순위 결과는
+  `docs/THREE_MINISTRY_PRIORITY_AND_HITL_ANALYSIS.md`에 별도로 기록했습니다.
