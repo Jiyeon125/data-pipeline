@@ -69,7 +69,7 @@ def test_financial_v1_reconciles_and_applies_general_account_rule(
     assert result.summary["data_dictionary_column_count"] == result.summary["table_column_count"]
 
 
-def test_financial_v1_uses_monthly_current_amount_for_fund(tmp_path: Path) -> None:
+def test_financial_v1_restricts_unconfirmed_fund_denominator(tmp_path: Path) -> None:
     financial_path = tmp_path / "financial.parquet"
     settlement_path = tmp_path / "settlement.parquet"
     project_id = "code:2024:019:02:1000:1100:1110"
@@ -123,5 +123,8 @@ def test_financial_v1_uses_monthly_current_amount_for_fund(tmp_path: Path) -> No
 
     row = result.frame.iloc[0]
     assert row["account_type"] == "FUND"
-    assert row["execution_denominator_amount"] == 2_000
-    assert row["execution_rate"] == 0.5
+    assert row["current_budget_amount"] == 2_000
+    assert pd.isna(row["execution_denominator_amount"])
+    assert pd.isna(row["execution_rate"])
+    assert row["execution_denominator_status"] == "UNCONFIRMED_FUND_PLAN_DENOMINATOR"
+    assert "UNCONFIRMED_FUND_PLAN_DENOMINATOR" in row["quality_issue_reasons"]

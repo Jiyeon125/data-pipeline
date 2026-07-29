@@ -315,10 +315,10 @@ def build_signal_features(
     exec_group_size = frame.groupby(peer_keys)["source_project_year_id"].transform("size")
     frame["execution_peer_group_size"] = exec_group_size
     p10 = frame.groupby(peer_keys)["execution_rate"].transform(
-        lambda values: pd.to_numeric(values, errors="coerce").quantile(0.10)
+        lambda values: pd.to_numeric(values, errors="coerce").dropna().astype(float).quantile(0.10)
     )
     p20 = frame.groupby(peer_keys)["execution_rate"].transform(
-        lambda values: pd.to_numeric(values, errors="coerce").quantile(0.20)
+        lambda values: pd.to_numeric(values, errors="coerce").dropna().astype(float).quantile(0.20)
     )
     peer_exec_valid = execution_valid & exec_group_size.ge(5)
     frame["peer_bottom_10_execution_flag"] = _nullable_flag(peer_exec_valid, execution.le(p10))
@@ -1891,8 +1891,8 @@ def build_m3_report(
             "![회계유형별 신호 구성](../artifacts/figures/m3/account_type_signal_composition.png)",
             "",
             (
-                "기금과 일반·특별회계는 집행률 분모가 다르므로 분리된 결과를 우선 해석해야 합니다. "
-                "소표본 비교집단은 병합하지 않았습니다."
+                "기금은 지출계획현액 분모가 미확정이므로 집행 신호와 순위에서 제외하고 "
+                "분모 검증 대상으로 유지했습니다. 소표본 비교집단은 병합하지 않았습니다."
             ),
             "",
             "## 11. 강건한 결과",

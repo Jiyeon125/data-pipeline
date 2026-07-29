@@ -137,7 +137,12 @@ def _issue_reasons(row: pd.Series) -> str:
     elif reconciliation == "NOT_COMPARABLE_DECEMBER_MISSING":
         reasons.append("DECEMBER_CUMULATIVE_MISSING")
     denominator = row.get("execution_denominator_status")
-    if denominator in {"MISSING_DENOMINATOR", "ZERO_DENOMINATOR", "UNSUPPORTED_ACCOUNT_TYPE"}:
+    if denominator in {
+        "MISSING_DENOMINATOR",
+        "ZERO_DENOMINATOR",
+        "UNSUPPORTED_ACCOUNT_TYPE",
+        "UNCONFIRMED_FUND_PLAN_DENOMINATOR",
+    }:
         reasons.append(denominator)
     execution_rate = row.get("execution_rate")
     if pd.notna(execution_rate) and float(execution_rate) > 2:
@@ -159,6 +164,12 @@ ISSUE_METADATA = {
         "HIGH",
         "결산 사업에 대응하는 예산·월별 기준 행이 없음",
         "코드 매칭 후보와 사업 계보 확인",
+    ),
+    "UNCONFIRMED_FUND_PLAN_DENOMINATOR": (
+        "DEFINITION",
+        "HIGH",
+        "기금 지출계획현액과 월별 예산현액 필드의 공식 대응 관계가 미확인",
+        "공식 필드 명세 확인 전 기금 집행률·집행 신호·순위에서 제외",
     ),
     "SETTLEMENT_DUPLICATE_KEY": (
         "GRAIN_UNIQUENESS",
@@ -305,23 +316,28 @@ def build_financial_v1(
     merged.loc[general_mask, "execution_denominator_source"] = (
         "project_settlement.settlement_current_budget_amount"
     )
-    merged.loc[fund_mask, "execution_denominator_amount"] = merged.loc[
-        fund_mask, "current_budget_amount"
-    ]
-    merged.loc[fund_mask, "execution_denominator_source"] = "project_month.current_budget_amount"
+    merged.loc[fund_mask, "execution_denominator_source"] = (
+        "UNCONFIRMED:project_month.current_budget_amount"
+    )
     denominator = merged["execution_denominator_amount"]
     numerator = merged["execution_numerator_amount"]
     merged["execution_denominator_status"] = "APPLIED"
+    merged.loc[fund_mask, "execution_denominator_status"] = "UNCONFIRMED_FUND_PLAN_DENOMINATOR"
     merged.loc[merged["account_type"] == "OTHER", "execution_denominator_status"] = (
         "UNSUPPORTED_ACCOUNT_TYPE"
     )
     merged.loc[
-        denominator.isna() & (merged["account_type"] != "OTHER"),
+        denominator.isna() & general_mask,
         "execution_denominator_status",
     ] = "MISSING_DENOMINATOR"
     merged.loc[denominator == 0, "execution_denominator_status"] = "ZERO_DENOMINATOR"
     merged["execution_rate"] = pd.NA
-    valid_rate = denominator.notna() & numerator.notna() & (denominator != 0)
+    valid_rate = (
+        merged["execution_denominator_status"].eq("APPLIED")
+        & denominator.notna()
+        & numerator.notna()
+        & (denominator != 0)
+    )
     merged.loc[valid_rate, "execution_rate"] = (
         numerator.loc[valid_rate] / denominator.loc[valid_rate]
     )

@@ -105,6 +105,17 @@ def test_signal_features_keep_independent_nullable_flags() -> None:
     assert pd.isna(result.loc[result["fiscal_year"].eq(2025), "strong_low_execution_flag"].iloc[0])
 
 
+def test_signal_features_accept_all_missing_execution_peer_group() -> None:
+    ranking = _ranking_rows()
+    ranking["execution_rate"] = pd.Series([pd.NA] * len(ranking), dtype="Float64")
+    ranking["execution_ranking_eligible"] = False
+
+    result = build_signal_features(ranking, _patterns(), _hhi())
+
+    assert result["peer_bottom_10_execution_flag"].isna().all()
+    assert result["peer_bottom_20_execution_flag"].isna().all()
+
+
 def test_monthly_boundary_retained_only_as_sensitivity() -> None:
     result = build_signal_features(_ranking_rows(), _patterns(), _hhi())
     boundary = result[result["fiscal_year"].eq(2022)].iloc[0]
@@ -174,7 +185,6 @@ def test_feedback_summary_keeps_missing_segment_as_explicit_group() -> None:
     result = feedback_summary(cohort, "T+1")
 
     missing = result[
-        result["segment_dimension"].eq("MINISTRY")
-        & result["segment_value"].eq("MISSING")
+        result["segment_dimension"].eq("MINISTRY") & result["segment_value"].eq("MISSING")
     ]
     assert len(missing) == 1

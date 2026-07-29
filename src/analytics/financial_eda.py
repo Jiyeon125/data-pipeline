@@ -967,8 +967,9 @@ def build_report(
         "## 6. 회계유형별 차이",
         "",
         (
-            f"회계유형-연도 집계는 {len(account):,}개 셀입니다. 기금은 확인된 지출계획현액, "
-            "일반·특별회계는 예산현액을 분모로 사용하므로 서로 같은 분포로 합치지 않았습니다."
+            f"회계유형-연도 집계는 {len(account):,}개 셀입니다. 일반·특별회계는 확인된 "
+            "예산현액을 분모로 사용했습니다. 기금은 지출계획현액과 원천 필드의 공식 대응이 "
+            "확인되지 않아 집행률 분포에서 제외하고 데이터 검증 대상으로 유지했습니다."
         ),
         "",
         "![회계유형별 집행률](../artifacts/figures/eda/account_type_execution_rate_distribution.png)",
@@ -1178,8 +1179,7 @@ def build_financial_eda(paths: EDAPaths) -> EDAResult:
     }
     validation = {
         "source_files_unchanged": before_hashes == after_hashes,
-        "broad_row_count_preserved": len(broad)
-        == int(_bool(v2, "in_broad_population").sum()),
+        "broad_row_count_preserved": len(broad) == int(_bool(v2, "in_broad_population").sum()),
         "core_row_count_preserved": len(core)
         == int(_bool(v2, "in_core_financial_population").sum()),
         "strict_row_count_preserved": len(strict)
