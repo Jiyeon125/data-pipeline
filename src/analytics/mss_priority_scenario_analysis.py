@@ -151,6 +151,7 @@ def aggregate_program_account_signals(
         features,
         {
             *KEY,
+            "account_type_classified",
             "project_id",
             "original_budget_analysis_amount",
             "rank_confidence",
@@ -175,6 +176,7 @@ def aggregate_program_account_signals(
     ].copy()
     source["ministry_code"] = source["ministry_code"].astype("string")
     source["program_code"] = source["program_code"].astype("string")
+    source["account_type"] = source["account_type_classified"].astype("string")
     if source["project_id"].duplicated().any():
         raise PriorityScenarioError("M3 재정 신호의 project_id가 중복되었습니다.")
 
@@ -265,6 +267,7 @@ def build_stable_top5_project_drilldown(
         features,
         {
             *KEY,
+            "account_type_classified",
             "project_id",
             "account_code",
             "account_name_budget_api",
@@ -337,6 +340,7 @@ def build_stable_top5_project_drilldown(
     source = features[feature_columns].copy()
     source["ministry_code"] = source["ministry_code"].astype("string").str.zfill(3)
     source["program_code"] = source["program_code"].astype("string")
+    source["account_type"] = features["account_type_classified"].astype("string")
     drilldown = source.merge(
         stable,
         on=KEY,
@@ -972,6 +976,7 @@ def _plot_rank_range(stability: pd.DataFrame, output: Path) -> None:
             {
                 "GENERAL_ACCOUNT": "일반회계",
                 "SPECIAL_ACCOUNT": "특별회계",
+                "RESPONSIBLE_OPERATION_ACCOUNT": "책임운영기관특별회계",
                 "FUND": "기금",
             }
         )

@@ -22,14 +22,19 @@ def test_dashboard_data_contract_and_filter() -> None:
         candidates,
         scope="순위 적격 후보",
         years=[2022, 2023, 2024],
-        account_types=["GENERAL_ACCOUNT", "SPECIAL_ACCOUNT", "FUND"],
+        account_types=[
+            "GENERAL_ACCOUNT",
+            "SPECIAL_ACCOUNT",
+            "RESPONSIBLE_OPERATION_ACCOUNT",
+            "FUND",
+        ],
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
 
     assert len(candidates) == 340
-    assert len(filtered) == 164
+    assert len(filtered) == 189
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape == (656, 26)
+    assert data["scores"].shape == (756, 26)
     assert data["drilldown"].empty
     assert not data["drilldown"]["project_performance_attributed"].any()
     assert not data["stability"]["candidate_id"].duplicated().any()
@@ -48,8 +53,8 @@ def test_dashboard_data_contract_and_filter() -> None:
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
     assert len(full) == 340
-    assert full["data_validation_signal"].sum() == 67
-    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 67
+    assert full["data_validation_signal"].sum() == 38
+    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 38
     assert _component_summary("성과", 0.5)[0] == "50%"
     assert stable_program_summary(candidates, data["stability"]).empty
 
@@ -69,9 +74,9 @@ def test_dashboard_default_render() -> None:
     assert app.segmented_control[0].value == "1. 시작"
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
         ("분석행", "340"),
-        ("점검 신호 있음", "209"),
-        ("순위 비교 가능", "164"),
-        ("데이터 먼저 확인", "67"),
+        ("점검 신호 있음", "221"),
+        ("순위 비교 가능", "189"),
+        ("데이터 먼저 확인", "38"),
     ]
     assert "이제 무엇을 하면 되는지 순서대로 보여드립니다" in [
         heading.value for heading in app.subheader
@@ -84,7 +89,7 @@ def test_dashboard_guided_steps_and_candidate_to_review() -> None:
     app.segmented_control[0].set_value("2. 데이터 확인").run()
     assert not app.exception
     assert "분석 전에 데이터부터 확인합니다" in [item.value for item in app.subheader]
-    assert any(frame.value.shape[0] == 67 for frame in app.dataframe)
+    assert any(frame.value.shape[0] == 38 for frame in app.dataframe)
 
     app.segmented_control[0].set_value("3. 후보 분석").run()
     assert not app.exception

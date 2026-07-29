@@ -30,6 +30,7 @@ MINISTRY_LABELS = {
 ACCOUNT_LABELS = {
     "GENERAL_ACCOUNT": "일반회계",
     "SPECIAL_ACCOUNT": "특별회계",
+    "RESPONSIBLE_OPERATION_ACCOUNT": "책임운영기관특별회계",
     "FUND": "기금",
     "NOT_AVAILABLE": "회계유형 미확인",
 }

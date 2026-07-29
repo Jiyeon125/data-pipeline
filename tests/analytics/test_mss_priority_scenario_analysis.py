@@ -51,6 +51,7 @@ def _manual_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
             "program_code": program,
             "fiscal_year": 2024,
             "account_type": "일반회계",
+            "account_type_classified": "일반회계",
             "project_id": f"project-{program}",
             "original_budget_analysis_amount": budget,
             "rank_confidence": "HIGH",
@@ -79,6 +80,21 @@ def test_manual_candidate_rules_and_budget_weighting() -> None:
     assert not candidates.loc["D", "review_candidate"]  # 규모만으로 후보를 만들지 않음
     assert candidates.loc["E", "priority_tier"] == "DATA_REVIEW"
     assert signals["project_signal_budget"].sum() == analysis["account_original_budget"].sum()
+
+
+def test_program_signals_use_classified_account_type() -> None:
+    _, features = _manual_inputs()
+    features.loc[0, "account_type"] = "SPECIAL_ACCOUNT"
+    features.loc[0, "account_type_classified"] = "RESPONSIBLE_OPERATION_ACCOUNT"
+
+    signals = aggregate_program_account_signals(
+        features.iloc[[0]],
+        ministry_code="102",
+        start_year=2024,
+        end_year=2024,
+    )
+
+    assert signals.loc[0, "account_type"] == "RESPONSIBLE_OPERATION_ACCOUNT"
 
 
 def test_manual_scenario_rank_stability() -> None:
@@ -138,6 +154,7 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
             "program_code": "2100",
             "fiscal_year": 2024,
             "account_type": "GENERAL_ACCOUNT",
+            "account_type_classified": "GENERAL_ACCOUNT",
             "project_id": project,
             "account_code": "110",
             "account_name_budget_api": "일반회계",
