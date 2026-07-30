@@ -57,6 +57,8 @@ REASON_LABELS = {
     "DATA_VALIDATION": "데이터 검증",
     "FINANCIAL_LINKAGE_LIMITED": "재정 연결 제한",
     "PROGRAM_MATCH_REVIEW": "프로그램 매칭 검토",
+    "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED": "프로그램 이관·삭제 확인",
+    "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM": "타부처 소관 재정 확인",
     "NO_REVIEW_SIGNAL": "점검 신호 없음",
 }
 FINANCIAL_SIGNAL_LABELS = {
@@ -73,10 +75,10 @@ FINANCIAL_SIGNAL_LABELS = {
     "NONE": "추가 재정신호 없음",
 }
 WORKFLOW_STEPS = [
-    "1. 시작",
-    "2. 데이터 확인",
-    "3. 후보 분석",
-    "4. 기준 비교",
+    "1. 전체 현황",
+    "2. 먼저 해결",
+    "3. 후보 살펴보기",
+    "4. 순위 안정성",
     "5. 원문 검수",
 ]
 REVIEW_STATUS_LABELS = {
@@ -569,6 +571,96 @@ def _data_review_table(frame: pd.DataFrame) -> pd.DataFrame:
     return table[columns]
 
 
+def _review_worklist(frame: pd.DataFrame) -> pd.DataFrame:
+    """데이터 검증행을 실제 확인할 프로그램 단위 작업으로 묶습니다."""
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "상태",
+                "부처",
+                "프로그램",
+                "대상연도",
+                "영향행",
+                "확인할 문제",
+                "다음 행동",
+                "순위 영향",
+            ]
+        )
+
+    review = frame.copy()
+    review["_program_key"] = review["program_name_normalized"].fillna(
+        review["performance_program_name"]
+    )
+
+    def classify(row: pd.Series) -> tuple[str, str, str]:
+        if row["analysis_status"] == "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED":
+            return (
+                "확인 완료",
+                "프로그램 이관·삭제",
+                "순위 제외를 유지하고 구조변경 근거만 보존",
+            )
+        if row["analysis_status"] == "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM":
+            return (
+                "확인 완료",
+                "타부처 소관 재정 프로그램",
+                "과기정통부 순위 제외를 유지하고 타부처 소관 근거 보존",
+            )
+        if row["analysis_status"] == "PROGRAM_MATCH_REVIEW":
+            issue = (
+                "프로그램 코드 후보가 여러 개"
+                if row["program_match_status"] == "MANUAL_REVIEW_MULTIPLE_MATCHES"
+                else "프로그램 코드 후보가 없음"
+            )
+            return (
+                "확인 필요",
+                issue,
+                "해당 연도 성과계획서 대상사업 표에서 공식 프로그램코드 확인",
+            )
+        if row["analysis_status"] == "FINANCIAL_LINKAGE_LIMITED":
+            return (
+                "확인 필요",
+                "성과 프로그램과 재정 세부사업 연결 제한",
+                "공식 프로그램코드와 세부사업 조인 키를 대조",
+            )
+        return (
+            "확인 필요",
+            "세부사업 재정 데이터 검증 신호",
+            "분모·매칭·집행 신호의 원인을 세부사업 자료에서 확인",
+        )
+
+    review[["상태", "확인할 문제", "다음 행동"]] = review.apply(
+        classify,
+        axis=1,
+        result_type="expand",
+    )
+    rows = []
+    for (_, program_key, status, issue, action), group in review.groupby(
+        ["ministry_code", "_program_key", "상태", "확인할 문제", "다음 행동"],
+        sort=False,
+        dropna=False,
+    ):
+        latest = group.sort_values("fiscal_year").iloc[-1]
+        rows.append(
+            {
+                "상태": status,
+                "부처": MINISTRY_LABELS.get(str(latest["ministry_code"]), latest["ministry_code"]),
+                "프로그램": latest["performance_program_name"],
+                "대상연도": ", ".join(
+                    str(year) for year in sorted(group["fiscal_year"].dropna().astype(int).unique())
+                ),
+                "영향행": len(group),
+                "확인할 문제": issue,
+                "다음 행동": action,
+                "순위 영향": "현재 순위 제외",
+            }
+        )
+    return pd.DataFrame(rows).sort_values(
+        ["상태", "부처", "프로그램"],
+        ascending=[False, True, True],
+        ignore_index=True,
+    )
+
+
 def _component_summary(label: str, value: object) -> tuple[str, str]:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
@@ -593,7 +685,7 @@ def _go_to_step(step: str) -> None:
 def _go_to_review(program_name: str, ministry_code: str) -> None:
     st.session_state["review_program_filter"] = program_name
     st.session_state["review_ministry_filter"] = ministry_code
-    _go_to_step("5. 원문 검수")
+    _go_to_step(WORKFLOW_STEPS[4])
 
 
 def _clear_review_focus() -> None:
@@ -692,12 +784,12 @@ def main() -> None:
         page_title="재정사업 점검 작업대",
         page_icon=":material/fact_check:",
         layout="wide",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
     )
     st.title("재정사업 점검 작업대")
     st.caption(
         "고용노동부·보건복지부·과학기술정보통신부 2022–2024 파일럿 · "
-        "데이터 확인부터 PDF 원문 검수까지 순서대로 진행합니다."
+        "데이터 문제 먼저 → 후보 근거 → 순위 안정성 → PDF 원문 검수 순서로 진행합니다."
     )
 
     try:
@@ -798,8 +890,8 @@ def main() -> None:
             border=True,
         )
 
-    if workflow_step == "1. 시작":
-        st.subheader("이제 무엇을 하면 되는지 순서대로 보여드립니다")
+    if workflow_step == WORKFLOW_STEPS[0]:
+        st.subheader("지금 해야 할 일부터 보여드립니다")
         st.info(
             "먼저 데이터 연결을 확인하고, 후보의 근거를 본 뒤, 기준을 바꿔도 "
             "순위가 유지되는지 확인합니다. 발표에 쓸 후보만 마지막에 PDF 원문을 검수합니다.",
@@ -817,10 +909,29 @@ def main() -> None:
         )
         total_reviews = 0 if queue is None else len(queue)
         status_columns = st.columns(4, border=True)
-        status_columns[0].metric("1. 결합 완료", f"{counts['analysis_rows']:,}행")
-        status_columns[0].caption("성과와 재정을 프로그램·연도·회계별로 연결했습니다.")
-        status_columns[1].metric("2. 데이터 확인", f"{counts['data_review_rows']:,}행 남음")
-        status_columns[1].caption("매칭이나 회계별 금액을 먼저 확인할 행입니다.")
+        review = filtered_all.loc[filtered_all["data_validation_signal"].fillna(False)].copy()
+        worklist = _review_worklist(review)
+        unresolved_work = worklist.loc[worklist["상태"].eq("확인 필요")]
+        resolved_rows = int(
+            review["analysis_status"]
+            .isin(
+                [
+                    "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED",
+                    "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM",
+                ]
+            )
+            .sum()
+        )
+        status_columns[0].metric(
+            "1. 재정 연결 완료",
+            f"{counts['joint_analysis_rows']:,}/{counts['analysis_rows']:,}행",
+        )
+        status_columns[0].caption("성과와 재정을 프로그램·연도·회계별로 연결한 결과입니다.")
+        status_columns[1].metric("2. 먼저 해결", f"{len(unresolved_work):,}개 작업")
+        status_columns[1].caption(
+            f"원본 {len(review):,}행을 프로그램별로 묶었습니다. "
+            f"구조변경·타부처 소관 확인 완료 {resolved_rows:,}행은 제외했습니다."
+        )
         status_columns[2].metric(
             "3. 순위 비교",
             f"{counts['scenario_ranking_eligible_rows']:,}행",
@@ -834,21 +945,42 @@ def main() -> None:
             f"{top_k['5']['union_count']}행입니다. 단일 최종 순위로 확정하지 않습니다.",
             icon=":material/warning:",
         )
+        if unresolved_work.empty:
+            st.success("현재 필터에는 먼저 해결할 데이터 작업이 없습니다.")
+        else:
+            st.markdown("#### 바로 이어서 할 작업")
+            st.dataframe(
+                unresolved_work.head(5),
+                hide_index=True,
+                width="stretch",
+                column_order=[
+                    "부처",
+                    "프로그램",
+                    "대상연도",
+                    "확인할 문제",
+                    "다음 행동",
+                    "순위 영향",
+                ],
+            )
+            st.caption(
+                f"상위 5개만 미리 보여드립니다. 전체 {len(unresolved_work):,}개 작업은 "
+                "‘2. 먼저 해결’에서 확인할 수 있습니다."
+            )
         action_columns = st.columns(4)
         for column, label, icon, step in (
-            (action_columns[0], "데이터부터 확인", ":material/database:", "2. 데이터 확인"),
-            (action_columns[1], "후보 근거 보기", ":material/search:", "3. 후보 분석"),
+            (action_columns[0], "먼저 해결할 일", ":material/database:", WORKFLOW_STEPS[1]),
+            (action_columns[1], "후보 근거 보기", ":material/search:", WORKFLOW_STEPS[2]),
             (
                 action_columns[2],
-                "기준 비교하기",
+                "순위 안정성 보기",
                 ":material/compare_arrows:",
-                "4. 기준 비교",
+                WORKFLOW_STEPS[3],
             ),
             (
                 action_columns[3],
                 "PDF 검수 시작",
                 ":material/description:",
-                "5. 원문 검수",
+                WORKFLOW_STEPS[4],
             ),
         ):
             column.button(
@@ -859,54 +991,71 @@ def main() -> None:
                 width="stretch",
             )
 
-    elif workflow_step == "2. 데이터 확인":
+    elif workflow_step == WORKFLOW_STEPS[1]:
         review = filtered_all.loc[filtered_all["data_validation_signal"].fillna(False)].copy()
-        st.subheader("분석 전에 데이터부터 확인합니다")
+        st.subheader("먼저 해결할 일을 프로그램 단위로 정리했습니다")
         st.caption(
-            "여기에 나온 행은 문제가 큰 사업이 아니라, 매칭이나 금액을 확인하기 전에는 "
-            "정책 순위에 넣으면 안 되는 행입니다."
+            "원본 행은 삭제하지 않고, 같은 프로그램의 여러 연도를 한 작업으로 묶었습니다. "
+            "여기 나온 프로그램은 문제가 큰 사업이 아니라 현재 순위에서 제외한 데이터 확인 대상입니다."
         )
         if review.empty:
             st.success("현재 필터에는 먼저 확인할 데이터가 없습니다.")
         else:
+            worklist = _review_worklist(review)
+            unresolved_work = worklist.loc[worklist["상태"].eq("확인 필요")]
+            resolved_work = worklist.loc[worklist["상태"].eq("확인 완료")]
             with st.container(horizontal=True):
-                st.metric("확인할 행", f"{len(review):,}", border=True)
+                st.metric("원본 확인행", f"{len(review):,}", border=True)
+                st.metric("실제 확인 작업", f"{len(unresolved_work):,}", border=True)
                 st.metric(
-                    "재정신호 미연결",
-                    f"{review['financial_signal_join_status'].ne('both').sum():,}",
+                    "프로그램코드 확인",
+                    f"{review['analysis_status'].eq('PROGRAM_MATCH_REVIEW').sum():,}행",
                     border=True,
                 )
                 st.metric(
-                    "회계별 본예산 불일치",
-                    (
-                        review["financial_signal_join_status"].eq("both")
-                        & ~review["financial_signal_budget_reconciled"].fillna(False)
-                    ).sum(),
+                    "확인 완료",
+                    f"{len(resolved_work):,}개",
                     border=True,
                 )
-                st.metric(
-                    "공동분석 제한",
-                    f"{review['analysis_status'].ne('JOINT_ANALYSIS').sum():,}",
-                    border=True,
-                )
+            chart_data = (
+                unresolved_work.groupby("부처", as_index=True)["영향행"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            if not chart_data.empty:
+                st.bar_chart(chart_data, horizontal=True, x_label="영향행", y_label="부처")
             st.dataframe(
-                _data_review_table(
-                    review.sort_values(["ministry_code", "fiscal_year", "performance_program_name"])
-                ),
+                worklist,
                 hide_index=True,
                 width="stretch",
                 column_config={
-                    "본예산 차이(억원)": st.column_config.NumberColumn(format="%.1f"),
+                    "영향행": st.column_config.NumberColumn(format="%d"),
                 },
             )
+            with st.expander(
+                f"원본 {len(review):,}행과 금액 차이 보기",
+                icon=":material/table_chart:",
+            ):
+                st.dataframe(
+                    _data_review_table(
+                        review.sort_values(
+                            ["ministry_code", "fiscal_year", "performance_program_name"]
+                        )
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "본예산 차이(억원)": st.column_config.NumberColumn(format="%.1f"),
+                    },
+                )
         st.button(
             "확인 후 후보 분석으로 이동",
             icon=":material/arrow_forward:",
             on_click=_go_to_step,
-            args=("3. 후보 분석",),
+            args=(WORKFLOW_STEPS[2],),
         )
 
-    elif workflow_step == "3. 후보 분석":
+    elif workflow_step == WORKFLOW_STEPS[2]:
         st.subheader("후보 하나를 골라 왜 올라왔는지 확인합니다")
         if filtered.empty:
             st.warning("현재 필터에 해당하는 후보가 없습니다.")
@@ -1061,7 +1210,7 @@ def main() -> None:
                 "기준을 바꿨을 때 순위 확인",
                 icon=":material/compare_arrows:",
                 on_click=_go_to_step,
-                args=("4. 기준 비교",),
+                args=(WORKFLOW_STEPS[3],),
                 width="stretch",
             )
             action_columns[1].button(
@@ -1095,7 +1244,7 @@ def main() -> None:
                     icon=":material/download:",
                 )
 
-    elif workflow_step == "4. 기준 비교":
+    elif workflow_step == WORKFLOW_STEPS[3]:
         eligible = filtered_all.loc[filtered_all["scenario_ranking_eligible"].fillna(False)].copy()
         eligible_stability = stability.loc[
             stability["candidate_id"].isin(eligible["candidate_id"])
@@ -1114,6 +1263,14 @@ def main() -> None:
                 default=rank_options[0],
             )
             within_ministry = rank_basis == "선택 부처 내부"
+            top_5_column = (
+                "all_scenario_top_5_within_ministry" if within_ministry else "all_scenario_top_5"
+            )
+            rank_scope_label = (
+                f"{MINISTRY_LABELS.get(selected_ministries[0], selected_ministries[0])} 내부"
+                if within_ministry
+                else "3개 부처 전체"
+            )
             scenario = st.selectbox(
                 "강조할 기준",
                 list(SCENARIO_LABELS),
@@ -1138,12 +1295,14 @@ def main() -> None:
                 plt.close(figure)
                 st.caption("점수는 선택한 기준 안에서 후보를 정렬하기 위한 값입니다.")
             st.warning(
-                f"전체 164행 기준 공통 Top 5는 {top_k['5']['intersection_count']}행입니다. "
+                f"{rank_scope_label} 기준 현재 필터 {len(eligible_stability):,}행 중 "
+                f"공통 Top 5는 "
+                f"{int(eligible_stability[top_5_column].fillna(False).sum()):,}행입니다. "
                 "특정 기준의 1~5위를 최종 순위로 확정하지 마세요.",
                 icon=":material/warning:",
             )
             with st.expander(
-                "전체 164행의 순위 안정성 근거",
+                f"전체 {counts['scenario_ranking_eligible_rows']:,}행의 순위 안정성 근거",
                 icon=":material/analytics:",
             ):
                 figure = _spearman_figure(data["spearman"])
@@ -1165,7 +1324,7 @@ def main() -> None:
                         delta_color="off",
                     )
 
-    elif workflow_step == "5. 원문 검수":
+    elif workflow_step == WORKFLOW_STEPS[4]:
         st.subheader("발표에 쓸 성과지표만 PDF 원문으로 확인합니다")
         st.caption(
             "수기값과 PDF값을 나란히 보고 검수 결과를 별도 감사 CSV에 저장합니다. "

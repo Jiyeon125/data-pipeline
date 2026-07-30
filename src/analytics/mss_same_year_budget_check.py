@@ -37,6 +37,8 @@ PERFORMANCE_KEY = [
     "fiscal_year",
     "program_name_normalized",
     "source_program_code",
+    "source_field_name",
+    "source_sector_name",
 ]
 
 
@@ -95,6 +97,9 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
     working = indicators.copy()
     if "program_mapping_status" not in working:
         working["program_mapping_status"] = pd.NA
+    for column in ("source_field_name", "source_sector_name"):
+        if column not in working:
+            working[column] = pd.NA
     working["program_name_normalized"] = working["performance_program_name"].map(
         normalize_program_name
     )
@@ -129,6 +134,8 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
                     part["performance_program_name"].dropna().astype(str).mode().iloc[0]
                 ),
                 "source_program_code": key[3],
+                "source_field_name": key[4],
+                "source_sector_name": key[5],
                 "program_mapping_status": (
                     part["program_mapping_status"].dropna().iloc[0]
                     if part["program_mapping_status"].notna().any()
@@ -316,6 +323,10 @@ def join_performance_and_financial(
         analysis["program_mapping_status"].eq("DELETED_TRANSFERRED"),
         "analysis_status",
     ] = "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED"
+    analysis.loc[
+        analysis["program_mapping_status"].eq("EXTERNAL_MINISTRY"),
+        "analysis_status",
+    ] = "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM"
     analysis.loc[
         analysis["program_match_eligible"].fillna(False) & analysis["account_type"].isna(),
         "analysis_status",

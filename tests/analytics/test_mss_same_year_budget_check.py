@@ -153,10 +153,17 @@ def test_program_aggregation_merges_goal_numbers_only_for_same_program_code() ->
     same_program = aggregate_program_year_performance(indicators)
     indicators.loc[3:, "source_program_code"] = "2200"
     different_programs = aggregate_program_year_performance(indicators)
+    indicators["source_program_code"] = "1300"
+    indicators.loc[:2, "source_field_name"] = "교육"
+    indicators.loc[:2, "source_sector_name"] = "교육일반"
+    indicators.loc[3:, "source_field_name"] = "통신"
+    indicators.loc[3:, "source_sector_name"] = "방송통신"
+    different_hierarchies = aggregate_program_year_performance(indicators)
 
     assert len(same_program) == 1
     assert same_program.loc[0, "program_goal_number"] == "Ⅲ-2;Ⅲ-3"
     assert len(different_programs) == 2
+    assert len(different_hierarchies) == 2
 
 
 def test_join_keeps_account_types_separate() -> None:

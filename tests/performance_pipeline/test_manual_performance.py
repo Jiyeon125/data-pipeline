@@ -305,6 +305,8 @@ def test_program_code_confirmations_apply_by_year_goal_and_normalized_name(
                 "program_goal_number": "Ⅱ-2",
                 "performance_program_name": "과학기술인력양성",
                 "source_program_code": "1700",
+                "source_field_name": "과학기술",
+                "source_sector_name": "과학기술일반",
                 "mapping_status": "CONFIRMED",
             }
         ]
@@ -313,7 +315,73 @@ def test_program_code_confirmations_apply_by_year_goal_and_normalized_name(
     result = apply_program_code_confirmations(indicators, confirmations_path)
 
     assert result.loc[0, "source_program_code"] == "1700"
+    assert result.loc[0, "source_field_name"] == "과학기술"
+    assert result.loc[0, "source_sector_name"] == "과학기술일반"
     assert result.loc[0, "program_mapping_status"] == "CONFIRMED"
+
+
+def test_confirmed_hierarchy_disambiguates_reused_code_and_external_ministry() -> None:
+    program_year = pd.DataFrame(
+        [
+            {
+                "ministry_name": "과학기술정보통신부",
+                "fiscal_year": 2024,
+                "program_goal_number": "Ⅲ-1",
+                "performance_program_name": "공공연구성과활성화",
+                "program_name_normalized": "공공연구성과활성화",
+                "source_program_code": "4600",
+                "source_field_name": "교육",
+                "source_sector_name": "평생·직업교육",
+                "program_mapping_status": "CONFIRMED",
+                "reported_indicator_count": 1,
+            },
+            {
+                "ministry_name": "과학기술정보통신부",
+                "fiscal_year": 2024,
+                "program_goal_number": "Ⅰ-6",
+                "performance_program_name": "탄소중립기반구축",
+                "program_name_normalized": "탄소중립기반구축",
+                "source_program_code": "6400",
+                "source_field_name": pd.NA,
+                "source_sector_name": pd.NA,
+                "program_mapping_status": "EXTERNAL_MINISTRY",
+                "reported_indicator_count": 1,
+            },
+        ]
+    )
+    financial = pd.DataFrame(
+        [
+            {
+                "fiscal_year": 2024,
+                "ministry_code": "162",
+                "ministry_name": "과학기술정보통신부",
+                "field_name": field,
+                "sector_name": sector,
+                "program_code": "4600",
+                "program_name": "공공연구성과활성화",
+                "original_budget": 100,
+                "current_budget": 100,
+                "settlement_expenditure": 90,
+                "execution_rate": 0.9,
+                "financial_linkage_status": "COMPLETE",
+                "financial_quality_level": "HIGH",
+            }
+            for field, sector in (
+                ("교육", "평생·직업교육"),
+                ("과학기술", "과학기술연구지원"),
+            )
+        ]
+    )
+
+    result = match_program_year(program_year, financial, ministry_code="162")
+
+    confirmed = result.loc[result["program_goal_number"].eq("Ⅲ-1")].iloc[0]
+    external = result.loc[result["program_goal_number"].eq("Ⅰ-6")].iloc[0]
+    assert confirmed["program_match_status"] == "EXACT_CONFIRMED_HIERARCHY"
+    assert confirmed["field_name"] == "교육"
+    assert confirmed["program_match_eligible"]
+    assert external["program_match_status"] == "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM"
+    assert not external["program_match_eligible"]
 
 
 def test_deleted_transferred_program_is_not_financially_matched() -> None:

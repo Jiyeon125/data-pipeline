@@ -8,6 +8,7 @@ from fiscal_dashboard.app import (
     _component_summary,
     _data_review_table,
     _program_count,
+    _review_worklist,
     filter_candidates,
     load_dashboard_data,
     load_pdf_review_queue,
@@ -32,11 +33,11 @@ def test_dashboard_data_contract_and_filter() -> None:
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
 
-    assert len(candidates) == 331
-    assert len(filtered) == 188
-    assert _program_count(candidates) == 63
+    assert len(candidates) == 346
+    assert len(filtered) == 194
+    assert _program_count(candidates) == 68
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape == (752, 28)
+    assert data["scores"].shape == (776, 28)
     assert data["drilldown"].empty
     assert not data["drilldown"]["project_performance_attributed"].any()
     assert not data["stability"]["candidate_id"].duplicated().any()
@@ -54,9 +55,14 @@ def test_dashboard_data_contract_and_filter() -> None:
         ],
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
-    assert len(full) == 331
-    assert full["data_validation_signal"].sum() == 21
-    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 21
+    assert len(full) == 346
+    assert full["data_validation_signal"].sum() == 12
+    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 12
+    worklist = _review_worklist(full.loc[full["data_validation_signal"]])
+    assert len(worklist) == 9
+    assert worklist["영향행"].sum() == 12
+    assert worklist["상태"].eq("확인 필요").sum() == 7
+    assert worklist["상태"].eq("확인 완료").sum() == 2
     assert _component_summary("성과", 0.5)[0] == "50%"
     assert stable_program_summary(candidates, data["stability"]).empty
 
@@ -73,27 +79,27 @@ def test_dashboard_default_render() -> None:
     assert [title.value for title in app.title] == ["재정사업 점검 작업대"]
     assert len(app.tabs) == 0
     assert app.segmented_control[0].options == WORKFLOW_STEPS
-    assert app.segmented_control[0].value == "1. 시작"
+    assert app.segmented_control[0].value == "1. 전체 현황"
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
-        ("분석행", "331"),
-        ("점검 신호 있음", "221"),
-        ("순위 비교 가능", "188"),
-        ("데이터 먼저 확인", "21"),
+        ("분석행", "346"),
+        ("점검 신호 있음", "227"),
+        ("순위 비교 가능", "194"),
+        ("데이터 먼저 확인", "12"),
     ]
-    assert "이제 무엇을 하면 되는지 순서대로 보여드립니다" in [
-        heading.value for heading in app.subheader
-    ]
+    assert "지금 해야 할 일부터 보여드립니다" in [heading.value for heading in app.subheader]
+    assert any(frame.value.shape[0] == 5 for frame in app.dataframe)
 
 
 def test_dashboard_guided_steps_and_candidate_to_review() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
-    app.segmented_control[0].set_value("2. 데이터 확인").run()
+    app.segmented_control[0].set_value("2. 먼저 해결").run()
     assert not app.exception
-    assert "분석 전에 데이터부터 확인합니다" in [item.value for item in app.subheader]
-    assert any(frame.value.shape[0] == 21 for frame in app.dataframe)
+    assert "먼저 해결할 일을 프로그램 단위로 정리했습니다" in [item.value for item in app.subheader]
+    assert any(frame.value.shape[0] == 9 for frame in app.dataframe)
+    assert any(frame.value.shape[0] == 12 for frame in app.dataframe)
 
-    app.segmented_control[0].set_value("3. 후보 분석").run()
+    app.segmented_control[0].set_value("3. 후보 살펴보기").run()
     assert not app.exception
     assert "후보 하나를 골라 왜 올라왔는지 확인합니다" in [item.value for item in app.subheader]
     review_button = next(
@@ -110,9 +116,13 @@ def test_dashboard_ministry_rank_view() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
     app.multiselect[0].set_value(["019"]).run()
-    app.segmented_control[0].set_value("4. 기준 비교").run()
+    app.segmented_control[0].set_value("4. 순위 안정성").run()
     app.segmented_control[1].set_value("선택 부처 내부").run()
 
     assert not app.exception
     assert app.segmented_control[1].value == "선택 부처 내부"
     assert "기준을 바꿔도 계속 상위인지 확인합니다" in [item.value for item in app.subheader]
+    assert any(
+        "고용노동부 내부 기준 현재 필터 40행 중 공통 Top 5는 2행" in item.value
+        for item in app.warning
+    )

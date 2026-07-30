@@ -87,7 +87,7 @@ class ManualPerformanceResult:
 
 
 def _text(value: Any) -> str | None:
-    if value in (None, ""):
+    if value is None or pd.isna(value) or value == "":
         return None
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
@@ -137,6 +137,8 @@ def apply_program_code_confirmations(
             "program_goal_number": "string",
             "performance_program_name": "string",
             "source_program_code": "string",
+            "source_field_name": "string",
+            "source_sector_name": "string",
         },
     )
     required = {
@@ -158,6 +160,9 @@ def apply_program_code_confirmations(
     confirmations["program_name_normalized"] = confirmations["performance_program_name"].map(
         normalize_program_name
     )
+    for column in ("source_field_name", "source_sector_name"):
+        if column not in confirmations:
+            confirmations[column] = pd.NA
     if confirmations.duplicated(PROGRAM_CODE_CONFIRMATION_KEY).any():
         raise ManualPerformanceError("프로그램코드 확인표의 프로그램목표 키가 중복되었습니다.")
 
@@ -166,11 +171,15 @@ def apply_program_code_confirmations(
         [
             *PROGRAM_CODE_CONFIRMATION_KEY,
             "source_program_code",
+            "source_field_name",
+            "source_sector_name",
             "mapping_status",
         ],
     ].rename(
         columns={
             "source_program_code": "confirmed_source_program_code",
+            "source_field_name": "confirmed_source_field_name",
+            "source_sector_name": "confirmed_source_sector_name",
             "mapping_status": "confirmed_program_mapping_status",
         }
     )
@@ -193,10 +202,14 @@ def apply_program_code_confirmations(
     result.loc[confirmed_rows, "source_program_code"] = result.loc[
         confirmed_rows, "confirmed_source_program_code"
     ]
+    result["source_field_name"] = result["confirmed_source_field_name"]
+    result["source_sector_name"] = result["confirmed_source_sector_name"]
     result["program_mapping_status"] = result["confirmed_program_mapping_status"]
     return result.drop(
         columns=[
             "confirmed_source_program_code",
+            "confirmed_source_field_name",
+            "confirmed_source_sector_name",
             "confirmed_program_mapping_status",
         ]
     ).convert_dtypes()
@@ -345,6 +358,12 @@ def _program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame:
                 "source_program_code": part["source_program_code"].dropna().iloc[0]
                 if part["source_program_code"].notna().any()
                 else pd.NA,
+                "source_field_name": part["source_field_name"].dropna().iloc[0]
+                if "source_field_name" in part and part["source_field_name"].notna().any()
+                else pd.NA,
+                "source_sector_name": part["source_sector_name"].dropna().iloc[0]
+                if "source_sector_name" in part and part["source_sector_name"].notna().any()
+                else pd.NA,
                 "program_mapping_status": part["program_mapping_status"].dropna().iloc[0]
                 if "program_mapping_status" in part and part["program_mapping_status"].notna().any()
                 else pd.NA,
@@ -396,14 +415,26 @@ def match_program_year(
     for row in program_year.to_dict(orient="records"):
         year_candidates = fiscal.loc[fiscal["fiscal_year"].eq(row["fiscal_year"])]
         structural_deletion = row.get("program_mapping_status") == "DELETED_TRANSFERRED"
+        external_ministry = row.get("program_mapping_status") == "EXTERNAL_MINISTRY"
         if structural_deletion:
             candidates = year_candidates.iloc[0:0]
             match_status = "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED"
+        elif external_ministry:
+            candidates = year_candidates.iloc[0:0]
+            match_status = "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM"
         else:
             source_code = _text(row.get("source_program_code"))
             if source_code:
                 candidates = year_candidates.loc[year_candidates["program_code"].eq(source_code)]
                 match_status = "EXACT_CODE"
+                source_field = _text(row.get("source_field_name"))
+                source_sector = _text(row.get("source_sector_name"))
+                if source_field:
+                    candidates = candidates.loc[candidates["field_name"].eq(source_field)]
+                if source_sector:
+                    candidates = candidates.loc[candidates["sector_name"].eq(source_sector)]
+                if source_field or source_sector:
+                    match_status = "EXACT_CONFIRMED_HIERARCHY"
                 if len(candidates) > 1:
                     same_name = candidates.loc[
                         candidates["program_name_normalized"].eq(row["program_name_normalized"])
@@ -436,7 +467,7 @@ def match_program_year(
                 match_status = "EXACT_NAME_UNIQUE_FINANCIAL"
 
         matched = len(candidates) == 1
-        if candidates.empty and not structural_deletion:
+        if candidates.empty and not (structural_deletion or external_ministry):
             match_status = "MANUAL_REVIEW_NO_MATCH"
         elif len(candidates) > 1:
             match_status = "MANUAL_REVIEW_MULTIPLE_MATCHES"
