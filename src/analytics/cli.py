@@ -258,7 +258,13 @@ def analyze_three_ministry_priority_scenarios(
             )
             frames.append(result.analysis)
         combined = pd.concat(frames, ignore_index=True).convert_dtypes()
-        key = ["ministry_code", "fiscal_year", "performance_program_name", "account_type"]
+        key = [
+            "ministry_code",
+            "fiscal_year",
+            "program_goal_number",
+            "performance_program_name",
+            "account_type",
+        ]
         if combined.duplicated(key).any():
             raise PriorityScenarioError("3개 부처 결합표의 분석 키가 중복되었습니다.")
         combined_dir.mkdir(parents=True, exist_ok=True)

@@ -117,9 +117,7 @@ def _classification_map(classification: pd.DataFrame) -> pd.DataFrame:
                     "project_category": record["project_category"],
                     "comparison_group": record["comparison_group"],
                     "classification_status": record["classification_status"],
-                    "classification_manual_review_required": record[
-                        "manual_review_required"
-                    ],
+                    "classification_manual_review_required": record["manual_review_required"],
                 }
             )
     result = pd.DataFrame(rows)
@@ -139,15 +137,9 @@ def _prepare_projects(frame: pd.DataFrame) -> pd.DataFrame:
         "subactivity_code",
     ]:
         result[column] = result[column].astype("string")
-    result["normalized_subactivity_name"] = result["subactivity_name"].map(
-        normalize_project_name
-    )
-    result["normalized_activity_name"] = result["activity_name"].map(
-        normalize_project_name
-    )
-    result["normalized_program_name"] = result["program_name"].map(
-        normalize_project_name
-    )
+    result["normalized_subactivity_name"] = result["subactivity_name"].map(normalize_project_name)
+    result["normalized_activity_name"] = result["activity_name"].map(normalize_project_name)
+    result["normalized_program_name"] = result["program_name"].map(normalize_project_name)
     return result
 
 
@@ -240,9 +232,7 @@ def _mutual_best_pairs(
     # 놓치게 됩니다. 양쪽 모두 후보가 하나뿐인 경우에만 자동 일대일 매칭합니다.
     previous_degree = candidate_frame.groupby("previous")["next"].transform("nunique")
     next_degree = candidate_frame.groupby("next")["previous"].transform("nunique")
-    candidate_frame = candidate_frame.loc[
-        previous_degree.eq(1) & next_degree.eq(1)
-    ].copy()
+    candidate_frame = candidate_frame.loc[previous_degree.eq(1) & next_degree.eq(1)].copy()
     if candidate_frame.empty:
         return []
     best_next = candidate_frame.loc[
@@ -302,15 +292,16 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
 
         subactivity_key = ["ministry_code", "account_code", "subactivity_code"]
         for left, right in _unique_pairs_by_key(previous, following, subactivity_key):
-            if left["project_id"] not in unmatched_previous or right["project_id"] not in unmatched_next:
+            if (
+                left["project_id"] not in unmatched_previous
+                or right["project_id"] not in unmatched_next
+            ):
                 continue
             same_hierarchy = all(
                 str(left[column]) == str(right[column])
                 for column in ["program_code", "activity_code"]
             )
-            same_name = (
-                left["normalized_subactivity_name"] == right["normalized_subactivity_name"]
-            )
+            same_name = left["normalized_subactivity_name"] == right["normalized_subactivity_name"]
             relation_type = "CONTINUED" if same_name else "RENAMED"
             confirmed = same_hierarchy
             _add_relation(
@@ -322,9 +313,7 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
                 relation_type=relation_type,
                 continuity_flag=confirmed,
                 matching_method="SAME_SUBACTIVITY_CODE",
-                matching_score=_similarity(
-                    left["subactivity_name"], right["subactivity_name"]
-                ),
+                matching_score=_similarity(left["subactivity_name"], right["subactivity_name"]),
                 evidence=(
                     f"subactivity_code={left['subactivity_code']};"
                     f"same_program_activity={same_hierarchy}"
@@ -347,9 +336,7 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
             available(following, unmatched_next),
             hierarchy_key,
         ):
-            same_name = (
-                left["normalized_subactivity_name"] == right["normalized_subactivity_name"]
-            )
+            same_name = left["normalized_subactivity_name"] == right["normalized_subactivity_name"]
             _add_relation(
                 relations,
                 previous_project_id=left["project_id"],
@@ -359,9 +346,7 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
                 relation_type="CONTINUED" if same_name else "RENAMED",
                 continuity_flag=True,
                 matching_method="SAME_FULL_HIERARCHY",
-                matching_score=_similarity(
-                    left["subactivity_name"], right["subactivity_name"]
-                ),
+                matching_score=_similarity(left["subactivity_name"], right["subactivity_name"]),
                 evidence="소관·회계·프로그램·단위사업·세부사업 코드 일치",
                 review_status="RULE_CONFIRMED",
                 manual_review_required=False,
@@ -509,8 +494,7 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
                     continue
                 if (
                     left["normalized_subactivity_name"]
-                    and left["normalized_subactivity_name"]
-                    == right["normalized_subactivity_name"]
+                    and left["normalized_subactivity_name"] == right["normalized_subactivity_name"]
                 ):
                     hierarchy_score = max(
                         _similarity(left["program_name"], right["program_name"]),
@@ -520,9 +504,7 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
                         transferred_pairs.append(
                             (left["project_id"], right["project_id"], hierarchy_score)
                         )
-        transfer_frame = pd.DataFrame(
-            transferred_pairs, columns=["previous", "next", "score"]
-        )
+        transfer_frame = pd.DataFrame(transferred_pairs, columns=["previous", "next", "score"])
         if not transfer_frame.empty:
             previous_degree = transfer_frame.groupby("previous")["next"].nunique()
             next_degree = transfer_frame.groupby("next")["previous"].nunique()
@@ -600,16 +582,16 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
     result["previous_fiscal_year"] = pd.to_numeric(
         result["previous_fiscal_year"], errors="coerce"
     ).astype("Int64")
-    result["next_fiscal_year"] = pd.to_numeric(
-        result["next_fiscal_year"], errors="coerce"
-    ).astype("Int64")
-    result["matching_score"] = pd.to_numeric(
-        result["matching_score"], errors="coerce"
-    ).astype("Float64")
+    result["next_fiscal_year"] = pd.to_numeric(result["next_fiscal_year"], errors="coerce").astype(
+        "Int64"
+    )
+    result["matching_score"] = pd.to_numeric(result["matching_score"], errors="coerce").astype(
+        "Float64"
+    )
     result["continuity_flag"] = result["continuity_flag"].astype("boolean")
-    conflict = result["relation_type"].eq("UNKNOWN") & result[
-        "matching_method"
-    ].eq("STRUCTURAL_CANDIDATE_GRAPH")
+    conflict = result["relation_type"].eq("UNKNOWN") & result["matching_method"].eq(
+        "STRUCTURAL_CANDIDATE_GRAPH"
+    )
     candidate = result["manual_review_required"] & ~conflict
     result["review_priority"] = "NONE"
     result.loc[
@@ -634,9 +616,7 @@ def _status_for_row(
 ) -> tuple[str, str | None, str | None, bool | None]:
     incoming_types = set(incoming["relation_type"]) if not incoming.empty else set()
     outgoing_types = set(outgoing["relation_type"]) if not outgoing.empty else set()
-    predecessors = sorted(
-        str(value) for value in incoming["previous_project_id"].dropna().unique()
-    )
+    predecessors = sorted(str(value) for value in incoming["previous_project_id"].dropna().unique())
     successors = sorted(str(value) for value in outgoing["next_project_id"].dropna().unique())
     if "LEFT_CENSORED" in incoming_types:
         status = "OBSERVATION_START"
@@ -664,8 +644,7 @@ def _status_for_row(
         if status == "CONTINUING" and "RIGHT_CENSORED" in outgoing_types:
             status = "OBSERVATION_END"
     confirmed_incoming = incoming.loc[
-        incoming["continuity_flag"].fillna(False)
-        & incoming["review_status"].eq("RULE_CONFIRMED")
+        incoming["continuity_flag"].fillna(False) & incoming["review_status"].eq("RULE_CONFIRMED")
     ]
     continuity: bool | None = len(confirmed_incoming) == 1
     if status in {"OBSERVATION_START", "OBSERVATION_END"}:
@@ -737,12 +716,8 @@ def build_financial_v2(
     )
     for source_column in ["source_path", "source_file", "source_datasets"]:
         if source_column in frame:
-            fallback_trace = frame[source_column].astype("string").combine_first(
-                fallback_trace
-            )
-    frame["source_trace"] = frame["source_trace"].astype("string").combine_first(
-        fallback_trace
-    )
+            fallback_trace = frame[source_column].astype("string").combine_first(fallback_trace)
+    frame["source_trace"] = frame["source_trace"].astype("string").combine_first(fallback_trace)
     for column in [
         "budget_analysis_eligible",
         "execution_analysis_eligible",
@@ -755,9 +730,7 @@ def build_financial_v2(
 
     incoming_groups = {
         key: group
-        for key, group in relations.dropna(subset=["next_project_id"]).groupby(
-            "next_project_id"
-        )
+        for key, group in relations.dropna(subset=["next_project_id"]).groupby("next_project_id")
     }
     outgoing_groups = {
         key: group
@@ -790,12 +763,12 @@ def build_financial_v2(
     frame["structural_change_type"] = frame["project_status"].where(
         frame["structural_change_flag"], pd.NA
     )
-    frame.loc[
-        frame["project_status"].eq("OBSERVATION_START"), "structural_change_type"
-    ] = "LEFT_CENSORED"
-    frame.loc[
-        frame["project_status"].eq("OBSERVATION_END"), "structural_change_type"
-    ] = "RIGHT_CENSORED"
+    frame.loc[frame["project_status"].eq("OBSERVATION_START"), "structural_change_type"] = (
+        "LEFT_CENSORED"
+    )
+    frame.loc[frame["project_status"].eq("OBSERVATION_END"), "structural_change_type"] = (
+        "RIGHT_CENSORED"
+    )
     frame["trend_analysis_eligible"] = (
         frame["in_core_financial_population"]
         & frame["continuity_flag"].fillna(False)
@@ -815,9 +788,7 @@ def build_financial_v2(
             ~related["relation_type"].isin({"LEFT_CENSORED", "RIGHT_CENSORED"})
         ]
         relationship_reviews.append(
-            bool(non_boundary["manual_review_required"].any())
-            if not non_boundary.empty
-            else False
+            bool(non_boundary["manual_review_required"].any()) if not non_boundary.empty else False
         )
         project_status_confirmed.append(
             bool(
@@ -831,20 +802,16 @@ def build_financial_v2(
         )
     frame["manual_review_required"] = relationship_reviews
     frame["project_status_confirmed"] = project_status_confirmed
-    frame.loc[
-        frame["project_status"].isin(boundary_statuses), "manual_review_required"
-    ] = False
+    frame.loc[frame["project_status"].isin(boundary_statuses), "manual_review_required"] = False
 
-    frame["analysis_original_budget"], frame["analysis_original_budget_source"] = (
-        _source_amount(frame, "settlement_budget_amount", "budget_amount")
+    frame["analysis_original_budget"], frame["analysis_original_budget_source"] = _source_amount(
+        frame, "settlement_budget_amount", "budget_amount"
     )
-    frame["analysis_current_budget"], frame["analysis_current_budget_source"] = (
-        _source_amount(frame, "settlement_current_budget_amount", "current_budget_amount")
+    frame["analysis_current_budget"], frame["analysis_current_budget_source"] = _source_amount(
+        frame, "settlement_current_budget_amount", "current_budget_amount"
     )
     frame["analysis_settlement_expenditure"] = frame["settlement_expenditure_amount"]
-    frame["analysis_settlement_expenditure_source"] = (
-        "settlement_expenditure_amount"
-    )
+    frame["analysis_settlement_expenditure_source"] = "settlement_expenditure_amount"
     frame["blocking_quality_flag"] = frame["quality_issue_reasons"].map(
         lambda value: bool(_reason_set(value) & BLOCKING_REASONS)
     )
@@ -855,9 +822,7 @@ def build_financial_v2(
         & relations["previous_project_id"].notna()
         & relations["next_project_id"].notna()
     ].drop_duplicates("next_project_id")
-    predecessor_map = relation_lookup.set_index("next_project_id")[
-        "previous_project_id"
-    ].to_dict()
+    predecessor_map = relation_lookup.set_index("next_project_id")["previous_project_id"].to_dict()
     frame_lookup = frame.set_index("project_id")
     change_columns = [
         "original_budget_change",
@@ -980,12 +945,18 @@ def build_financial_v2(
     frame["log_original_budget"] = pd.to_numeric(
         frame["log_original_budget"], errors="coerce"
     ).astype("Float64")
-    ministry_total = frame.loc[core].groupby(["ministry_code", "fiscal_year"])[
-        "analysis_original_budget"
-    ].transform("sum")
-    program_total = frame.loc[core].groupby(
-        ["ministry_code", "program_code", "fiscal_year"], dropna=False
-    )["analysis_original_budget"].transform("sum")
+    ministry_total = (
+        frame.loc[core]
+        .groupby(["ministry_code", "fiscal_year"])["analysis_original_budget"]
+        .transform("sum")
+    )
+    program_total = (
+        frame.loc[core]
+        .groupby(["ministry_code", "program_code", "fiscal_year"], dropna=False)[
+            "analysis_original_budget"
+        ]
+        .transform("sum")
+    )
     frame["ministry_budget_share"] = pd.NA
     frame["program_budget_share"] = pd.NA
     valid_ministry = core & ministry_total.reindex(frame.index).fillna(0).ne(0)
@@ -1005,9 +976,11 @@ def build_financial_v2(
         frame["program_budget_share"], errors="coerce"
     ).astype("Float64")
     frame["budget_size_quantile"] = pd.NA
-    frame.loc[core, "budget_size_quantile"] = frame.loc[core].groupby("fiscal_year")[
-        "analysis_original_budget"
-    ].rank(method="average", pct=True)
+    frame.loc[core, "budget_size_quantile"] = (
+        frame.loc[core]
+        .groupby("fiscal_year")["analysis_original_budget"]
+        .rank(method="average", pct=True)
+    )
     frame["budget_size_quantile"] = pd.to_numeric(
         frame["budget_size_quantile"], errors="coerce"
     ).astype("Float64")
@@ -1040,15 +1013,27 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
     working = frame.copy()
     working["program_code_group"] = working["program_code"].fillna("UNKNOWN")
     working["program_name_group"] = working["program_name"].fillna("UNKNOWN")
+    working["field_name_group"] = working["field_name"].fillna("UNKNOWN")
+    working["sector_name_group"] = working["sector_name"].fillna("UNKNOWN")
     group_key = [
         "fiscal_year",
         "ministry_code",
+        "field_name_group",
+        "sector_name_group",
         "program_code_group",
+        "program_name_group",
     ]
     rows: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
     for key, source_group in working.groupby(group_key, dropna=False, sort=True):
-        fiscal_year, ministry_code, program_code = key
+        (
+            fiscal_year,
+            ministry_code,
+            field_name,
+            sector_name,
+            program_code,
+            program_name,
+        ) = key
         broad_group = source_group.loc[source_group["in_broad_population"]]
         core_group = source_group.loc[source_group["in_core_financial_population"]]
         source_count = source_group["project_id"].nunique()
@@ -1060,9 +1045,7 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
             linkage = "PARTIAL"
         else:
             linkage = "COMPLETE"
-        account_types = sorted(
-            set(core_group["account_type_classified"].dropna().astype(str))
-        )
+        account_types = sorted(set(core_group["account_type_classified"].dropna().astype(str)))
         denominator_complete = (
             not core_group.empty
             and core_group["execution_denominator_status"].eq("APPLIED").all()
@@ -1076,14 +1059,10 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
             if linkage == "COMPLETE" and denominator_complete and denominator != 0
             else None
         )
-        budgets = (
-            core_group["analysis_original_budget"].dropna().sort_values(ascending=False)
-        )
+        budgets = core_group["analysis_original_budget"].dropna().sort_values(ascending=False)
         budget_total = budgets.sum()
         top1_share = float(budgets.head(1).sum() / budget_total) if budget_total else None
         top3_share = float(budgets.head(3).sum() / budget_total) if budget_total else None
-        program_names = source_group["program_name"].dropna()
-        program_name = program_names.iloc[-1] if not program_names.empty else "UNKNOWN"
         ministry_names = source_group["ministry_name"].dropna()
         ministry_name = ministry_names.iloc[-1] if not ministry_names.empty else pd.NA
         if linkage == "COMPLETE" and execution_rate is not None:
@@ -1096,24 +1075,23 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
             "fiscal_year": fiscal_year,
             "ministry_code": ministry_code,
             "ministry_name": ministry_name,
+            "field_name": field_name,
+            "sector_name": sector_name,
             "program_code": program_code,
             "program_name": program_name,
             "original_budget": core_group["analysis_original_budget"].sum(skipna=True),
             "current_budget": core_group["analysis_current_budget"].sum(skipna=True),
-            "settlement_expenditure": core_group[
-                "analysis_settlement_expenditure"
-            ].sum(skipna=True),
-            "carryover_amount": core_group["settlement_carryover_amount"].sum(
+            "settlement_expenditure": core_group["analysis_settlement_expenditure"].sum(
                 skipna=True
             ),
+            "carryover_amount": core_group["settlement_carryover_amount"].sum(skipna=True),
             "unused_amount": core_group["settlement_unused_amount"].sum(skipna=True),
             "execution_rate": execution_rate,
             "project_count": project_count,
             "analysis_included_project_count": core_count,
             "confirmed_new_project_count": int(
                 (
-                    core_group["project_status"].eq("NEW")
-                    & core_group["project_status_confirmed"]
+                    core_group["project_status"].eq("NEW") & core_group["project_status_confirmed"]
                 ).sum()
             ),
             "confirmed_terminated_project_count": int(
@@ -1123,18 +1101,14 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
                 ).sum()
             ),
             "new_project_count": int(core_group["project_status"].eq("NEW").sum()),
-            "terminated_project_count": int(
-                core_group["project_status"].eq("TERMINATED").sum()
-            ),
+            "terminated_project_count": int(core_group["project_status"].eq("TERMINATED").sum()),
             "observation_start_project_count": int(
                 core_group["project_status"].eq("OBSERVATION_START").sum()
             ),
             "observation_end_project_count": int(
                 core_group["project_status"].eq("OBSERVATION_END").sum()
             ),
-            "structural_change_project_count": int(
-                core_group["structural_change_flag"].sum()
-            ),
+            "structural_change_project_count": int(core_group["structural_change_flag"].sum()),
             "execution_review_project_count": int(
                 (~core_group["execution_analysis_eligible"]).sum()
             ),
@@ -1181,6 +1155,8 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
                     "issue_type": issue_type,
                     "fiscal_year": fiscal_year,
                     "ministry_code": ministry_code,
+                    "field_name": field_name,
+                    "sector_name": sector_name,
                     "program_code": program_code,
                     "program_name": program_name,
                     "financial_linkage_status": linkage,
@@ -1197,9 +1173,9 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
         "unused_amount",
     ]:
         result[column] = pd.to_numeric(result[column], errors="coerce").astype("Int64")
-    result["execution_rate"] = pd.to_numeric(
-        result["execution_rate"], errors="coerce"
-    ).astype("Float64")
+    result["execution_rate"] = pd.to_numeric(result["execution_rate"], errors="coerce").astype(
+        "Float64"
+    )
     return result, pd.DataFrame(issues)
 
 
@@ -1276,9 +1252,7 @@ def build_project_continuity(
         }
 
     relation_counts = relations["relation_type"].value_counts().sort_index().to_dict()
-    review_priority_counts = (
-        relations["review_priority"].value_counts().sort_index().to_dict()
-    )
+    review_priority_counts = relations["review_priority"].value_counts().sort_index().to_dict()
     missing_reason_counts = (
         financial_v2.loc[
             financial_v2["budget_change_status"].ne("CALCULATED"),
@@ -1300,23 +1274,17 @@ def build_project_continuity(
         "renamed_relation_count": relation_counts.get("RENAMED", 0),
         "code_changed_relation_count": relation_counts.get("CODE_CHANGED", 0),
         "merge_split_transfer_candidate_count": sum(
-            relation_counts.get(value, 0)
-            for value in ["MERGED", "SPLIT", "TRANSFERRED"]
+            relation_counts.get(value, 0) for value in ["MERGED", "SPLIT", "TRANSFERRED"]
         ),
         "unknown_relation_count": relation_counts.get("UNKNOWN", 0),
         "manual_review_relation_count": len(manual_review),
         "manual_review_total": len(manual_review),
         "blocking_review_count": review_priority_counts.get("BLOCKING", 0),
-        "relationship_candidate_count": review_priority_counts.get(
-            "MANUAL_REVIEW", 0
-        ),
+        "relationship_candidate_count": review_priority_counts.get("MANUAL_REVIEW", 0),
         "observation_boundary_count": sum(
-            relation_counts.get(value, 0)
-            for value in ["LEFT_CENSORED", "RIGHT_CENSORED"]
+            relation_counts.get(value, 0) for value in ["LEFT_CENSORED", "RIGHT_CENSORED"]
         ),
-        "review_status_counts": (
-            relations["review_status"].value_counts().sort_index().to_dict()
-        ),
+        "review_status_counts": (relations["review_status"].value_counts().sort_index().to_dict()),
         "review_priority_counts": review_priority_counts,
     }
     first_year = int(financial_v2["fiscal_year"].min())
@@ -1333,44 +1301,33 @@ def build_project_continuity(
             financial_v2["project_status"].eq("OBSERVATION_END").sum()
         ),
         "start_year_new_due_only_to_boundary_count": int(
-            financial_v2.loc[
-                financial_v2["fiscal_year"].eq(first_year), "project_status"
-            ]
+            financial_v2.loc[financial_v2["fiscal_year"].eq(first_year), "project_status"]
             .eq("NEW")
             .sum()
         ),
         "end_year_terminated_due_only_to_boundary_count": int(
-            financial_v2.loc[
-                financial_v2["fiscal_year"].eq(last_year), "project_status"
-            ]
+            financial_v2.loc[financial_v2["fiscal_year"].eq(last_year), "project_status"]
             .eq("TERMINATED")
             .sum()
         ),
         "boundary_manual_review_count": int(
             relations.loc[
-                relations["relation_type"].isin(
-                    {"LEFT_CENSORED", "RIGHT_CENSORED"}
-                ),
+                relations["relation_type"].isin({"LEFT_CENSORED", "RIGHT_CENSORED"}),
                 "manual_review_required",
             ].sum()
         ),
         "manual_review_total": len(manual_review),
         "blocking_review_count": review_priority_counts.get("BLOCKING", 0),
-        "relationship_candidate_count": review_priority_counts.get(
-            "MANUAL_REVIEW", 0
-        ),
+        "relationship_candidate_count": review_priority_counts.get("MANUAL_REVIEW", 0),
         "observation_boundary_count": sum(
-            relation_counts.get(value, 0)
-            for value in ["LEFT_CENSORED", "RIGHT_CENSORED"]
+            relation_counts.get(value, 0) for value in ["LEFT_CENSORED", "RIGHT_CENSORED"]
         ),
     }
     v2_summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "source_row_count": len(financial_v1),
         "financial_v2_row_count": len(financial_v2),
-        "primary_key_duplicate_count": int(
-            financial_v2.duplicated(SOURCE_KEY, keep=False).sum()
-        ),
+        "primary_key_duplicate_count": int(financial_v2.duplicated(SOURCE_KEY, keep=False).sum()),
         "project_status_counts": (
             financial_v2["project_status"].value_counts().sort_index().to_dict()
         ),
@@ -1390,9 +1347,7 @@ def build_project_continuity(
         ),
         "source_trace_missing_count": int(financial_v2["source_trace"].isna().sum()),
     }
-    linkage_counts = (
-        program_year["financial_linkage_status"].value_counts().sort_index().to_dict()
-    )
+    linkage_counts = program_year["financial_linkage_status"].value_counts().sort_index().to_dict()
     program_summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "program_year_row_count": len(program_year),
@@ -1410,23 +1365,19 @@ def build_project_continuity(
         "observation_start_project_count": int(
             program_year["observation_start_project_count"].sum()
         ),
-        "observation_end_project_count": int(
-            program_year["observation_end_project_count"].sum()
-        ),
-        "confirmed_new_project_count": int(
-            program_year["confirmed_new_project_count"].sum()
-        ),
+        "observation_end_project_count": int(program_year["observation_end_project_count"].sum()),
+        "confirmed_new_project_count": int(program_year["confirmed_new_project_count"].sum()),
         "confirmed_terminated_project_count": int(
             program_year["confirmed_terminated_project_count"].sum()
         ),
-        "program_execution_rate_nonnull_count": int(
-            program_year["execution_rate"].notna().sum()
-        ),
+        "program_execution_rate_nonnull_count": int(program_year["execution_rate"].notna().sum()),
         "partial_or_unmatched_execution_rate_nonnull_count": int(
             program_year.loc[
                 program_year["financial_linkage_status"].isin({"PARTIAL", "UNMATCHED"}),
                 "execution_rate",
-            ].notna().sum()
+            ]
+            .notna()
+            .sum()
         ),
         "quality_issue_count": len(program_issues),
         "amount_reconciliation": amount_reconciliation,

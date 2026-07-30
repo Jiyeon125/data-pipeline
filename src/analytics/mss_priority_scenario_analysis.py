@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
-KEY = ["ministry_code", "program_code", "fiscal_year", "account_type"]
+PROGRAM_ID_KEY = ["ministry_code", "field_name", "sector_name", "program_code"]
+KEY = [*PROGRAM_ID_KEY, "fiscal_year", "account_type"]
 COMPONENTS = (
     "performance_gap",
     "execution_management",
@@ -458,7 +459,7 @@ def build_stable_top5_project_drilldown(
     )
     summary = {
         "candidate_count": int(result["candidate_id"].nunique()),
-        "unique_program_count": int(result["program_code"].nunique()),
+        "unique_program_count": len(result[PROGRAM_ID_KEY].drop_duplicates()),
         "project_row_count": len(result),
         "other_ministry_row_count": int(
             (~result["ministry_code"].isin(stable["ministry_code"])).sum()
@@ -690,6 +691,10 @@ def build_candidate_population(
         merged["ministry_code"].fillna("NA").astype(str)
         + ":"
         + merged["fiscal_year"].astype(str)
+        + ":"
+        + merged["field_name"].fillna("NA").astype(str)
+        + ":"
+        + merged["sector_name"].fillna("NA").astype(str)
         + ":"
         + program_identity.fillna("NA").astype(str)
         + ":"
@@ -1155,11 +1160,11 @@ def _build_summary(
             "all_scenario_top_k": {
                 str(int(row.top_k)): {
                     "intersection_count": int(row.intersection_count),
-                    "intersection_unique_program_count": int(
+                    "intersection_unique_program_count": len(
                         stability.loc[
                             stability[f"all_scenario_top_{int(row.top_k)}"],
-                            "program_code",
-                        ].nunique()
+                            PROGRAM_ID_KEY,
+                        ].drop_duplicates()
                     ),
                     "union_count": int(row.union_count),
                     "jaccard_overlap": float(row.jaccard_overlap),

@@ -17,6 +17,7 @@ def _indicator_rows() -> pd.DataFrame:
                 "source_indicator_id": "id-1",
                 "ministry_name": "중소벤처기업부",
                 "fiscal_year": 2024,
+                "program_goal_number": "Ⅰ-1",
                 "performance_program_name": "프로그램A",
                 "source_program_code": None,
                 "analysis_actual_value_numeric": 109.0,
@@ -28,6 +29,7 @@ def _indicator_rows() -> pd.DataFrame:
                 "source_indicator_id": "id-2",
                 "ministry_name": "중소벤처기업부",
                 "fiscal_year": 2024,
+                "program_goal_number": "Ⅰ-1",
                 "performance_program_name": "프로그램A",
                 "source_program_code": None,
                 "analysis_actual_value_numeric": 90.0,
@@ -39,6 +41,7 @@ def _indicator_rows() -> pd.DataFrame:
                 "source_indicator_id": "id-3",
                 "ministry_name": "중소벤처기업부",
                 "fiscal_year": 2024,
+                "program_goal_number": "Ⅰ-1",
                 "performance_program_name": "프로그램A",
                 "source_program_code": None,
                 "analysis_actual_value_numeric": 10.0,
@@ -57,6 +60,8 @@ def _overall_financial() -> pd.DataFrame:
                 "fiscal_year": 2024,
                 "ministry_code": "102",
                 "ministry_name": "중소벤처기업부",
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "1200",
                 "program_name": "프로그램A",
                 "original_budget": 300,
@@ -76,6 +81,8 @@ def _account_financial() -> pd.DataFrame:
             {
                 "ministry_code": "102",
                 "fiscal_year": 2024,
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "1200",
                 "account_type": "GENERAL_ACCOUNT",
                 "program_name": "프로그램A",
@@ -93,6 +100,8 @@ def _account_financial() -> pd.DataFrame:
             {
                 "ministry_code": "102",
                 "fiscal_year": 2024,
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "1200",
                 "account_type": "FUND",
                 "program_name": "프로그램A",
@@ -124,6 +133,32 @@ def test_program_aggregation_uses_counts_not_rate_average() -> None:
     assert not any("average" in column or "mean" in column for column in result.columns)
 
 
+def test_program_aggregation_normalizes_stray_whitespace_within_same_goal() -> None:
+    indicators = _indicator_rows()
+    indicators.loc[0, "performance_program_name"] = "프로 그램A"
+
+    result = aggregate_program_year_performance(indicators)
+
+    assert len(result) == 1
+    assert result.loc[0, "indicator_count"] == 3
+
+
+def test_program_aggregation_merges_goal_numbers_only_for_same_program_code() -> None:
+    indicators = pd.concat([_indicator_rows(), _indicator_rows()], ignore_index=True)
+    indicators["source_indicator_id"] = [f"id-{index}" for index in range(len(indicators))]
+    indicators.loc[:2, "program_goal_number"] = "Ⅲ-2"
+    indicators.loc[3:, "program_goal_number"] = "Ⅲ-3"
+    indicators["source_program_code"] = "1300"
+
+    same_program = aggregate_program_year_performance(indicators)
+    indicators.loc[3:, "source_program_code"] = "2200"
+    different_programs = aggregate_program_year_performance(indicators)
+
+    assert len(same_program) == 1
+    assert same_program.loc[0, "program_goal_number"] == "Ⅲ-2;Ⅲ-3"
+    assert len(different_programs) == 2
+
+
 def test_join_keeps_account_types_separate() -> None:
     performance = aggregate_program_year_performance(_indicator_rows())
     result = join_performance_and_financial(
@@ -138,6 +173,30 @@ def test_join_keeps_account_types_separate() -> None:
     assert result["analysis_status"].eq("JOINT_ANALYSIS").all()
     assert result.loc[result["account_type"].eq("FUND"), "execution_below_90"].item()
     assert not result.loc[result["account_type"].eq("GENERAL_ACCOUNT"), "execution_below_90"].item()
+
+
+def test_join_does_not_mix_reused_program_codes_with_different_names() -> None:
+    performance = aggregate_program_year_performance(_indicator_rows())
+    other = {
+        **_account_financial()[0:1].iloc[0].to_dict(),
+        "program_name": "다른 프로그램",
+        "original_budget": 999,
+    }
+    account_financial = pd.concat(
+        [_account_financial(), pd.DataFrame([other])],
+        ignore_index=True,
+    )
+
+    result = join_performance_and_financial(
+        performance,
+        _overall_financial(),
+        account_financial,
+        ministry_code="102",
+    )
+
+    assert len(result) == 2
+    assert set(result["account_financial_program_name"]) == {"프로그램A"}
+    assert result["account_original_budget"].sum() == 300
 
 
 def test_join_keeps_multiple_unmatched_programs_as_review_rows() -> None:

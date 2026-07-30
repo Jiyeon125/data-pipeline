@@ -29,6 +29,8 @@ def _manual_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
         analysis_rows.append(
             {
                 "ministry_code": "102",
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": program,
                 "fiscal_year": 2024,
                 "account_type": "일반회계",
@@ -48,6 +50,8 @@ def _manual_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
         )
         feature = {
             "ministry_code": "102",
+            "field_name": "산업·중소기업및에너지",
+            "sector_name": "산업혁신지원",
             "program_code": program,
             "fiscal_year": 2024,
             "account_type": "일반회계",
@@ -128,6 +132,8 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
             {
                 "candidate_id": "102:2024:2100:GENERAL_ACCOUNT",
                 "ministry_code": "102",
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "2100",
                 "fiscal_year": 2024,
                 "account_type": "GENERAL_ACCOUNT",
@@ -151,6 +157,8 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     def feature(ministry: str, project: str, budget: int) -> dict[str, object]:
         return {
             "ministry_code": ministry,
+            "field_name": "산업·중소기업및에너지",
+            "sector_name": "산업혁신지원",
             "program_code": "2100",
             "fiscal_year": 2024,
             "account_type": "GENERAL_ACCOUNT",

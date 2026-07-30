@@ -49,6 +49,10 @@ def normalize_manual(
     ministry_code: str = typer.Option("102"),
     start_year: int = typer.Option(2022),
     end_year: int = typer.Option(2024),
+    program_code_confirmations_path: Path | None = typer.Option(
+        None,
+        help="원본 PDF로 확인한 프로그램목표별 재정 프로그램코드 표",
+    ),
     overwrite: bool = typer.Option(False, help="기존 산출물 덮어쓰기"),
 ) -> None:
     """중기부 수기 성과자료 파일럿을 정규화하고 재정 프로그램과 연결합니다."""
@@ -61,6 +65,7 @@ def normalize_manual(
             ministry_code=ministry_code,
             start_year=start_year,
             end_year=end_year,
+            program_code_confirmations_path=program_code_confirmations_path,
             overwrite=overwrite,
         )
     except (ManualPerformanceError, FileExistsError, OSError, ValueError) as exc:

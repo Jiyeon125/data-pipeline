@@ -125,6 +125,8 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     required_columns = {
         "candidates": {
             "candidate_id",
+            "field_name",
+            "sector_name",
             "program_code",
             "fiscal_year",
             "account_type",
@@ -180,6 +182,14 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     if data["scores"].duplicated(["candidate_id", "scenario"]).any():
         raise DashboardDataError("시나리오 점수의 후보-시나리오 키가 중복되었습니다.")
     return data
+
+
+def _program_count(frame: pd.DataFrame) -> int:
+    return len(
+        frame.dropna(subset=["program_code"]).drop_duplicates(
+            ["ministry_code", "field_name", "sector_name", "program_code"]
+        )
+    )
 
 
 @st.cache_data
@@ -769,10 +779,7 @@ def main() -> None:
     if st.session_state.pop("review_saved", False):
         st.toast("검수 결과를 저장했습니다.", icon=":material/check_circle:")
 
-    st.caption(
-        f"현재 필터: {len(filtered_all):,}행 · "
-        f"{filtered_all['program_code'].dropna().nunique():,}개 프로그램"
-    )
+    st.caption(f"현재 필터: {len(filtered_all):,}행 · {_program_count(filtered_all):,}개 프로그램")
     with st.container(horizontal=True):
         st.metric("분석행", f"{len(filtered_all):,}", border=True)
         st.metric(
@@ -904,10 +911,7 @@ def main() -> None:
         if filtered.empty:
             st.warning("현재 필터에 해당하는 후보가 없습니다.")
         else:
-            st.caption(
-                f"현재 필터: {len(filtered)}행 · "
-                f"{filtered['program_code'].dropna().nunique()}개 프로그램"
-            )
+            st.caption(f"현재 필터: {len(filtered)}행 · {_program_count(filtered)}개 프로그램")
             joined = filtered.merge(
                 stability[
                     [

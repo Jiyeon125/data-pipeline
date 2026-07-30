@@ -46,6 +46,8 @@ REQUIRED_FINANCIAL_COLUMNS = {
     "fiscal_year",
     "ministry_code",
     "ministry_name",
+    "field_name",
+    "sector_name",
     "program_code",
     "program_name",
     "original_budget",
@@ -61,6 +63,12 @@ AUTO_MATCH_STATUSES = {
     "NORMALIZED_NAME",
     "EXACT_NAME_UNIQUE_FINANCIAL",
 }
+PROGRAM_CODE_CONFIRMATION_KEY = [
+    "ministry_name",
+    "fiscal_year",
+    "program_goal_number",
+    "program_name_normalized",
+]
 
 
 class ManualPerformanceError(ValueError):
@@ -110,6 +118,88 @@ def _number(value: Any) -> float | None:
 def normalize_program_name(value: Any) -> str:
     text = unicodedata.normalize("NFKC", _text(value) or "")
     return "".join(character for character in text if not character.isspace())
+
+
+def apply_program_code_confirmations(
+    indicators: pd.DataFrame,
+    confirmations_path: Path | None,
+) -> pd.DataFrame:
+    if confirmations_path is None:
+        return indicators.copy()
+    if not confirmations_path.is_file():
+        raise ManualPerformanceError(
+            f"프로그램코드 확인표를 찾을 수 없습니다: {confirmations_path}"
+        )
+    confirmations = pd.read_csv(
+        confirmations_path,
+        dtype={
+            "ministry_name": "string",
+            "program_goal_number": "string",
+            "performance_program_name": "string",
+            "source_program_code": "string",
+        },
+    )
+    required = {
+        "ministry_name",
+        "fiscal_year",
+        "program_goal_number",
+        "performance_program_name",
+        "source_program_code",
+        "mapping_status",
+    }
+    missing = required - set(confirmations.columns)
+    if missing:
+        raise ManualPerformanceError(
+            f"프로그램코드 확인표 필수 열이 없습니다: {', '.join(sorted(missing))}"
+        )
+    confirmations["fiscal_year"] = pd.to_numeric(
+        confirmations["fiscal_year"], errors="coerce"
+    ).astype("Int64")
+    confirmations["program_name_normalized"] = confirmations["performance_program_name"].map(
+        normalize_program_name
+    )
+    if confirmations.duplicated(PROGRAM_CODE_CONFIRMATION_KEY).any():
+        raise ManualPerformanceError("프로그램코드 확인표의 프로그램목표 키가 중복되었습니다.")
+
+    confirmed = confirmations.loc[
+        :,
+        [
+            *PROGRAM_CODE_CONFIRMATION_KEY,
+            "source_program_code",
+            "mapping_status",
+        ],
+    ].rename(
+        columns={
+            "source_program_code": "confirmed_source_program_code",
+            "mapping_status": "confirmed_program_mapping_status",
+        }
+    )
+    result = indicators.merge(
+        confirmed,
+        how="left",
+        on=PROGRAM_CODE_CONFIRMATION_KEY,
+        validate="many_to_one",
+    )
+    conflict = (
+        result["source_program_code"].notna()
+        & result["confirmed_source_program_code"].notna()
+        & result["source_program_code"]
+        .astype(str)
+        .ne(result["confirmed_source_program_code"].astype(str))
+    )
+    if conflict.any():
+        raise ManualPerformanceError("원본과 확인표의 프로그램코드가 충돌합니다.")
+    confirmed_rows = result["confirmed_source_program_code"].notna()
+    result.loc[confirmed_rows, "source_program_code"] = result.loc[
+        confirmed_rows, "confirmed_source_program_code"
+    ]
+    result["program_mapping_status"] = result["confirmed_program_mapping_status"]
+    return result.drop(
+        columns=[
+            "confirmed_source_program_code",
+            "confirmed_program_mapping_status",
+        ]
+    ).convert_dtypes()
 
 
 def _is_example(record: dict[str, Any]) -> bool:
@@ -210,7 +300,17 @@ def _validate_financial(financial: pd.DataFrame) -> pd.DataFrame:
     result["program_code"] = result["program_code"].astype("string")
     result["fiscal_year"] = pd.to_numeric(result["fiscal_year"], errors="coerce").astype("Int64")
     result["program_name_normalized"] = result["program_name"].map(normalize_program_name)
-    duplicate = result.duplicated(["ministry_code", "fiscal_year", "program_code"], keep=False)
+    duplicate = result.duplicated(
+        [
+            "ministry_code",
+            "fiscal_year",
+            "field_name",
+            "sector_name",
+            "program_code",
+            "program_name_normalized",
+        ],
+        keep=False,
+    )
     if duplicate.any():
         raise ManualPerformanceError(
             f"재정 프로그램-연도 기본키가 중복되었습니다: {int(duplicate.sum())}행"
@@ -225,18 +325,30 @@ def _indicator_status_counts(series: pd.Series) -> str:
 
 def _program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    keys = ["ministry_name", "fiscal_year", "performance_program_name"]
+    keys = [
+        "ministry_name",
+        "fiscal_year",
+        "program_goal_number",
+        "program_name_normalized",
+    ]
     for key, part in indicators.groupby(keys, dropna=False, sort=True):
-        ministry_name, fiscal_year, performance_program_name = key
+        ministry_name, fiscal_year, program_goal_number, program_name_normalized = key
+        performance_program_name = (
+            part["performance_program_name"].dropna().astype(str).mode().iloc[0]
+        )
         rows.append(
             {
                 "ministry_name": ministry_name,
                 "fiscal_year": fiscal_year,
+                "program_goal_number": program_goal_number,
                 "performance_program_name": performance_program_name,
                 "source_program_code": part["source_program_code"].dropna().iloc[0]
                 if part["source_program_code"].notna().any()
                 else pd.NA,
-                "program_name_normalized": normalize_program_name(performance_program_name),
+                "program_mapping_status": part["program_mapping_status"].dropna().iloc[0]
+                if "program_mapping_status" in part and part["program_mapping_status"].notna().any()
+                else pd.NA,
+                "program_name_normalized": program_name_normalized,
                 "indicator_count": len(part),
                 "reported_indicator_count": int(part["actual_value_raw"].notna().sum()),
                 "achievement_rate_numeric_count": int(
@@ -283,23 +395,36 @@ def match_program_year(
 
     for row in program_year.to_dict(orient="records"):
         year_candidates = fiscal.loc[fiscal["fiscal_year"].eq(row["fiscal_year"])]
-        source_code = _text(row.get("source_program_code"))
-        if source_code:
-            candidates = year_candidates.loc[year_candidates["program_code"].eq(source_code)]
-            match_status = "EXACT_CODE"
+        structural_deletion = row.get("program_mapping_status") == "DELETED_TRANSFERRED"
+        if structural_deletion:
+            candidates = year_candidates.iloc[0:0]
+            match_status = "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED"
         else:
-            candidates = year_candidates.loc[
-                year_candidates["program_name"]
-                .astype(str)
-                .str.strip()
-                .eq(str(row["performance_program_name"]).strip())
-            ]
-            match_status = "EXACT_NAME"
-            if candidates.empty:
+            source_code = _text(row.get("source_program_code"))
+            if source_code:
+                candidates = year_candidates.loc[year_candidates["program_code"].eq(source_code)]
+                match_status = "EXACT_CODE"
+                if len(candidates) > 1:
+                    same_name = candidates.loc[
+                        candidates["program_name_normalized"].eq(row["program_name_normalized"])
+                    ]
+                    if not same_name.empty:
+                        candidates = same_name
+            else:
                 candidates = year_candidates.loc[
-                    year_candidates["program_name_normalized"].eq(row["program_name_normalized"])
+                    year_candidates["program_name"]
+                    .astype(str)
+                    .str.strip()
+                    .eq(str(row["performance_program_name"]).strip())
                 ]
-                match_status = "NORMALIZED_NAME"
+                match_status = "EXACT_NAME"
+                if candidates.empty:
+                    candidates = year_candidates.loc[
+                        year_candidates["program_name_normalized"].eq(
+                            row["program_name_normalized"]
+                        )
+                    ]
+                    match_status = "NORMALIZED_NAME"
 
         if len(candidates) > 1:
             usable = candidates.loc[
@@ -311,7 +436,7 @@ def match_program_year(
                 match_status = "EXACT_NAME_UNIQUE_FINANCIAL"
 
         matched = len(candidates) == 1
-        if candidates.empty:
+        if candidates.empty and not structural_deletion:
             match_status = "MANUAL_REVIEW_NO_MATCH"
         elif len(candidates) > 1:
             match_status = "MANUAL_REVIEW_MULTIPLE_MATCHES"
@@ -450,6 +575,7 @@ def build_manual_performance_pilot(
     ministry_code: str = "102",
     start_year: int = 2022,
     end_year: int = 2024,
+    program_code_confirmations_path: Path | None = None,
     overwrite: bool = False,
 ) -> ManualPerformanceResult:
     output_paths = [
@@ -479,6 +605,10 @@ def build_manual_performance_pilot(
         end_year=end_year,
     )
     indicators = manual_rows.loc[manual_rows["analysis_eligible"]].copy()
+    indicators = apply_program_code_confirmations(
+        indicators,
+        program_code_confirmations_path,
+    )
     duplicate_indicator_ids = indicators.duplicated("source_indicator_id", keep=False)
     if duplicate_indicator_ids.any():
         raise ManualPerformanceError(
@@ -503,14 +633,36 @@ def build_manual_performance_pilot(
         fiscal_checked["ministry_code"].eq(ministry_code.zfill(3))
     ].copy()
     for column in amount_columns:
-        output_amount = int(
-            pd.to_numeric(program_year.loc[matched, column], errors="coerce").sum(skipna=True)
+        match_key = [
+            "fiscal_year",
+            "field_name",
+            "sector_name",
+            "program_code",
+            "program_name",
+        ]
+        matched_programs = (
+            program_year.loc[
+                matched,
+                [
+                    "fiscal_year",
+                    "field_name",
+                    "sector_name",
+                    "program_code",
+                    "financial_program_name",
+                    column,
+                ],
+            ]
+            .rename(columns={"financial_program_name": "program_name"})
+            .drop_duplicates(match_key)
         )
-        matched_keys = program_year.loc[matched, ["fiscal_year", "program_code"]].copy()
+        output_amount = int(
+            pd.to_numeric(matched_programs[column], errors="coerce").sum(skipna=True)
+        )
+        matched_keys = matched_programs.loc[:, match_key]
         source_subset = fiscal_checked.merge(
             matched_keys,
             how="inner",
-            on=["fiscal_year", "program_code"],
+            on=match_key,
             validate="one_to_one",
         )
         source_amount = int(pd.to_numeric(source_subset[column], errors="coerce").sum(skipna=True))
@@ -564,7 +716,12 @@ def build_manual_performance_pilot(
             == len(indicators) + int((~manual_rows["analysis_eligible"]).sum()),
             "indicator_id_unique": not indicators["source_indicator_id"].duplicated().any(),
             "program_year_key_unique": not program_year.duplicated(
-                ["ministry_code", "fiscal_year", "performance_program_name"]
+                [
+                    "ministry_code",
+                    "fiscal_year",
+                    "program_goal_number",
+                    "program_name_normalized",
+                ]
             ).any(),
             "all_auto_matches_unique": bool(
                 program_year.loc[matched, "program_code"].notna().all()

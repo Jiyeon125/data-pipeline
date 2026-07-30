@@ -23,9 +23,21 @@ ACCOUNT_TYPES = (
     "RESPONSIBLE_OPERATION_ACCOUNT",
     "FUND",
 )
-PROGRAM_KEY = ["ministry_code", "fiscal_year", "program_code"]
-ACCOUNT_PROGRAM_KEY = [*PROGRAM_KEY, "account_type"]
-PERFORMANCE_KEY = ["ministry_name", "fiscal_year", "performance_program_name"]
+PROGRAM_KEY = [
+    "ministry_code",
+    "fiscal_year",
+    "field_name",
+    "sector_name",
+    "program_code",
+]
+FINANCIAL_PROGRAM_KEY = [*PROGRAM_KEY, "program_name"]
+ACCOUNT_PROGRAM_KEY = [*FINANCIAL_PROGRAM_KEY, "account_type"]
+PERFORMANCE_KEY = [
+    "ministry_name",
+    "fiscal_year",
+    "program_name_normalized",
+    "source_program_code",
+]
 
 
 class SameYearBudgetCheckError(ValueError):
@@ -64,6 +76,7 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
             "source_indicator_id",
             "ministry_name",
             "fiscal_year",
+            "program_goal_number",
             "performance_program_name",
             "source_program_code",
             "analysis_actual_value_numeric",
@@ -79,13 +92,15 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
     ):
         raise SameYearBudgetCheckError("성과지표 행ID는 결측 없이 유일해야 합니다.")
 
+    working = indicators.copy()
+    if "program_mapping_status" not in working:
+        working["program_mapping_status"] = pd.NA
+    working["program_name_normalized"] = working["performance_program_name"].map(
+        normalize_program_name
+    )
+    working["source_program_code"] = working["source_program_code"].astype("string")
     rows: list[dict[str, Any]] = []
-    for key, part in indicators.groupby(PERFORMANCE_KEY, dropna=False, sort=True):
-        program_codes = part["source_program_code"].dropna().astype(str).unique()
-        if len(program_codes) > 1:
-            raise SameYearBudgetCheckError(
-                f"같은 프로그램-연도에 복수 원천 프로그램코드가 있습니다: {key}"
-            )
+    for key, part in working.groupby(PERFORMANCE_KEY, dropna=False, sort=True):
         comparable = part.loc[
             part["analysis_achievement_rate_formula_eligible"].fillna(False)
             & part["analysis_official_achievement_rate_numeric"].notna()
@@ -104,13 +119,22 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
             signal = "ALL_COMPARABLE_BELOW_TARGET"
         else:
             signal = "MIXED_COMPARABLE"
+        goal_numbers = sorted(part["program_goal_number"].dropna().astype(str).unique())
         rows.append(
             {
                 "ministry_name": key[0],
                 "fiscal_year": key[1],
-                "performance_program_name": key[2],
-                "source_program_code": program_codes[0] if len(program_codes) else pd.NA,
-                "program_name_normalized": normalize_program_name(key[2]),
+                "program_goal_number": ";".join(goal_numbers) if goal_numbers else pd.NA,
+                "performance_program_name": (
+                    part["performance_program_name"].dropna().astype(str).mode().iloc[0]
+                ),
+                "source_program_code": key[3],
+                "program_mapping_status": (
+                    part["program_mapping_status"].dropna().iloc[0]
+                    if part["program_mapping_status"].notna().any()
+                    else pd.NA
+                ),
+                "program_name_normalized": key[2],
                 "indicator_count": len(part),
                 "reported_indicator_count": int(
                     part["analysis_actual_value_numeric"].notna().sum()
@@ -234,13 +258,14 @@ def join_performance_and_financial(
         "ministry_code",
         "program_match_status",
         "program_match_eligible",
+        "field_name",
+        "sector_name",
         "program_code",
         "financial_program_name",
     ]
     matched = matched.loc[:, match_columns]
     financial_columns = [
         *ACCOUNT_PROGRAM_KEY,
-        "program_name",
         "original_budget",
         "current_budget",
         "settlement_expenditure",
@@ -256,7 +281,8 @@ def join_performance_and_financial(
     analysis = matched.loc[matched_rows].merge(
         account_type_financial.loc[:, financial_columns],
         how="left",
-        on=PROGRAM_KEY,
+        left_on=[*PROGRAM_KEY, "financial_program_name"],
+        right_on=FINANCIAL_PROGRAM_KEY,
         validate="one_to_many",
     )
     unmatched = matched.loc[~matched_rows].copy()
@@ -287,6 +313,10 @@ def join_performance_and_financial(
         "PROGRAM_MATCH_REVIEW"
     )
     analysis.loc[
+        analysis["program_mapping_status"].eq("DELETED_TRANSFERRED"),
+        "analysis_status",
+    ] = "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED"
+    analysis.loc[
         analysis["program_match_eligible"].fillna(False) & analysis["account_type"].isna(),
         "analysis_status",
     ] = "FINANCIAL_ACCOUNT_TYPE_MISSING"
@@ -316,7 +346,13 @@ def join_performance_and_financial(
     analysis["execution_below_80"] = joint & analysis["account_execution_rate"].lt(0.80)
     analysis["execution_below_90"] = joint & analysis["account_execution_rate"].lt(0.90)
     if analysis.duplicated(
-        ["ministry_code", "fiscal_year", "performance_program_name", "account_type"]
+        [
+            "ministry_code",
+            "fiscal_year",
+            "program_goal_number",
+            "performance_program_name",
+            "account_type",
+        ]
     ).any():
         raise SameYearBudgetCheckError("결합 결과의 프로그램-연도-회계유형 키가 중복되었습니다.")
     return analysis.convert_dtypes()
@@ -537,6 +573,7 @@ def run_same_year_budget_check(
                 [
                     "ministry_code",
                     "fiscal_year",
+                    "program_goal_number",
                     "performance_program_name",
                     "account_type",
                 ]

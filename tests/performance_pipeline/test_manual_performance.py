@@ -6,8 +6,10 @@ import pandas as pd
 from openpyxl import Workbook
 
 from performance_pipeline.manual_performance import (
+    apply_program_code_confirmations,
     build_manual_performance_pilot,
     build_program_match_review,
+    match_program_year,
 )
 
 HEADERS = [
@@ -184,6 +186,8 @@ def _financial(path: Path) -> None:
                 "fiscal_year": 2022,
                 "ministry_code": "102",
                 "ministry_name": "중소벤처기업부",
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "0100",
                 "program_name": "프로그램A",
                 "original_budget": 100,
@@ -197,6 +201,8 @@ def _financial(path: Path) -> None:
                 "fiscal_year": 2023,
                 "ministry_code": "102",
                 "ministry_name": "중소벤처기업부",
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "0200",
                 "program_name": "프로그램B",
                 "original_budget": 200,
@@ -210,6 +216,8 @@ def _financial(path: Path) -> None:
                 "fiscal_year": 2022,
                 "ministry_code": "102",
                 "ministry_name": "중소벤처기업부",
+                "field_name": "산업·중소기업및에너지",
+                "sector_name": "산업혁신지원",
                 "program_code": "UNKNOWN",
                 "program_name": "프로그램A",
                 "original_budget": 0,
@@ -223,6 +231,8 @@ def _financial(path: Path) -> None:
                 "fiscal_year": 2022,
                 "ministry_code": "019",
                 "ministry_name": "고용노동부",
+                "field_name": "사회복지",
+                "sector_name": "고용",
                 "program_code": "0100",
                 "program_name": "다른부처프로그램",
                 "original_budget": 999,
@@ -270,6 +280,83 @@ def test_manual_pilot_preserves_rows_and_matches_unique_program_years(
     assert all(path.exists() for path in result.output_paths)
 
 
+def test_program_code_confirmations_apply_by_year_goal_and_normalized_name(
+    tmp_path: Path,
+) -> None:
+    indicators = pd.DataFrame(
+        [
+            {
+                "source_indicator_id": "id-1",
+                "ministry_name": "과학기술정보통신부",
+                "fiscal_year": 2023,
+                "program_goal_number": "Ⅱ-2",
+                "performance_program_name": "과학기술인력양 성",
+                "program_name_normalized": "과학기술인력양성",
+                "source_program_code": pd.NA,
+            }
+        ]
+    )
+    confirmations_path = tmp_path / "program_codes.csv"
+    pd.DataFrame(
+        [
+            {
+                "ministry_name": "과학기술정보통신부",
+                "fiscal_year": 2023,
+                "program_goal_number": "Ⅱ-2",
+                "performance_program_name": "과학기술인력양성",
+                "source_program_code": "1700",
+                "mapping_status": "CONFIRMED",
+            }
+        ]
+    ).to_csv(confirmations_path, index=False)
+
+    result = apply_program_code_confirmations(indicators, confirmations_path)
+
+    assert result.loc[0, "source_program_code"] == "1700"
+    assert result.loc[0, "program_mapping_status"] == "CONFIRMED"
+
+
+def test_deleted_transferred_program_is_not_financially_matched() -> None:
+    program_year = pd.DataFrame(
+        [
+            {
+                "ministry_name": "과학기술정보통신부",
+                "fiscal_year": 2023,
+                "program_goal_number": "Ⅱ-6",
+                "performance_program_name": "평생직업교육 체제 구축",
+                "program_name_normalized": "평생직업교육체제구축",
+                "source_program_code": pd.NA,
+                "program_mapping_status": "DELETED_TRANSFERRED",
+                "reported_indicator_count": 0,
+            }
+        ]
+    )
+    financial = pd.DataFrame(
+        [
+            {
+                "fiscal_year": 2023,
+                "ministry_code": "162",
+                "ministry_name": "과학기술정보통신부",
+                "field_name": "교육",
+                "sector_name": "평생·직업교육",
+                "program_code": "UNKNOWN",
+                "program_name": "평생직업교육 체제 구축",
+                "original_budget": 0,
+                "current_budget": 0,
+                "settlement_expenditure": 0,
+                "execution_rate": None,
+                "financial_linkage_status": "UNMATCHED",
+                "financial_quality_level": "LOW",
+            }
+        ]
+    )
+
+    result = match_program_year(program_year, financial, ministry_code="162")
+
+    assert not result.loc[0, "program_match_eligible"]
+    assert result.loc[0, "program_match_status"] == "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED"
+
+
 def test_program_match_review_keeps_unmatched_rows_and_never_auto_confirms(
     tmp_path: Path,
 ) -> None:
@@ -301,6 +388,8 @@ def test_program_match_review_keeps_unmatched_rows_and_never_auto_confirms(
                 "fiscal_year": 2023,
                 "ministry_code": "162",
                 "ministry_name": "과학기술정보통신부",
+                "field_name": "과학기술",
+                "sector_name": "과학기술연구개발",
                 "program_code": "1000",
                 "program_name": "과학기술혁신지원",
                 "original_budget": 100,
@@ -314,6 +403,8 @@ def test_program_match_review_keeps_unmatched_rows_and_never_auto_confirms(
                 "fiscal_year": 2023,
                 "ministry_code": "075",
                 "ministry_name": "보건복지부",
+                "field_name": "사회복지",
+                "sector_name": "보건의료",
                 "program_code": "9999",
                 "program_name": "과학기술인력양성",
                 "original_budget": 999,

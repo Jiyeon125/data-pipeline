@@ -49,16 +49,11 @@ def test_name_normalization_and_same_code_continuity() -> None:
     assert continued["previous_project_id"] == "p22"
     assert continued["next_project_id"] == "p23"
     assert bool(continued["continuity_flag"])
-    boundaries = relations.loc[
-        relations["relation_type"].isin({"LEFT_CENSORED", "RIGHT_CENSORED"})
-    ]
+    boundaries = relations.loc[relations["relation_type"].isin({"LEFT_CENSORED", "RIGHT_CENSORED"})]
     assert set(boundaries["review_priority"]) == {"INFORMATIONAL"}
     assert not boundaries["manual_review_required"].any()
     assert (
-        relations.loc[
-            relations["next_fiscal_year"].eq(2022), "relation_type"
-        ].eq("NEW").sum()
-        == 0
+        relations.loc[relations["next_fiscal_year"].eq(2022), "relation_type"].eq("NEW").sum() == 0
     )
 
 
@@ -125,6 +120,8 @@ def _program_row(
         "fiscal_year": 2024,
         "ministry_code": "075",
         "ministry_name": "보건복지부",
+        "field_name": "사회복지",
+        "sector_name": "기초생활보장",
         "program_code": "P1",
         "program_name": "복지 프로그램",
         "in_broad_population": broad,
@@ -161,6 +158,18 @@ def test_program_amount_aggregation_and_partial_rate_guard() -> None:
     assert pd.isna(partial.loc[0, "execution_rate"])
 
 
+def test_program_aggregation_does_not_mix_reused_codes_with_different_names() -> None:
+    first = _program_row("a")
+    second = _program_row("b")
+    second["program_name"] = "다른 프로그램"
+
+    programs, _ = build_program_year_financial(pd.DataFrame([first, second]))
+
+    assert len(programs) == 2
+    assert set(programs["program_name"]) == {"복지 프로그램", "다른 프로그램"}
+    assert programs["original_budget"].eq(100).all()
+
+
 def test_representativeness_group_is_retained_in_general_population() -> None:
     row = _program_row("fund")
     row["ministry_code"] = "019"
@@ -181,9 +190,7 @@ def test_structural_change_and_zero_base_exclude_changes_without_mutation() -> N
     for column in SOURCE_AMOUNT_COLUMNS:
         financial[column] = 0 if column in {"budget_amount", "settlement_budget_amount"} else 10
     financial.loc[financial["project_id"].ne("z22"), "budget_amount"] = 20
-    financial.loc[
-        financial["project_id"].ne("z22"), "settlement_budget_amount"
-    ] = 20
+    financial.loc[financial["project_id"].ne("z22"), "settlement_budget_amount"] = 20
     financial["execution_rate"] = 0.8
     financial["execution_denominator_status"] = "APPLIED"
     financial["quality_issue_reasons"] = ""
@@ -199,7 +206,7 @@ def test_structural_change_and_zero_base_exclude_changes_without_mutation() -> N
                 "comparison_group": "FUND|DIRECT|OTHER",
                 "classification_status": "RULE_CONFIRMED",
                 "manual_review_required": False,
-                "source_project_year_ids": f"[\"{row['project_id']}\"]",
+                "source_project_year_ids": f'["{row["project_id"]}"]',
             }
             for row in rows
         ]
@@ -229,9 +236,7 @@ def test_structural_change_and_zero_base_exclude_changes_without_mutation() -> N
     zero_base = result.loc[result["project_id"].eq("z23")].iloc[0]
     observation_start = result.loc[result["project_id"].eq("z22")].iloc[0]
     new_project = result.loc[result["project_id"].eq("n23")].iloc[0]
-    assert "PREVIOUS_ORIGINAL_BUDGET_ZERO" in zero_base[
-        "budget_change_missing_reason"
-    ]
+    assert "PREVIOUS_ORIGINAL_BUDGET_ZERO" in zero_base["budget_change_missing_reason"]
     assert pd.isna(zero_base["original_budget_change_rate"])
     assert zero_base["project_status"] == "OBSERVATION_END"
     assert zero_base["structural_change_type"] == "RIGHT_CENSORED"
