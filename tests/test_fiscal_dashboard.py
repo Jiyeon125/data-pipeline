@@ -33,11 +33,11 @@ def test_dashboard_data_contract_and_filter() -> None:
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
 
-    assert len(candidates) == 346
-    assert len(filtered) == 194
+    assert len(candidates) == 347
+    assert len(filtered) == 195
     assert _program_count(candidates) == 68
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape == (776, 28)
+    assert data["scores"].shape == (780, 28)
     assert data["drilldown"].empty
     assert not data["drilldown"]["project_performance_attributed"].any()
     assert not data["stability"]["candidate_id"].duplicated().any()
@@ -55,7 +55,7 @@ def test_dashboard_data_contract_and_filter() -> None:
         ],
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
-    assert len(full) == 346
+    assert len(full) == 347
     assert full["data_validation_signal"].sum() == 12
     assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 12
     worklist = _review_worklist(full.loc[full["data_validation_signal"]])
@@ -81,9 +81,9 @@ def test_dashboard_default_render() -> None:
     assert app.segmented_control[0].options == WORKFLOW_STEPS
     assert app.segmented_control[0].value == "1. 전체 현황"
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
-        ("분석행", "346"),
-        ("점검 신호 있음", "227"),
-        ("순위 비교 가능", "194"),
+        ("분석행", "347"),
+        ("점검 신호 있음", "228"),
+        ("순위 비교 가능", "195"),
         ("데이터 먼저 확인", "12"),
     ]
     assert "지금 해야 할 일부터 보여드립니다" in [heading.value for heading in app.subheader]
@@ -123,6 +123,6 @@ def test_dashboard_ministry_rank_view() -> None:
     assert app.segmented_control[1].value == "선택 부처 내부"
     assert "기준을 바꿔도 계속 상위인지 확인합니다" in [item.value for item in app.subheader]
     assert any(
-        "고용노동부 내부 기준 현재 필터 40행 중 공통 Top 5는 2행" in item.value
+        "고용노동부 내부 기준 현재 필터 41행 중 공통 Top 5는 2행" in item.value
         for item in app.warning
     )

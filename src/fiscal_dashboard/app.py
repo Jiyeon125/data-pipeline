@@ -619,8 +619,8 @@ def _review_worklist(frame: pd.DataFrame) -> pd.DataFrame:
         if row["analysis_status"] == "FINANCIAL_LINKAGE_LIMITED":
             return (
                 "확인 필요",
-                "성과 프로그램과 재정 세부사업 연결 제한",
-                "공식 프로그램코드와 세부사업 조인 키를 대조",
+                "성과 프로그램 일부 재정행만 분석 가능",
+                "제외 세부사업의 마스킹·중복·분모 누락 근거 확인",
             )
         return (
             "확인 필요",
