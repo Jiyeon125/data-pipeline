@@ -472,6 +472,8 @@ fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --overwrite
 - 출처나 지표 대응을 사람이 봐야 하는 29행은 `human_review_queue.xlsx`로 분리
 - 현재 수기 기준선은 LLM 요청 0건이며 외부 API 호출 비용도 0달러
 - LLM 요청 하네스는 향후 새 PDF 자동 구조화 또는 가린 골드셋 파일럿에 재사용
+- 기본 모델은 `gpt-5.6-luna`, 추론 강도는 `low`; `OPENAI_MODEL`로만 덮어씀
+- 비용 승인은 예상 출력량이 아니라 요청별 최대 출력량 기준의 보수 상한을 사용
 - 요청 ID·입력 해시·예상 토큰·모델·원본 Parquet 해시 저장
 - 응답의 스키마, 지표 ID, 파일·페이지, 원문 인용을 코드로 검증
 - 누락·실패 요청만 `retry_requests.jsonl`로 분리하며 자동 재제출하지 않음

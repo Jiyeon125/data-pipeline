@@ -90,9 +90,28 @@ def test_request_builder_keeps_strict_schema_for_future_llm_rows() -> None:
     )
     assert index["source_indicator_id"].tolist() == ["019-2023-1"]
     assert requests[0]["body"]["store"] is False
+    assert requests[0]["body"]["reasoning"] == {"effort": "low"}
     assert requests[0]["body"]["text"]["format"]["strict"] is True
     user_payload = json.loads(requests[0]["body"]["input"][1]["content"])
     assert user_payload["request_id"] == requests[0]["custom_id"]
+
+
+def test_cost_gate_uses_maximum_output_budget() -> None:
+    config = {
+        "harness": {
+            "estimated_output_tokens_per_request": 450,
+            "max_output_tokens": 1800,
+            "batch_discount": 0.5,
+            "pricing_usd_per_million": {"gpt-5.6-luna": {"input": 0.20, "output": 1.20}},
+        }
+    }
+    result = lh._cost_scenarios([{"body": {"input": "test"}}], config)
+    luna = result["models"]["gpt-5.6-luna"]
+
+    assert luna["output_tokens_estimate"] == 450
+    assert luna["maximum_output_tokens"] == 1800
+    assert luna["batch_usd_estimate"] > luna["expected_batch_usd_estimate"]
+    assert result["cost_gate_basis"] == "maximum_output_tokens"
 
 
 def test_pilot_selection_round_robins_ministries() -> None:

@@ -1,7 +1,9 @@
 llm:
   provider: openai
+  default_model: gpt-5.6-luna
   model_env: OPENAI_MODEL
   api_key_env: OPENAI_API_KEY
+  reasoning_effort: low
   temperature: 0
   max_retries: 2
   request_timeout_seconds: 120
@@ -31,17 +33,18 @@ harness:
   estimated_output_tokens_per_request: 450
   pilot_request_limit: 12
   max_build_qa_cost_usd: 80
+  batch_discount: 0.5
   pricing_checked_on: "2026-07-31"
-  pricing_source: "https://developers.openai.com/api/docs/models/compare"
+  pricing_source: "https://developers.openai.com/api/docs/pricing"
   pricing_usd_per_million:
     gpt-5.6-luna:
-      input: 1.00
-      cached_input: 0.10
-      output: 6.00
+      input: 0.20
+      cached_input: 0.02
+      output: 1.20
     gpt-5.6-terra:
-      input: 2.50
-      cached_input: 0.25
-      output: 15.00
+      input: 2.00
+      cached_input: 0.20
+      output: 12.00
     gpt-5.6-sol:
       input: 5.00
       cached_input: 0.50

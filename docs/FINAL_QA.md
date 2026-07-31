@@ -38,6 +38,8 @@
 - LLM 후보·요청: 0행·0건
 - 현재 예상 API 비용: `$0`
 - 외부 API 호출: 0건
+- 기본 모델·추론: `gpt-5.6-luna`, `low`
+- 비용 승인: 요청별 최대 출력토큰 기준
 - 설정 상태: `api_execution_allowed: false`
 
 자동 근거 승인은 수기 기준값을 덮어쓰거나 값 불일치를 해소했다는 뜻이 아닙니다.
@@ -47,7 +49,7 @@
 ## 코드와 실행 검사
 
 - Ruff: 통과
-- pytest: 210건 통과
+- pytest: 211건 통과
 - Streamlit AppTest: 6건 포함 통과
 - pip check: 충돌 0건
 - `git diff --check`: 통과

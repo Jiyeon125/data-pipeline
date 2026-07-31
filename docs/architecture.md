@@ -153,7 +153,8 @@ performance_pipeline ─┘                          ↓
 
 - `configs/ministries.yaml`: 분석 대상 부처 코드와 이름
 - `configs/datasets.yaml`: OpenAPI·로컬 데이터셋 명세
-- `configs/llm.yaml`: 환경변수 이름, 프롬프트·스키마 버전, 추출·검토 정책
+- `configs/llm.yaml`: 기본 `gpt-5.6-luna`·`low` 추론, 환경변수 이름,
+  프롬프트·스키마 버전, 가격·비용상한, 추출·검토 정책
 - `configs/join_keys.yaml`: 마스터 키, 코드 정규화, 단계별 매칭 규칙
 - `configs/priority_scenarios.yaml`: 다부처 분석범위·시나리오·임계값
 

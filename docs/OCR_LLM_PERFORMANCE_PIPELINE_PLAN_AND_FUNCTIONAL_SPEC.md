@@ -87,21 +87,28 @@ LLM 후보: 0행
 기존 199행·149요청 비용표는 근거 승인 전 보수적 상한 실험이었으며 현재 실행
 계획이 아닙니다. 새 PDF 파일럿은 실제 신규 문서에서 다시 견적을 산출합니다.
 
-| 모델 | 입력/출력 US$/1M | 일반 호출 추정 | Batch 추정 |
+근거 승인 전 149개 요청을 복원한다고 가정한 비교입니다. 기대비용은 요청당
+450 출력토큰, 승인상한은 요청당 최대 1,800 출력토큰을 사용합니다.
+
+| 모델 | Standard 입력/출력 US$/1M | 기대 Batch | 승인상한 Batch |
 |---|---:|---:|---:|
-| OpenAI GPT-5.6 Luna | 1.00 / 6.00 | $0.66 | $0.33 |
-| OpenAI GPT-5.6 Terra | 2.50 / 15.00 | $1.66 | $0.83 |
-| OpenAI GPT-5.6 Sol | 5.00 / 30.00 | $3.33 | $1.67 |
+| OpenAI GPT-5.6 Luna | 0.20 / 1.20 | $0.067 | $0.187 |
+| OpenAI GPT-5.6 Terra | 2.00 / 12.00 | $0.666 | $1.873 |
+| OpenAI GPT-5.6 Sol | 5.00 / 30.00 | $1.665 | $4.682 |
 
 실제 토큰 수는 모델 토크나이저와 출력 길이에 따라 달라집니다. 첫 파일럿 후
 API 응답의 usage로 추정식을 보정하며, 실패·누락 요청만 재시도합니다.
 
 공식 단가 출처:
 
-- [OpenAI 모델 비교·가격](https://developers.openai.com/api/docs/models/compare)
+- [OpenAI API 가격](https://developers.openai.com/api/docs/pricing)
+- [GPT-5.6 Luna 모델](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
 - [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
 - [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)
+
+현재 실행 설정은 `gpt-5.6-luna`, `reasoning.effort=low`, `store=false`입니다.
+외부 호출 잠금 `api_execution_allowed=false`는 API 키를 받을 때까지 유지합니다.
 
 ### 4.3 OCR 비용
 

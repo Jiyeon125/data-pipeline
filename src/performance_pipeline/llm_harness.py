@@ -292,6 +292,7 @@ def build_request_entries(
     schema_version: str,
     max_evidence_chars: int,
     max_output_tokens: int,
+    reasoning_effort: str = "low",
 ) -> tuple[list[dict[str, Any]], pd.DataFrame]:
     rows = candidates.loc[candidates["automation_route"].eq("LLM_CANDIDATE")].copy()
     rows["bundle_key"] = rows.apply(_bundle_key, axis=1)
@@ -306,15 +307,16 @@ def build_request_entries(
             "task": "validate_performance_indicator_extraction",
             "records": records,
         }
-        request_seed = (prompt_version + schema_version + model + _json_text(content)).encode(
-            "utf-8"
-        )
+        request_seed = (
+            prompt_version + schema_version + model + reasoning_effort + _json_text(content)
+        ).encode("utf-8")
         request_id = "perf-" + _sha256_bytes(request_seed)[:24]
         content["request_id"] = request_id
         content_text = _json_text(content)
         body = {
             "model": model,
             "store": False,
+            "reasoning": {"effort": reasoning_effort},
             "input": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": content_text},
@@ -348,6 +350,7 @@ def build_request_entries(
                     "input_token_estimate": estimate_tokens(serialized),
                     "cache_key": _sha256_bytes(request_seed),
                     "model": model,
+                    "reasoning_effort": reasoning_effort,
                 }
             )
     columns = [
@@ -359,6 +362,7 @@ def build_request_entries(
         "input_token_estimate",
         "cache_key",
         "model",
+        "reasoning_effort",
     ]
     return requests, pd.DataFrame(index_rows, columns=columns).convert_dtypes()
 
@@ -392,26 +396,36 @@ def _cost_scenarios(
 ) -> dict[str, Any]:
     serialized = [_json_text(entry) for entry in request_entries]
     input_tokens = sum(estimate_tokens(value) for value in serialized)
-    output_tokens = len(request_entries) * int(
+    expected_output_tokens = len(request_entries) * int(
         config["harness"]["estimated_output_tokens_per_request"]
     )
+    maximum_output_tokens = len(request_entries) * int(config["harness"]["max_output_tokens"])
+    batch_discount = float(config["harness"].get("batch_discount", 0.5))
     prices = config["harness"].get("pricing_usd_per_million", {})
     scenarios: dict[str, Any] = {}
     for model, price in prices.items():
-        synchronous = (
+        expected_synchronous = (
             input_tokens * float(price["input"]) / 1_000_000
-            + output_tokens * float(price["output"]) / 1_000_000
+            + expected_output_tokens * float(price["output"]) / 1_000_000
+        )
+        maximum_synchronous = (
+            input_tokens * float(price["input"]) / 1_000_000
+            + maximum_output_tokens * float(price["output"]) / 1_000_000
         )
         scenarios[str(model)] = {
             "input_tokens_estimate": input_tokens,
-            "output_tokens_estimate": output_tokens,
-            "synchronous_usd_estimate": synchronous,
-            "batch_usd_estimate": synchronous * 0.5,
+            "output_tokens_estimate": expected_output_tokens,
+            "maximum_output_tokens": maximum_output_tokens,
+            "expected_synchronous_usd_estimate": expected_synchronous,
+            "expected_batch_usd_estimate": expected_synchronous * batch_discount,
+            "synchronous_usd_estimate": maximum_synchronous,
+            "batch_usd_estimate": maximum_synchronous * batch_discount,
         }
     return {
         "token_estimation_method": "ceil(serialized_unicode_chars/2)",
         "actual_usage_required_after_pilot": True,
-        "batch_discount_assumption": 0.5,
+        "cost_gate_basis": "maximum_output_tokens",
+        "batch_discount_assumption": batch_discount,
         "pricing_checked_on": config["harness"].get("pricing_checked_on"),
         "pricing_source": config["harness"].get("pricing_source"),
         "models": scenarios,
@@ -429,7 +443,11 @@ def prepare_llm_harness(
     config_path = root / "configs/llm.yaml"
     config = load_llm_config(config_path)
     model_env = str(config["llm"]["model_env"])
-    selected_model = model or os.getenv(model_env) or MODEL_PLACEHOLDER
+    selected_model = (
+        model
+        or os.getenv(model_env)
+        or str(config["llm"].get("default_model") or MODEL_PLACEHOLDER)
+    )
     output_dir = output_dir or root / "data/interim/llm_harness"
     targets = (
         output_dir / "candidate_rows.csv",
@@ -456,6 +474,7 @@ def prepare_llm_harness(
         schema_version=str(config["llm"]["schema_version"]),
         max_evidence_chars=int(harness["max_evidence_chars"]),
         max_output_tokens=int(harness["max_output_tokens"]),
+        reasoning_effort=str(config["llm"].get("reasoning_effort", "low")),
     )
     pilot_ids = _pilot_request_ids(
         request_index,
@@ -531,6 +550,7 @@ def prepare_llm_harness(
         "api_called": False,
         "api_ready": bool(requests) and selected_model != MODEL_PLACEHOLDER,
         "model": selected_model,
+        "reasoning_effort": str(config["llm"].get("reasoning_effort", "low")),
         "source_rows": len(candidates),
         "route_counts": {
             str(key): int(value)
@@ -605,7 +625,7 @@ def _usage_summary(
     price = config["harness"].get("pricing_usd_per_million", {}).get(model)
     conservative_batch_cost = None
     if price:
-        conservative_batch_cost = 0.5 * (
+        conservative_batch_cost = float(config["harness"].get("batch_discount", 0.5)) * (
             input_tokens * float(price["input"]) / 1_000_000
             + output_tokens * float(price["output"]) / 1_000_000
         )

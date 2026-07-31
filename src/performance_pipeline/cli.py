@@ -258,7 +258,7 @@ def prepare_document_llm_harness(
     root: Path = typer.Option(Path("."), help="프로젝트 루트"),
     model: str | None = typer.Option(
         None,
-        help="OpenAI 모델. 생략하면 OPENAI_MODEL, 둘 다 없으면 모델선택 대기 상태",
+        help="OpenAI 모델. 생략하면 OPENAI_MODEL, 없으면 configs/llm.yaml 기본 모델",
     ),
     overwrite: bool = typer.Option(False, help="기존 로컬 하네스 산출물 덮어쓰기"),
 ) -> None:
