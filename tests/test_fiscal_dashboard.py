@@ -34,10 +34,10 @@ def test_dashboard_data_contract_and_filter() -> None:
     )
 
     assert len(candidates) == 347
-    assert len(filtered) == 195
+    assert len(filtered) == 193
     assert _program_count(candidates) == 68
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape == (780, 28)
+    assert data["scores"].shape == (772, 28)
     assert data["drilldown"].empty
     assert not data["drilldown"]["project_performance_attributed"].any()
     assert not data["stability"]["candidate_id"].duplicated().any()
@@ -56,11 +56,11 @@ def test_dashboard_data_contract_and_filter() -> None:
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
     assert len(full) == 347
-    assert full["data_validation_signal"].sum() == 12
-    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 12
+    assert full["data_validation_signal"].sum() == 14
+    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 14
     worklist = _review_worklist(full.loc[full["data_validation_signal"]])
     assert len(worklist) == 9
-    assert worklist["영향행"].sum() == 12
+    assert worklist["영향행"].sum() == 14
     assert worklist["상태"].eq("확인 필요").sum() == 7
     assert worklist["상태"].eq("확인 완료").sum() == 2
     assert _component_summary("성과", 0.5)[0] == "50%"
@@ -83,8 +83,8 @@ def test_dashboard_default_render() -> None:
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
         ("분석행", "347"),
         ("점검 신호 있음", "228"),
-        ("순위 비교 가능", "195"),
-        ("데이터 먼저 확인", "12"),
+        ("순위 비교 가능", "193"),
+        ("데이터 먼저 확인", "14"),
     ]
     assert "지금 해야 할 일부터 보여드립니다" in [heading.value for heading in app.subheader]
     assert any(frame.value.shape[0] == 5 for frame in app.dataframe)
@@ -97,7 +97,7 @@ def test_dashboard_guided_steps_and_candidate_to_review() -> None:
     assert not app.exception
     assert "먼저 해결할 일을 프로그램 단위로 정리했습니다" in [item.value for item in app.subheader]
     assert any(frame.value.shape[0] == 9 for frame in app.dataframe)
-    assert any(frame.value.shape[0] == 12 for frame in app.dataframe)
+    assert any(frame.value.shape[0] == 14 for frame in app.dataframe)
 
     app.segmented_control[0].set_value("3. 후보 살펴보기").run()
     assert not app.exception

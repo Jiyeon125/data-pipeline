@@ -12,6 +12,7 @@ from analytics.unknown_top16_review import (
     SHEET_PROJECTS,
     UnknownReviewError,
     UnknownReviewPaths,
+    apply_unknown_review_overlay,
     build_unknown_review_workbook,
     validate_unknown_review_workbook,
 )
@@ -120,3 +121,57 @@ def test_existing_review_workbook_is_not_overwritten_by_default(tmp_path: Path) 
         build_unknown_review_workbook(paths, expected_project_count=1)
 
     assert paths.workbook.read_bytes() == original
+
+
+def test_confirmed_structural_mixed_review_stays_unknown(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    _write_inputs(paths)
+    build_unknown_review_workbook(paths, expected_project_count=1)
+    workbook = load_workbook(paths.workbook)
+    sheet = workbook[SHEET_PROJECTS]
+    headers = [cell.value for cell in sheet[HEADER_ROW]]
+    values = {
+        "analysis_scope_status": "IN_SCOPE",
+        "fiscal_instrument_applicability": "REVIEW_REQUIRED",
+        "fiscal_instrument": "UNKNOWN",
+        "all_years_same_classification": "YES",
+        "classification_evidence": "공식 자료에서 직접과 보조가 함께 확인됨",
+        "evidence_source": "공식 사업설명자료 p.1",
+        "confidence": "HIGH",
+        "reviewer": "검수자",
+        "reviewed_at": "2026-07-31",
+        "review_status": "CONFIRMED",
+        "review_note": "일반 분석 유지, 재정수단 내부 비교 제한",
+    }
+    for header, value in values.items():
+        sheet.cell(5, headers.index(header) + 1, value)
+    workbook.save(paths.workbook)
+
+    validation = validate_unknown_review_workbook(
+        paths,
+        require_complete=True,
+        expected_project_count=1,
+    )
+    frame = pd.read_parquet(paths.ranking_population).assign(
+        fiscal_instrument="UNKNOWN",
+        account_type_classified="FUND",
+        project_category="PROGRAM_EXPENDITURE",
+        analysis_included_classified=True,
+        exclusion_category_classified=pd.NA,
+        exclusion_reason_classified=pd.NA,
+        instrument_classification_method="NO_INSTRUMENT_RULE_MATCH",
+        instrument_classification_evidence="",
+        instrument_manual_review_required=True,
+        classification_manual_review_required=True,
+        classification_status="MANUAL_REVIEW",
+        classification_method="RULE",
+        classification_evidence="",
+        comparison_group="FUND|UNKNOWN|PROGRAM_EXPENDITURE",
+    )
+    overlaid, audit = apply_unknown_review_overlay(frame, paths.workbook)
+
+    assert validation.status == "PASS"
+    assert overlaid["fiscal_instrument"].eq("UNKNOWN").all()
+    assert overlaid["analysis_included_classified"].all()
+    assert overlaid["classification_status"].eq("MANUAL_CONFIRMED").all()
+    assert audit["ranking_population_impact"].eq("KEEP_GENERAL_EXCLUDE_INSTRUMENT_PEER").all()

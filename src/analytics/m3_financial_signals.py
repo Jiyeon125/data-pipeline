@@ -126,6 +126,7 @@ class M3Paths:
     monthly_patterns: Path
     normalized_hhi: Path
     feedback_cohorts: Path
+    unknown_review_workbook: Path
     output_dir: Path
     figure_dir: Path
     report: Path
@@ -150,6 +151,10 @@ class M3Paths:
             / "monthly_execution_pattern_summary.csv",
             normalized_hhi=validation / "program_concentration_normalized.csv",
             feedback_cohorts=validation / "feedback_cohort_t1_t2.csv",
+            unknown_review_workbook=root
+            / "data"
+            / "manual"
+            / "unknown_priority_fiscal_instrument_review.xlsx",
             output_dir=root / "data" / "analytics" / "m3",
             figure_dir=root / "artifacts" / "figures" / "m3",
             report=root / "docs" / "M3_FINANCIAL_INSIGHTS.md",
@@ -168,6 +173,7 @@ class M3Paths:
             self.monthly_patterns,
             self.normalized_hhi,
             self.feedback_cohorts,
+            self.unknown_review_workbook,
         ]
 
 
@@ -803,7 +809,14 @@ def signal_type_summary(features: pd.DataFrame) -> pd.DataFrame:
 
 
 def program_year_signal_summary(features: pd.DataFrame, programs: pd.DataFrame) -> pd.DataFrame:
-    keys = ["ministry_code", "program_code", "fiscal_year"]
+    keys = [
+        "ministry_code",
+        "field_name",
+        "sector_name",
+        "program_code",
+        "program_name",
+        "fiscal_year",
+    ]
     rows = []
     for key, part in features[features["program_code"].notna()].groupby(keys):
         budget = _numeric(part, "original_budget_analysis_amount").clip(lower=0)
@@ -2009,10 +2022,33 @@ def build_m3_report(
 
 def build_m3_analysis(paths: M3Paths) -> M3Result:
     before_hashes = {str(path): _hash(path) for path in paths.inputs}
-    ranking = pd.read_parquet(paths.ranking_v2)
+    baseline_ranking = pd.read_parquet(paths.ranking_v2)
     v2 = pd.read_parquet(paths.v2)
     programs = pd.read_parquet(paths.program)
+    core = pd.read_parquet(paths.core)
     broad = pd.read_parquet(paths.broad)
+    review_paths = UnknownReviewPaths(
+        priority=paths.output_dir / "unknown_manual_review_priority.csv",
+        ranking_population=paths.ranking_v2,
+        workbook=paths.unknown_review_workbook,
+        validation_summary=paths.unknown_review_workbook.with_name(
+            "unknown_priority_fiscal_instrument_review_validation.json"
+        ),
+    )
+    review_validation = validate_unknown_review_workbook(
+        review_paths,
+        require_complete=True,
+    )
+    if review_validation.status != "PASS":
+        raise ValueError("UNKNOWN 사람 검수가 완료되지 않아 M3 오버레이를 적용할 수 없습니다.")
+    reviewed_core, review_audit = apply_unknown_review_overlay(
+        core,
+        paths.unknown_review_workbook,
+    )
+    reviewed_ranking_all = add_ranking_v2_flags(reviewed_core, v2)
+    ranking = reviewed_ranking_all.loc[
+        reviewed_ranking_all["overall_ranking_eligible"]
+    ].reset_index(drop=True)
     patterns = _read_patterns(paths.monthly_patterns)
     hhi = pd.read_csv(
         paths.normalized_hhi,
@@ -2030,6 +2066,7 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
         },
     )
 
+    baseline_features = build_signal_features(baseline_ranking, patterns, hhi)
     features = build_signal_features(ranking, patterns, hhi)
     repeated = build_repeated_signals(features)
     features = attach_signal_types(features, repeated)
@@ -2091,6 +2128,7 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
         "unknown_manual_review_priority.csv": unknown,
         "program_year_signal_summary.csv": program_signals,
         "budget_extreme_method_comparison.csv": budget_methods,
+        "unknown_review_overlay_audit.csv": review_audit,
     }
     output_paths = [
         _write_csv(frame, paths.output_dir / filename) for filename, frame in output_frames.items()
@@ -2112,6 +2150,58 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
         f"top_{count}_budget_share": float(unknown.head(count)["unknown_budget_share"].sum())
         for count in [100, 300, 500]
     }
+    shared = baseline_features[
+        [
+            "source_project_year_id",
+            "execution_peer_group_size",
+            "peer_bottom_10_execution_flag",
+            "peer_bottom_20_execution_flag",
+            "rank_confidence",
+        ]
+    ].merge(
+        features[
+            [
+                "source_project_year_id",
+                "execution_peer_group_size",
+                "peer_bottom_10_execution_flag",
+                "peer_bottom_20_execution_flag",
+                "rank_confidence",
+            ]
+        ],
+        on="source_project_year_id",
+        how="inner",
+        suffixes=("_before", "_after"),
+        validate="one_to_one",
+    )
+
+    def changed(column: str) -> int:
+        return int(
+            shared[f"{column}_before"]
+            .astype("string")
+            .fillna("<NA>")
+            .ne(shared[f"{column}_after"].astype("string").fillna("<NA>"))
+            .sum()
+        )
+
+    review_ids = set(review_audit["classification_project_id"].astype(str))
+    unchanged_columns = [
+        "fiscal_instrument",
+        "analysis_included_classified",
+        "exclusion_category_classified",
+        "comparison_group",
+    ]
+    outside_before = core.loc[
+        ~core["classification_project_id"].astype(str).isin(review_ids),
+        ["source_project_year_id", *unchanged_columns],
+    ].sort_values("source_project_year_id")
+    outside_after = reviewed_core.loc[
+        ~reviewed_core["classification_project_id"].astype(str).isin(review_ids),
+        ["source_project_year_id", *unchanged_columns],
+    ].sort_values("source_project_year_id")
+    outside_classification_unchanged = outside_before.reset_index(drop=True).equals(
+        outside_after.reset_index(drop=True)
+    )
+    excluded_review = review_audit[review_audit["analysis_scope_status"].eq("OUT_OF_SCOPE")]
     summary = {
         "purpose": "explainable_financial_signal_and_feedback_exploration",
         "path_discrepancies": {
@@ -2157,6 +2247,23 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
             "unknown_80pct_review_count": int(_bool(unknown, "priority_80pct_coverage").sum()),
             "unknown_90pct_review_count": int(_bool(unknown, "priority_90pct_coverage").sum()),
             **unknown_coverages,
+        },
+        "unknown_review_overlay": {
+            "reviewed_project_count": len(review_audit),
+            "reviewed_project_year_rows": int(review_audit["project_year_row_count"].sum()),
+            "scope_excluded_project_count": len(excluded_review),
+            "scope_excluded_project_year_rows": int(
+                excluded_review["project_year_row_count"].sum()
+            ),
+            "scope_excluded_original_budget_amount": int(
+                excluded_review["original_budget_amount"].sum()
+            ),
+            "ranking_rows_before": len(baseline_ranking),
+            "ranking_rows_after": len(ranking),
+            "comparison_group_size_changed_rows": changed("execution_peer_group_size"),
+            "peer_bottom_10_changed_rows": changed("peer_bottom_10_execution_flag"),
+            "peer_bottom_20_changed_rows": changed("peer_bottom_20_execution_flag"),
+            "rank_confidence_changed_rows": changed("rank_confidence"),
         },
         "validation": {},
         "final_composite_score_generated": False,
@@ -2207,6 +2314,11 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
             unknown["manual_confirmed_value"].isna().all()
             and unknown["review_status"].eq("UNREVIEWED").all()
         ),
+        "unknown_review_complete": review_validation.status == "PASS",
+        "unknown_review_project_count_18": len(review_audit) == 18,
+        "unknown_review_project_year_rows_66": int(review_audit["project_year_row_count"].sum())
+        == 66,
+        "review_outside_classification_unchanged": outside_classification_unchanged,
         "report_has_18_sections": all(
             f"## {number}." in paths.report.read_text(encoding="utf-8") for number in range(1, 19)
         ),
@@ -2223,3 +2335,11 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
     if failures:
         raise ValueError(f"M3 검증 실패: {failures}")
     return M3Result(output_paths, figure_paths, paths.report, summary)
+
+
+from analytics.unknown_top16_review import (
+    UnknownReviewPaths,
+    apply_unknown_review_overlay,
+    validate_unknown_review_workbook,
+)
+from master_engineering.quality.ranking_population_v2 import add_ranking_v2_flags

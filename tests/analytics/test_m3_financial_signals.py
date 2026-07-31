@@ -9,6 +9,7 @@ from analytics.m3_financial_signals import (
     build_repeated_signals,
     build_signal_features,
     feedback_summary,
+    program_year_signal_summary,
     unknown_manual_review_priority,
 )
 
@@ -167,6 +168,31 @@ def test_unknown_candidates_are_not_confirmed() -> None:
     assert result["keyword_candidate"] == "LOAN"
     assert pd.isna(result["manual_confirmed_value"])
     assert result["review_status"] == "UNREVIEWED"
+
+
+def test_program_summary_distinguishes_unknown_codes_by_name() -> None:
+    keys = {
+        "ministry_code": ["019", "019"],
+        "field_name": ["사회복지", "사회복지"],
+        "sector_name": ["고용", "고용"],
+        "program_code": ["UNKNOWN", "UNKNOWN"],
+        "program_name": ["고용지원", "고용안전망"],
+        "fiscal_year": [2024, 2024],
+    }
+    features = pd.DataFrame(
+        {
+            **keys,
+            "classification_project_id": ["a", "b"],
+            "original_budget_analysis_amount": [100, 200],
+            **{column: [False, False] for column in (*SIGNAL_COLUMNS, *TYPE_COLUMNS)},
+        }
+    )
+    programs = pd.DataFrame(keys)
+
+    result = program_year_signal_summary(features, programs)
+
+    assert len(result) == 2
+    assert result["analysis_original_budget_amount"].tolist() == [100, 200]
 
 
 def test_feedback_summary_keeps_missing_segment_as_explicit_group() -> None:

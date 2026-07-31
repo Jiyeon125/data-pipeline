@@ -18,6 +18,8 @@ PEER_KEYS = ["fiscal_year", "comparison_group"]
 PROGRAM_KEYS = [
     "fiscal_year",
     "ministry_code",
+    "field_name",
+    "sector_name",
     "program_code",
     "program_name",
 ]

@@ -1,34 +1,34 @@
-# UNKNOWN 우선검수 18개 사업 1차 입력안
+# UNKNOWN 우선검수 18개 사업 확정 결과
 
 ## 목적과 사용 제한
 
 - 대상: `data/manual/unknown_priority_fiscal_instrument_review.xlsx`의 `사업검수` 18개 사업
-- 목적: 사람 검수 전에 공식 자료를 모아 엑셀 입력 후보를 제시
+- 목적: 공식 자료와 사람 검수로 확정한 분석범위·재정수단 판단을 기록
 - 판정 기준: 최종 수혜자가 현금을 받는지가 아니라 중앙정부 예산의 **사업지원형태·집행 경로**를 우선함
-- 상태: LLM 보조 사전검토이며 사람 검수 완료가 아님. 엑셀의 `review_status=CONFIRMED`로 아직 반영하지 않음
+- 상태: 18개 사업·66개 사업-연도 검수 완료, `--require-complete` 통과
 
-## 1차 입력안
+## 확정 입력
 
 | 행 | 소관 | 사업 | 분석범위 | 제외사유 | 적용 | 재정수단 후보 | 연도 동일 | 신뢰도 | 현재 상태 | 판단 근거 |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 5 | 행정안전부 | 보통교부세 | OUT_OF_SCOPE | OUTSIDE_TARGET_POLICY_SCOPE | NOT_APPLICABLE | - | YES | HIGH | 사람 확인 대기 | 지방재정 부족분을 보전하기 위해 지방자치단체에 교부하는 재원 |
-| 6 | 보건복지부 | 기초연금지급 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 지자체 지급, 국비·지방비 분담 구조 |
-| 7 | 고용노동부 | 구직급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | REVIEW_REQUIRED | MEDIUM | 사업설명자료 필요 | 고용보험 급여 직접 지급 성격은 확인되나 연도별 사업지원형태 확인 필요 |
-| 8 | 중소벤처기업부 | 소상공인성장지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 공식 사업설명자료의 사업지원형태가 보조이며 2022년 재난지원금 포함 |
-| 9 | 보건복지부 | 의료급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | REVIEW_REQUIRED | MEDIUM | 사업설명자료 필요 | 의료급여기금 국비·지방비 분담 구조는 확인되나 전체 사업의 연도별 지원형태 직접 확인 필요 |
-| 10 | 고용노동부 | 산재보험급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | REVIEW_REQUIRED | MEDIUM | 사업설명자료 필요 | 국가 운영 산재보험 급여 지급 성격은 확인되나 연도별 사업지원형태 확인 필요 |
-| 11 | 보건복지부 | 생계급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 국고보조율을 적용하는 보조사업으로 공식 예산분석서에서 확인 |
-| 12 | 행정안전부 | 부동산교부세 | OUT_OF_SCOPE | OUTSIDE_TARGET_POLICY_SCOPE | NOT_APPLICABLE | - | YES | HIGH | 사람 확인 대기 | 부동산교부세 전액을 지방자치단체에 교부 |
-| 13 | 행정안전부 | 민생회복 소비쿠폰 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | MEDIUM | 사업설명자료 필요 | 지자체를 통해 카드·지역사랑상품권·선불카드로 지급하나 예산상 사업지원형태 직접 확인 필요 |
-| 14 | 고용노동부 | 모성보호육아지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | REVIEW_REQUIRED | MEDIUM | 사업설명자료 필요 | 출산전후휴가·육아휴직 급여 지급 성격은 확인되나 연도별 사업지원형태 확인 필요 |
-| 15 | 보건복지부 | 영유아보육료 지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 공식 결산분석에서 국고보조 사업으로 확인 |
-| 16 | 보건복지부 | 아동수당 지급 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 지자체 지급과 국고보조율 구조 확인 |
-| 17 | 보건복지부 | 장애인활동지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | REVIEW_REQUIRED | MEDIUM | 사업설명자료 필요 | 바우처·제공기관 집행 구조는 확인되나 예산상 지원형태 직접 확인 필요 |
-| 18 | 중소벤처기업부 | 소상공인 손실보상 제도화 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 공식 사업설명자료와 국회 예산분석에서 보조사업으로 확인 |
-| 19 | 보건복지부 | 노인일자리 및 사회활동지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 지자체 경상보조·민간 경상보조 및 국고보조율 확인 |
-| 20 | 보건복지부 | 부모급여(영아수당) 지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | 사람 확인 대기 | 현금·바우처 급여이지만 지자체 집행과 국고보조율 구조 확인 |
-| 21 | 과학기술정보통신부 | 지급이자와반환금 | OUT_OF_SCOPE | NON_POLICY_ADMINISTRATION | NOT_APPLICABLE | - | YES | HIGH | 사람 확인 대기 | 우체국예금 원리금 지급 의무로 정책사업 순위와 다른 금융계정 의무지출 |
-| 22 | 고용노동부 | 국민취업지원제도(일반) | IN_SCOPE | NOT_APPLICABLE | REVIEW_REQUIRED | UNKNOWN | REVIEW_REQUIRED | MEDIUM | 사업설명자료 필요 | 구직촉진수당과 취업지원서비스가 혼합되어 단일 재정수단 확정 불가 |
+| 5 | 행정안전부 | 보통교부세 | OUT_OF_SCOPE | OUTSIDE_TARGET_POLICY_SCOPE | NOT_APPLICABLE | - | YES | HIGH | CONFIRMED | 지방재정 부족분을 보전하기 위해 지방자치단체에 교부하는 재원 |
+| 6 | 보건복지부 | 기초연금지급 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 지자체 지급, 국비·지방비 분담 구조 |
+| 7 | 고용노동부 | 구직급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | YES | HIGH | CONFIRMED | 2022~2025년 공식 사업설명자료에서 사업지원형태 `직접` 확인 |
+| 8 | 중소벤처기업부 | 소상공인성장지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 공식 사업설명자료의 사업지원형태가 보조이며 2022년 재난지원금 포함 |
+| 9 | 보건복지부 | 의료급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 공식 사업설명자료에서 사업지원형태 `보조`, 서울 50%·그 외 80% 확인 |
+| 10 | 고용노동부 | 산재보험급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | YES | HIGH | CONFIRMED | 2022~2025년 공식 사업설명자료에서 사업지원형태 `직접` 확인 |
+| 11 | 보건복지부 | 생계급여 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 국고보조율을 적용하는 보조사업으로 공식 예산분석서에서 확인 |
+| 12 | 행정안전부 | 부동산교부세 | OUT_OF_SCOPE | OUTSIDE_TARGET_POLICY_SCOPE | NOT_APPLICABLE | - | YES | HIGH | CONFIRMED | 부동산교부세 전액을 지방자치단체에 교부 |
+| 13 | 행정안전부 | 민생회복 소비쿠폰 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 2025년 지자체 공식 예산자료에서 국고보조사업과 국비·지방비 분담 확인 |
+| 14 | 고용노동부 | 모성보호육아지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | YES | HIGH | CONFIRMED | 2022~2025년 공식 사업설명자료에서 사업지원형태 `직접` 확인 |
+| 15 | 보건복지부 | 영유아보육료 지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 공식 결산분석에서 국고보조 사업으로 확인 |
+| 16 | 보건복지부 | 아동수당 지급 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 지자체 지급과 국고보조율 구조 확인 |
+| 17 | 보건복지부 | 장애인활동지원 | IN_SCOPE | NOT_APPLICABLE | REVIEW_REQUIRED | UNKNOWN | YES | HIGH | CONFIRMED | 공식 사업설명자료에서 사업지원형태 `직접`과 `보조`가 모두 체크되고 국고보조율 67%로 확인됨 |
+| 18 | 중소벤처기업부 | 소상공인 손실보상 제도화 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 공식 사업설명자료와 국회 예산분석에서 보조사업으로 확인 |
+| 19 | 보건복지부 | 노인일자리 및 사회활동지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 지자체 경상보조·민간 경상보조 및 국고보조율 확인 |
+| 20 | 보건복지부 | 부모급여(영아수당) 지원 | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | SUBSIDY | YES | HIGH | CONFIRMED | 현금·바우처 급여이지만 지자체 집행과 국고보조율 구조 확인 |
+| 21 | 과학기술정보통신부 | 지급이자와반환금 | OUT_OF_SCOPE | NON_POLICY_ADMINISTRATION | NOT_APPLICABLE | - | YES | HIGH | CONFIRMED | 우체국예금 원리금 지급 의무로 정책사업 순위와 다른 금융계정 의무지출 |
+| 22 | 고용노동부 | 국민취업지원제도(일반) | IN_SCOPE | NOT_APPLICABLE | APPLICABLE | DIRECT | YES | HIGH | CONFIRMED | 서비스와 소득지원이 함께 있으나 2022~2025년 공식 사업설명자료의 사업지원형태는 모두 `직접` |
 
 ## 공식 근거
 
@@ -54,31 +54,34 @@
 | 부모급여 | 국회예산정책처 국고보조율 자료: https://www.nabo.go.kr/board/file/down.do?fid=33317533 |
 | 지급이자와반환금 | 국가법령정보센터 우체국예금·보험법: https://www.law.go.kr/LSW/lsPdfPrint.do?ancYnChk=0&bylChaChk=N&efGubun=Y&efYd=20240209&joAllCheck=Y&joEfOutPutYn=on&lsiSeq=253313&mokChaChk=N |
 | 국민취업지원제도 | 고용노동부 사업안내: https://www.moel.go.kr/news/enews/report/enewsView.do?news_seq=14584 |
+| 구직급여·산재보험급여·모성보호육아지원·국민취업지원제도 | 고용노동부 2022년 사업설명자료: https://www.moel.go.kr/info/financeInfo/openfiscal/busiExplanView.do?bbs_seq=20220300559 |
+| 구직급여·산재보험급여·모성보호육아지원·국민취업지원제도 | 고용노동부 2023년 사업설명자료: https://www.moel.go.kr/info/financeInfo/openfiscal/busiExplanView.do?bbs_seq=20230200029 |
+| 구직급여·산재보험급여·모성보호육아지원·국민취업지원제도 | 고용노동부 2024년 사업설명자료: https://www.moel.go.kr/info/financeInfo/openfiscal/busiExplanView.do?bbs_seq=20240101813 |
+| 구직급여·산재보험급여·모성보호육아지원·국민취업지원제도 | 고용노동부 2025년 사업설명자료: https://www.moel.go.kr/info/financeInfo/openfiscal/busiExplanView.do?bbs_seq=20250100967 |
+| 의료급여·장애인활동지원 | 보건복지부 2022년 사업설명자료: https://www.mohw.go.kr/board.es?act=view&bid=0037&list_depth=1&list_no=369977&mid=a10107010000 |
 
-## 추가 원문이 필요한 범위
+## 추가 원문 필요 여부
 
-큰 성과계획서·성과보고서 PDF 전체는 필요하지 않습니다. 아래 **예산·기금운용계획 사업설명자료의 해당 사업 페이지만** 있으면 됩니다.
-이 자료는 Codex가 먼저 각 부처·국회예산정책처 등 공식 공개처에서 찾아 확인합니다.
-사용자가 직접 찾아서 제출할 목록이 아니며, 공식 공개본을 찾지 못한 항목만 마지막에 별도로 요청합니다.
+- 사용자가 추가로 제출할 원문은 없습니다.
+- 고용노동부 4개 사업은 2022~2025년 공식 사업설명자료에서 `직접`으로 확인했습니다.
+- 의료급여는 보건복지부 공식 사업설명자료에서 `보조`로 확인했습니다.
+- 민생회복 소비쿠폰은 2025년 지자체 공식 예산자료에서 국고보조사업으로 확인했습니다.
+- 장애인활동지원은 원문 부족이 아니라 공식 사업설명자료 자체가 `직접+보조` 복합으로 표시됩니다.
 
-1. 고용노동부 2022~2025년 사업설명자료
-   - 구직급여: `1280-350`
-   - 산재보험급여: `4051-350`
-   - 모성보호육아지원: `1345-358`
-   - 국민취업지원제도(일반): `1234-300`
-2. 행정안전부 2025년 추경 사업설명자료
-   - 민생회복 소비쿠폰
-3. 보건복지부 2022~2025년 사업설명자료
-   - 의료급여: `1132-302`
-   - 장애인활동지원: `1535-304`
+## 복합수단 처리 결정
 
-중소벤처기업부는 현재 확보한 2022·2024년 공식 사업설명자료로 1차 분류가 가능하므로 더 큰 PDF가 당장 필요하지 않습니다.
+장애인활동지원은 하나의 재정수단으로 강제 분류하지 않습니다. 현재 검수 지침에 따라
+`fiscal_instrument_applicability=REVIEW_REQUIRED`,
+`fiscal_instrument=UNKNOWN`으로 유지합니다.
 
-## 다음 반영 순서
+현행 분류체계를 유지하고 일반 재정분석에는 포함하되 재정수단 내부 순위에서만
+제한하기로 결정했습니다. 향후 내역사업 단위 자료가 확보될 때만 `MULTIPLE` 또는
+내역사업별 재정수단 도입을 재검토합니다.
 
-1. Codex가 위 7개 사업의 공식 사업설명자료를 추가 탐색
-2. 공식 공개본을 찾지 못한 항목만 사용자에게 원문 보유 여부 확인
-3. 후보 판정과 근거를 사용자에게 짧게 제시해 최종 사람 검수
-4. Excel의 `S:AD`에 입력하고 `reviewer`, `reviewed_at`, `review_status` 기록
-5. `validate-unknown-priority-review --require-complete` 통과 확인
-6. UNKNOWN 오버레이와 순위 민감도 재산출
+## 반영 결과
+
+1. Excel `S:AD` 입력과 검수자·검수일·상태 기록 완료
+2. 사업 18개·연도 66행 `--require-complete` 통과
+3. 범위 제외 3개 사업·12행을 전체 순위 모집단에서 제외
+4. 복합수단 1개 사업·4행은 일반 분석에 유지하고 재정수단별 순위에서 제한
+5. M3와 3개 부처 시나리오 순위 재산출 완료

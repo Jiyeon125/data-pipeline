@@ -3,12 +3,28 @@ from __future__ import annotations
 import pandas as pd
 
 from analytics.m3_methodology_audit import (
+    PROGRAM_KEYS,
     _cluster_bootstrap_interval,
     _rank_flags,
     build_peer_method_flags,
     peer_threshold_tie_audit,
     unknown_review_impact,
 )
+
+
+def test_program_year_key_distinguishes_same_program_across_sectors() -> None:
+    programs = pd.DataFrame(
+        {
+            "fiscal_year": [2024, 2024],
+            "ministry_code": ["162", "162"],
+            "field_name": ["과학기술", "교육"],
+            "sector_name": ["과학기술연구지원", "고등교육"],
+            "program_code": ["UNKNOWN", "UNKNOWN"],
+            "program_name": ["인력양성", "인력양성"],
+        }
+    )
+
+    assert not programs[PROGRAM_KEYS].duplicated().any()
 
 
 def _peer_rows(size: int) -> pd.DataFrame:

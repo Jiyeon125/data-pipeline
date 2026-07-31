@@ -809,6 +809,108 @@ def _records_from_sheet(sheet: Any) -> list[dict[str, Any]]:
     return records
 
 
+def apply_unknown_review_overlay(
+    frame: pd.DataFrame,
+    workbook_path: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """완료된 사업 단위 검수를 분석 프레임에 적용하고 변경 내역을 반환합니다."""
+    workbook = load_workbook(workbook_path, data_only=True, read_only=True)
+    decisions = pd.DataFrame(_records_from_sheet(workbook[SHEET_PROJECTS]))
+    if decisions.empty or not decisions["review_status"].eq("CONFIRMED").all():
+        raise UnknownReviewError("오버레이에는 모든 사업의 CONFIRMED 검수가 필요합니다.")
+    if not decisions["all_years_same_classification"].eq("YES").all():
+        raise UnknownReviewError(
+            "연도별 분류가 다른 사업은 현재 오버레이 대상이 아닙니다. 연도별 override를 먼저 확정하세요."
+        )
+    if decisions["classification_project_id"].duplicated().any():
+        raise UnknownReviewError("오버레이 사업 ID가 중복됩니다.")
+
+    result = frame.copy()
+    review_ids = set(decisions["classification_project_id"].astype(str))
+    observed_ids = set(result["classification_project_id"].astype(str))
+    missing = review_ids - observed_ids
+    if missing:
+        raise UnknownReviewError(f"분석 프레임에 없는 검수 사업이 있습니다: {sorted(missing)[:3]}")
+
+    result["unknown_review_applied"] = False
+    result["unknown_review_status"] = pd.NA
+    result["unknown_review_evidence_source"] = pd.NA
+    audit_rows: list[dict[str, Any]] = []
+    for _, decision in decisions.iterrows():
+        project_id = str(decision["classification_project_id"])
+        mask = result["classification_project_id"].astype(str).eq(project_id)
+        scope = str(decision["analysis_scope_status"])
+        applicability = str(decision["fiscal_instrument_applicability"])
+        instrument = (
+            str(decision["fiscal_instrument"]) if applicability == "APPLICABLE" else "UNKNOWN"
+        )
+        before = result.loc[mask]
+        result.loc[mask, "analysis_included_classified"] = scope == "IN_SCOPE"
+        result.loc[mask, "exclusion_category_classified"] = (
+            pd.NA if scope == "IN_SCOPE" else decision["scope_exclusion_reason"]
+        )
+        result.loc[mask, "exclusion_reason_classified"] = (
+            pd.NA if scope == "IN_SCOPE" else decision["classification_evidence"]
+        )
+        result.loc[mask, "fiscal_instrument"] = instrument
+        result.loc[mask, "instrument_classification_method"] = (
+            "MANUAL_OFFICIAL_EVIDENCE"
+            if applicability == "APPLICABLE"
+            else "MANUAL_STRUCTURAL_MIXED_OR_NOT_APPLICABLE"
+        )
+        result.loc[mask, "instrument_classification_evidence"] = decision["classification_evidence"]
+        result.loc[mask, "instrument_manual_review_required"] = False
+        result.loc[mask, "classification_manual_review_required"] = False
+        result.loc[mask, "classification_status"] = "MANUAL_CONFIRMED"
+        result.loc[mask, "classification_method"] = "MANUAL_OFFICIAL_EVIDENCE"
+        result.loc[mask, "classification_evidence"] = decision["classification_evidence"]
+        result.loc[mask, "comparison_group"] = (
+            result.loc[mask, "account_type_classified"].astype(str)
+            + "|"
+            + instrument
+            + "|"
+            + result.loc[mask, "project_category"].astype(str)
+        )
+        result.loc[mask, "unknown_review_applied"] = True
+        result.loc[mask, "unknown_review_status"] = "CONFIRMED"
+        result.loc[mask, "unknown_review_evidence_source"] = decision["evidence_source"]
+        audit_rows.append(
+            {
+                "classification_project_id": project_id,
+                "project_year_row_count": int(mask.sum()),
+                "analysis_scope_status": scope,
+                "fiscal_instrument_applicability": applicability,
+                "fiscal_instrument_before": ";".join(
+                    sorted(before["fiscal_instrument"].dropna().astype(str).unique())
+                ),
+                "fiscal_instrument_after": instrument,
+                "ranking_population_impact": (
+                    "EXCLUDE_OVERALL_RANKING"
+                    if scope == "OUT_OF_SCOPE"
+                    else (
+                        "KEEP_GENERAL_EXCLUDE_INSTRUMENT_PEER"
+                        if instrument == "UNKNOWN"
+                        else "KEEP_AND_ASSIGN_INSTRUMENT_PEER"
+                    )
+                ),
+                "original_budget_amount": int(
+                    pd.to_numeric(before["original_budget_analysis_amount"], errors="coerce").sum()
+                ),
+                "evidence_source": decision["evidence_source"],
+            }
+        )
+
+    eligible = result["analysis_included_classified"].astype("boolean").fillna(False)
+    group_sizes = (
+        result.loc[eligible].groupby("comparison_group")["classification_project_id"].nunique()
+    )
+    result["comparison_group_size"] = (
+        result["comparison_group"].map(group_sizes).fillna(0).astype("Int64")
+    )
+    result["ranking_small_group_limited_flag"] = result["comparison_group_size"].lt(5)
+    return result, pd.DataFrame(audit_rows)
+
+
 def validate_unknown_review_workbook(
     paths: UnknownReviewPaths,
     *,

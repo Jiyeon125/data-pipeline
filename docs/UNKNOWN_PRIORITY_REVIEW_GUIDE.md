@@ -88,8 +88,18 @@ fiscal_instrument = 빈칸
 ### 3. 재정수단
 
 `APPLICABLE`인 경우에만 `코드값` 시트에서 재정수단을 선택합니다.
-명칭 키워드만으로 확정하지 않습니다. 확정할 수 없으면
+명칭 키워드만으로 확정하지 않습니다. 자료 부족으로 판단을 끝내지 못했으면
 `fiscal_instrument=UNKNOWN`, `review_status=REVIEW_REQUIRED`로 남깁니다.
+
+공식 근거에서 복합 수단임이 확인돼 단일값으로 분류할 수 없는 경우에는
+검수 판단 자체는 완료된 것이므로 다음처럼 기록합니다.
+
+```text
+fiscal_instrument_applicability = REVIEW_REQUIRED
+fiscal_instrument = UNKNOWN
+review_status = CONFIRMED
+review_note = 일반 재정분석에는 포함하고 재정수단 내부 순위만 제한
+```
 
 ### 4. 근거와 확정
 
