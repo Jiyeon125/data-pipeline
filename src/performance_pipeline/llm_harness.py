@@ -24,6 +24,12 @@ LLM_CANDIDATE_STATUSES = {
     "MANUAL_MISSING_PDF_PRESENT",
 }
 HUMAN_ONLY_STATUSES = {"PDF_MISSING_MANUAL_PRESENT"}
+HUMAN_REVIEW_REQUIRED_STATUSES = {
+    "AMBIGUOUS",
+    "MANUAL_REVIEW",
+    "PDF_MISSING_MANUAL_PRESENT",
+    "PDF_NOT_FOUND",
+}
 MODEL_PLACEHOLDER = "MODEL_SELECTION_REQUIRED"
 
 SYSTEM_PROMPT = """정부 성과계획서·성과보고서의 성과지표 값을 검수합니다.
@@ -181,22 +187,28 @@ def load_reconciliation_rows(root: Path) -> pd.DataFrame:
 def classify_rows(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame.copy()
     reviewed = result["review_status"].notna()
-    result["automation_route"] = "LOCAL_CONFIRMED"
+    clear_evidence = (
+        result["page_evidence_status"].eq("EXACT_MATCH")
+        & result["report_source_file"].notna()
+        & result["report_split_pdf_page"].notna()
+        & result["report_source_text"].notna()
+        & ~result["overall_reconciliation_status"].isin(HUMAN_REVIEW_REQUIRED_STATUSES)
+    )
+    result["evidence_acceptance_status"] = "HUMAN_REVIEW_REQUIRED"
+    result["evidence_acceptance_reason"] = (
+        "출처·페이지·값 또는 지표 대응을 사람이 원문에서 확인해야 함"
+    )
+    result.loc[reviewed, "evidence_acceptance_status"] = "HUMAN_CONFIRMED"
+    result.loc[reviewed, "evidence_acceptance_reason"] = "기존 원문 육안검수 확정값 보존"
+    result.loc[~reviewed & clear_evidence, "evidence_acceptance_status"] = "EVIDENCE_CONFIRMED"
+    result.loc[~reviewed & clear_evidence, "evidence_acceptance_reason"] = (
+        "파일·페이지·보고서 원문이 연결되고 지표 대응이 비모호함; 수기 기준값은 변경하지 않음"
+    )
+    result["automation_route"] = "HUMAN_ONLY"
     result.loc[
-        ~reviewed & result["overall_reconciliation_status"].isin(LLM_CANDIDATE_STATUSES),
+        result["evidence_acceptance_status"].isin(["HUMAN_CONFIRMED", "EVIDENCE_CONFIRMED"]),
         "automation_route",
-    ] = "LLM_CANDIDATE"
-    result.loc[
-        ~reviewed & result["overall_reconciliation_status"].isin(HUMAN_ONLY_STATUSES),
-        "automation_route",
-    ] = "HUMAN_ONLY"
-    result.loc[
-        ~reviewed
-        & ~result["overall_reconciliation_status"].isin(
-            LOCAL_CONFIRMED_STATUSES | LLM_CANDIDATE_STATUSES | HUMAN_ONLY_STATUSES
-        ),
-        "automation_route",
-    ] = "HUMAN_ONLY"
+    ] = "LOCAL_CONFIRMED"
     return result
 
 
@@ -338,10 +350,22 @@ def build_request_entries(
                     "model": model,
                 }
             )
-    return requests, pd.DataFrame(index_rows).convert_dtypes()
+    columns = [
+        "request_id",
+        "source_indicator_id",
+        "ministry_code",
+        "fiscal_year",
+        "local_status",
+        "input_token_estimate",
+        "cache_key",
+        "model",
+    ]
+    return requests, pd.DataFrame(index_rows, columns=columns).convert_dtypes()
 
 
 def _pilot_request_ids(request_index: pd.DataFrame, limit: int) -> set[str]:
+    if request_index.empty:
+        return set()
     unique = (
         request_index[["request_id", "ministry_code", "fiscal_year", "local_status"]]
         .drop_duplicates("request_id")
@@ -415,6 +439,7 @@ def prepare_llm_harness(
         output_dir / "remaining_requests.jsonl",
         output_dir / "performance_indicator_schema.json",
         output_dir / "human_review_queue.csv",
+        output_dir / "human_review_queue.xlsx",
         output_dir / "harness_summary.json",
     )
     existing = [path for path in targets if path.exists()]
@@ -450,6 +475,16 @@ def prepare_llm_harness(
             "review_reason",
             "review_instruction",
             "automation_route",
+            "evidence_acceptance_status",
+            "evidence_acceptance_reason",
+            "page_evidence_status",
+            "manual_planned_target_raw",
+            "manual_actual_value_raw",
+            "manual_official_achievement_rate_raw",
+            "pdf_plan_target_raw",
+            "pdf_report_target_raw",
+            "pdf_report_actual_raw",
+            "pdf_report_official_achievement_rate_raw",
             "plan_source_file",
             "plan_split_pdf_page",
             "report_source_file",
@@ -479,19 +514,31 @@ def prepare_llm_harness(
         encoding="utf-8",
     )
     human_queue.to_csv(targets[6], index=False, encoding="utf-8-sig")
+    human_queue.to_excel(targets[7], index=False)
     source_paths = reconciliation_paths(root)
+    status = (
+        "NO_LLM_CALL_REQUIRED"
+        if not requests
+        else (
+            "READY_FOR_MODEL_SELECTION"
+            if selected_model == MODEL_PLACEHOLDER
+            else "READY_FOR_API_APPROVAL"
+        )
+    )
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "status": "READY_FOR_MODEL_SELECTION"
-        if selected_model == MODEL_PLACEHOLDER
-        else "READY_FOR_API_APPROVAL",
+        "status": status,
         "api_called": False,
-        "api_ready": selected_model != MODEL_PLACEHOLDER,
+        "api_ready": bool(requests) and selected_model != MODEL_PLACEHOLDER,
         "model": selected_model,
         "source_rows": len(candidates),
         "route_counts": {
             str(key): int(value)
             for key, value in candidates["automation_route"].value_counts().items()
+        },
+        "evidence_acceptance_counts": {
+            str(key): int(value)
+            for key, value in candidates["evidence_acceptance_status"].value_counts().items()
         },
         "llm_candidate_rows": int(candidates["automation_route"].eq("LLM_CANDIDATE").sum()),
         "human_only_rows": int(candidates["automation_route"].eq("HUMAN_ONLY").sum()),
@@ -516,7 +563,7 @@ def prepare_llm_harness(
         },
         "source_sha256": {str(path.relative_to(root)): _sha256_file(path) for path in source_paths},
     }
-    targets[7].write_text(
+    targets[8].write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

@@ -384,7 +384,7 @@ data/analytics/priority_policy_decision_support/recommended_source_review_queue.
 
 - 세 시나리오 이상에서 반복되는 후보만 남겨 가중치 의존성을 줄입니다.
 - 33행·23개 프로그램으로 검토 가능한 크기입니다.
-- 필수 원문검수는 201행 전체가 아니라 30개 지표입니다.
+- 근거 승인 후 남은 사람 원문검수는 전체 29개 지표입니다.
 
 단점:
 

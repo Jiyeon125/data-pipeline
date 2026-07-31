@@ -447,7 +447,7 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 원문 검수: 수기값·PDF값·근거 페이지 이미지와 사람 검수 상태 연속 저장
 - 원문 검수 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
 - 우선순위 정책 초안: `docs/PRIORITY_POLICY_DECISION_DRAFT.md`
-- 기본 원문 검수 큐: 자동 강근거 160행을 제외한 필수 201행
+- 기본 원문 검수 큐: 출처·페이지·원문 근거가 부족한 29행
 - 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
 - 다운로드: 현재 필터의 전체 점검 업무대기열 CSV
 - 정식 분석 입력: `data/analytics/multi_ministry_priority_scenarios/`
@@ -460,19 +460,18 @@ python -m streamlit run src/fiscal_dashboard/app.py
 
 ## 로컬 우선 LLM 검수 하네스
 
-현재 수기 기준선을 덮어쓰지 않고, 로컬 PDF 대조로 해결되지 않은 행만 외부
-모델에 보낼 요청 파일로 준비합니다. 아래 첫 명령은 API를 호출하지 않습니다.
+현재 수기 기준선을 덮어쓰지 않고, 로컬 PDF 대조와 근거 승인으로 해결되지 않은
+행만 분리합니다. 아래 첫 명령은 API를 호출하지 않습니다.
 
 ```powershell
 fiscal-performance prepare-llm-harness --root . --overwrite
 fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --overwrite
 ```
 
-- 전체 424행 중 로컬·사람 검수 확정 223행은 재호출하지 않음
-- LLM 후보 199행을 같은 근거 묶음별 149개 요청으로 합침
-- 기본 파일럿은 3개 부처·가용 연도를 순환 표집한 12개 요청 17행이며,
-  나머지 137개 요청은 파일럿 통과 뒤에만 별도 제출
-- PDF 근거가 없는 2행은 LLM에 보내지 않고 사람 검수로 유지
+- 전체 424행 중 출처·페이지·원문 근거 승인 346행, 기존 사람 검수 확정 49행
+- 출처나 지표 대응을 사람이 봐야 하는 29행은 `human_review_queue.xlsx`로 분리
+- 현재 수기 기준선은 LLM 요청 0건이며 외부 API 호출 비용도 0달러
+- LLM 요청 하네스는 향후 새 PDF 자동 구조화 또는 가린 골드셋 파일럿에 재사용
 - 요청 ID·입력 해시·예상 토큰·모델·원본 Parquet 해시 저장
 - 응답의 스키마, 지표 ID, 파일·페이지, 원문 인용을 코드로 검증
 - 누락·실패 요청만 `retry_requests.jsonl`로 분리하며 자동 재제출하지 않음

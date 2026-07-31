@@ -112,8 +112,8 @@ def test_dashboard_data_contract_and_filter() -> None:
     queue = load_pdf_review_queue(Path("."))
     assert len(queue) == 361
     assert queue["review_status"].isna().all()
-    assert queue["manual_review_required"].sum() == 201
-    assert (~queue["manual_review_required"]).sum() == 160
+    assert queue["manual_review_required"].sum() == 29
+    assert (~queue["manual_review_required"]).sum() == 332
     assert any(review_page_specs(row) for _, row in queue.iterrows())
 
 
@@ -209,7 +209,7 @@ def test_dashboard_pdf_review_mode() -> None:
 
     assert not app.exception
     review_metric = next(metric for metric in app.metric if metric.label == "현재 검수 대상")
-    assert review_metric.value == "201"
+    assert review_metric.value == "29"
 
 
 def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:

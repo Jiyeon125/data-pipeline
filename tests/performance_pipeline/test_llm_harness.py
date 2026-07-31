@@ -18,6 +18,7 @@ def _candidate_rows() -> pd.DataFrame:
                 "fiscal_year": 2023,
                 "review_status": pd.NA,
                 "overall_reconciliation_status": "OCR_REQUIRED",
+                "page_evidence_status": "EXACT_MATCH",
                 "report_source_file": "report.pdf",
                 "report_split_pdf_page": 7,
                 "documented_change_source_file": pd.NA,
@@ -30,6 +31,7 @@ def _candidate_rows() -> pd.DataFrame:
                 "fiscal_year": 2023,
                 "review_status": pd.NA,
                 "overall_reconciliation_status": "PDF_MISSING_MANUAL_PRESENT",
+                "page_evidence_status": "PDF_NOT_FOUND",
                 "report_source_file": pd.NA,
                 "report_split_pdf_page": pd.NA,
                 "documented_change_source_file": pd.NA,
@@ -41,6 +43,10 @@ def _candidate_rows() -> pd.DataFrame:
                 "fiscal_year": 2023,
                 "review_status": "CONFIRMED",
                 "overall_reconciliation_status": "VALUE_MISMATCH",
+                "page_evidence_status": "EXACT_MATCH",
+                "report_source_file": "report.pdf",
+                "report_split_pdf_page": 8,
+                "report_source_text": "성과지표 B 목표 10 실적 8",
             },
         ]
     )
@@ -49,9 +55,14 @@ def _candidate_rows() -> pd.DataFrame:
 def test_classification_and_request_grouping_are_local_first() -> None:
     rows = lh.classify_rows(_candidate_rows())
     assert rows["automation_route"].tolist() == [
-        "LLM_CANDIDATE",
+        "LOCAL_CONFIRMED",
         "HUMAN_ONLY",
         "LOCAL_CONFIRMED",
+    ]
+    assert rows["evidence_acceptance_status"].tolist() == [
+        "EVIDENCE_CONFIRMED",
+        "HUMAN_REVIEW_REQUIRED",
+        "HUMAN_CONFIRMED",
     ]
 
     requests, index = lh.build_request_entries(
@@ -62,7 +73,21 @@ def test_classification_and_request_grouping_are_local_first() -> None:
         max_evidence_chars=1200,
         max_output_tokens=500,
     )
-    assert len(requests) == 1
+    assert requests == []
+    assert index.empty
+
+
+def test_request_builder_keeps_strict_schema_for_future_llm_rows() -> None:
+    rows = lh.classify_rows(_candidate_rows().iloc[[0]])
+    rows["automation_route"] = "LLM_CANDIDATE"
+    requests, index = lh.build_request_entries(
+        rows,
+        model="gpt-test",
+        prompt_version="p1",
+        schema_version="s1",
+        max_evidence_chars=1200,
+        max_output_tokens=500,
+    )
     assert index["source_indicator_id"].tolist() == ["019-2023-1"]
     assert requests[0]["body"]["store"] is False
     assert requests[0]["body"]["text"]["format"]["strict"] is True

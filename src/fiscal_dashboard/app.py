@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 from matplotlib import font_manager
 
+from performance_pipeline.llm_harness import classify_rows
 from performance_pipeline.pdf_reconciliation import (
     DEFAULT_MANUAL_REVIEW_CONFIRMATIONS_PATH,
     REVIEW_STATUS_VALUES,
@@ -110,12 +111,6 @@ REVIEW_STATUS_LABELS = {
     "CONFIRMED": "원문과 일치",
     "CORRECTED": "수정 필요",
     "NOT_RESOLVABLE": "현재 문서로 확인 불가",
-}
-MANUAL_REVIEW_REQUIRED_STATUSES = {
-    "VALUE_MISMATCH",
-    "AMBIGUOUS",
-    "PDF_MISSING_MANUAL_PRESENT",
-    "OCR_REQUIRED",
 }
 REVIEW_PRIORITY_ORDER = {
     "VALUE_MISMATCH": 1,
@@ -366,8 +361,9 @@ def load_pdf_review_queue(root: Path = PROJECT_ROOT) -> pd.DataFrame:
         confirmations["source_indicator_id"].isin(queue["source_indicator_id"])
     ]
     queue = apply_manual_review_confirmations(queue, relevant)
-    queue["manual_review_required"] = queue["overall_reconciliation_status"].isin(
-        MANUAL_REVIEW_REQUIRED_STATUSES
+    queue = classify_rows(queue)
+    queue["manual_review_required"] = queue["evidence_acceptance_status"].eq(
+        "HUMAN_REVIEW_REQUIRED"
     )
     queue["review_priority_order"] = (
         queue["overall_reconciliation_status"].map(REVIEW_PRIORITY_ORDER).fillna(99)
@@ -1140,10 +1136,14 @@ def main() -> None:
         except (FileNotFoundError, OSError, ValueError) as exc:
             queue = None
             st.warning(f"PDF 검수 현황을 불러오지 못했습니다: {exc}")
-        done_reviews = (
+        accepted_evidence = (
             0
             if queue is None
-            else int(queue["review_status"].isin(["CONFIRMED", "CORRECTED"]).sum())
+            else int(
+                queue["evidence_acceptance_status"]
+                .isin(["HUMAN_CONFIRMED", "EVIDENCE_CONFIRMED"])
+                .sum()
+            )
         )
         total_reviews = 0 if queue is None else len(queue)
         status_columns = st.columns(4, border=True)
@@ -1175,8 +1175,8 @@ def main() -> None:
             f"{len(project_queue):,}행",
         )
         status_columns[2].caption("프로그램 성과는 상위 맥락으로만 표시합니다.")
-        status_columns[3].metric("4. 원문 검수", f"{done_reviews:,}/{total_reviews:,}행")
-        status_columns[3].caption("발표 사례로 쓸 성과지표를 사람이 확인합니다.")
+        status_columns[3].metric("4. 원문 근거", f"{accepted_evidence:,}/{total_reviews:,}행")
+        status_columns[3].caption("근거가 부족한 행만 사람 검수 대상으로 남깁니다.")
         st.markdown("#### 전체 점검 업무대기열")
         st.dataframe(
             _table_view(filtered_all.sort_values("work_queue_order").head(10)),
@@ -1803,15 +1803,15 @@ def main() -> None:
     elif workflow_step == WORKFLOW_STEPS[3] and comparison_mode == "원문 검수":
         st.subheader("사람 확인이 필요한 성과지표부터 PDF 원문으로 검수합니다")
         st.caption(
-            "기본 화면은 자동 강근거 160행을 제외한 필수 검수 201행입니다. "
+            "기본 화면은 출처·페이지·원문 근거로 승인할 수 없는 29행입니다. "
             "수기값과 PDF값을 나란히 보고 결과를 별도 감사 CSV에 저장합니다. "
             "현재 공통 검수 큐는 고용노동부·보건복지부·과학기술정보통신부를 지원합니다."
         )
         with st.expander("검수 전에 30초만 읽어주세요", icon=":material/help:"):
             st.markdown(
                 """
-                1. **불일치·모호·PDF 근거 누락 27행**을 먼저 확인합니다.
-                2. **OCR 필요 174행**은 추출 텍스트가 아니라 페이지 이미지를 직접 읽습니다.
+                1. **모호 6행, PDF 근거 누락 2행, 페이지 근거 부족 21행**만 확인합니다.
+                2. OCR 표기라도 파일·페이지·보고서 원문이 모두 연결된 행은 근거 승인했습니다.
                 3. `CORRECTED`를 고르면 메모에 **파일명·쪽·정확한 값**을 반드시 적습니다.
                 4. `CORRECTED`는 원본값을 자동 수정하지 않습니다. 수정 오버레이 반영 전에는 순위 근거로 확정하지 않습니다.
                 5. 전체 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
@@ -1844,9 +1844,9 @@ def main() -> None:
                 )
             else:
                 show_auto_strong = st.toggle(
-                    "자동 강근거 160행도 표본 검수 대상으로 보기",
+                    "근거 승인된 행도 표본 검수 대상으로 보기",
                     value=False,
-                    help="EXACT_MATCH와 MATCH_AFTER_CHANGE까지 포함합니다.",
+                    help="출처·페이지·원문이 연결된 자동 승인 행과 기존 사람 검수 확정 행을 포함합니다.",
                 )
                 if not show_auto_strong:
                     review_base = review_base.loc[review_base["manual_review_required"]].copy()
