@@ -33,13 +33,16 @@ def test_dashboard_data_contract_and_filter() -> None:
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
 
-    assert len(candidates) == 347
-    assert len(filtered) == 193
-    assert _program_count(candidates) == 68
+    assert len(candidates) == 412
+    assert len(filtered) == 235
+    assert _program_count(candidates) == 79
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape == (772, 28)
-    assert data["drilldown"].empty
+    assert data["scores"].shape == (940, 28)
+    assert data["drilldown"].shape == (110, 40)
     assert not data["drilldown"]["project_performance_attributed"].any()
+    assert data["project_queue"].shape == (2338, 49)
+    assert data["project_queue"]["candidate_id"].nunique() == 235
+    assert not data["project_queue"]["project_performance_attributed"].any()
     assert not data["stability"]["candidate_id"].duplicated().any()
     assert pd.to_numeric(data["scores"]["scenario_score"]).between(0, 1).all()
     full = filter_candidates(
@@ -55,13 +58,13 @@ def test_dashboard_data_contract_and_filter() -> None:
         ],
         tiers=candidates["priority_tier"].dropna().unique().tolist(),
     )
-    assert len(full) == 347
-    assert full["data_validation_signal"].sum() == 14
-    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 14
+    assert len(full) == 412
+    assert full["data_validation_signal"].sum() == 15
+    assert len(_data_review_table(full.loc[full["data_validation_signal"]])) == 15
     worklist = _review_worklist(full.loc[full["data_validation_signal"]])
-    assert len(worklist) == 9
-    assert worklist["영향행"].sum() == 14
-    assert worklist["상태"].eq("확인 필요").sum() == 7
+    assert len(worklist) == 10
+    assert worklist["영향행"].sum() == 15
+    assert worklist["상태"].eq("확인 필요").sum() == 8
     assert worklist["상태"].eq("확인 완료").sum() == 2
     assert _component_summary("성과", 0.5)[0] == "50%"
     assert stable_program_summary(candidates, data["stability"]).empty
@@ -83,10 +86,16 @@ def test_dashboard_default_render() -> None:
     assert app.segmented_control[0].options == WORKFLOW_STEPS
     assert app.segmented_control[0].value == "1. 전체 현황"
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
-        ("분석행", "347"),
-        ("점검 신호 있음", "228"),
-        ("순위 비교 가능", "193"),
-        ("데이터 먼저 확인", "14"),
+        ("분석행", "412"),
+        ("점검 신호 있음", "277"),
+        ("순위 비교 가능", "235"),
+        ("데이터 먼저 확인", "15"),
+    ]
+    assert app.multiselect[0].options == [
+        "고용노동부",
+        "보건복지부",
+        "중소벤처기업부",
+        "과학기술정보통신부",
     ]
     assert "지금 해야 할 일부터 보여드립니다" in [heading.value for heading in app.subheader]
     assert any(frame.value.shape[0] == 5 for frame in app.dataframe)
@@ -103,8 +112,8 @@ def test_dashboard_guided_steps_and_candidate_to_review() -> None:
     app.segmented_control[0].set_value("2. 먼저 해결").run()
     assert not app.exception
     assert "먼저 해결할 일을 프로그램 단위로 정리했습니다" in [item.value for item in app.subheader]
-    assert any(frame.value.shape[0] == 9 for frame in app.dataframe)
-    assert any(frame.value.shape[0] == 14 for frame in app.dataframe)
+    assert any(frame.value.shape[0] == 10 for frame in app.dataframe)
+    assert any(frame.value.shape[0] == 15 for frame in app.dataframe)
 
     app.segmented_control[0].set_value("3. 후보 살펴보기").run()
     assert not app.exception
@@ -135,3 +144,17 @@ def test_dashboard_ministry_rank_view() -> None:
         "고용노동부 내부 기준 현재 필터 41행 중 공통 Top 5는 2행" in item.value
         for item in app.warning
     )
+
+
+def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
+    app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
+
+    app.multiselect[0].set_value(["102"]).run()
+    app.segmented_control[0].set_value("3. 후보 살펴보기").run()
+
+    assert not app.exception
+    assert any(frame.value.shape[1] == 12 for frame in app.dataframe)
+    review_button = next(
+        button for button in app.button if button.label == "이 프로그램 PDF 원문 확인"
+    )
+    assert review_button.disabled

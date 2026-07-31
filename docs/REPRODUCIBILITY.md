@@ -38,13 +38,15 @@ Copy-Item .env.example .env
 .\.venv\Scripts\fiscal-analytics.exe build-analysis-policy-decision-support --root .
 ```
 
-## 4. 3개 부처 결합과 탐색 순위 재생성
+## 4. 설정 기반 N개 부처 결합과 탐색 순위 재생성
 
 ```powershell
-.\.venv\Scripts\fiscal-analytics.exe analyze-three-ministry-priority-scenarios --root . --overwrite
+.\.venv\Scripts\fiscal-analytics.exe analyze-priority-scenarios --root . --overwrite
 ```
 
-이 명령은 탐색용 복수 시나리오를 생성하며 최종 정책 순위를 만들지 않습니다.
+분석 부처는 `configs/priority_scenarios.yaml`의 `scope.ministry_codes`에서
+읽습니다. 이 명령은 탐색용 복수 시나리오를 생성하며 최종 정책 순위를
+만들지 않습니다.
 
 ## 5. 품질검사
 

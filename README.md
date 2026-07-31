@@ -40,8 +40,9 @@ analytics              피처·순위·민감도·보고
 fiscal_dashboard       검증된 분석 산출물의 Streamlit 탐색 화면
 ```
 
-성과 문서 외부 LLM 추출은 검수 구조가 확정된 뒤 확장합니다. 대시보드는 현재
-3개 부처 성과·재정 탐색 순위와 PDF 원문 사람 검수 큐를 읽는 파일럿입니다.
+성과 문서 외부 LLM 추출은 검수 구조가 확정된 뒤 확장합니다. 분석 파이프라인은
+설정된 N개 부처를 처리하며 현재 4개 부처 성과·재정 탐색 순위를 생성합니다.
+대시보드도 정식 다부처 산출물을 읽습니다.
 
 상세한 의존 방향, 데이터 계층과 팀 공유 마일스톤은
 [프로젝트 아키텍처](docs/architecture.md)를 참고합니다.
@@ -430,12 +431,12 @@ fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite
 - 발표용 그림: `artifacts/figures/presentation/mss_priority_scenario_*.png`
 - 탐색 순위이며 최종 복합점수·정책 우선순위는 생성하지 않음
 
-## 3개 부처 Streamlit 대시보드
+## 다부처 탐색 순위와 Streamlit 대시보드
 
 후보·시나리오 분석을 재생성한 뒤 대시보드를 실행합니다.
 
 ```powershell
-fiscal-analytics analyze-three-ministry-priority-scenarios --root . --overwrite
+fiscal-analytics analyze-priority-scenarios --root . --overwrite
 python -m streamlit run src/fiscal_dashboard/app.py
 ```
 
@@ -449,7 +450,9 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 기본 원문 검수 큐: 자동 강근거 160행을 제외한 필수 201행
 - 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
 - 다운로드: 현재 필터의 후보표 CSV
-- 입력: `data/analytics/three_ministry_priority_scenarios/`의 검증 완료 산출물
+- 정식 분석 입력: `data/analytics/multi_ministry_priority_scenarios/`
+- 순위 적격 후보 세부사업 검토대기열:
+  `eligible_candidate_project_review_queue.csv`
 - 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
 
 ## UNKNOWN 예산 80% 커버리지 사람 검수

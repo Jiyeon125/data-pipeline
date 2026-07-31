@@ -29,7 +29,7 @@ OpenAPI 자료와 결합해 분석용 마스터 테이블을 만든 뒤, 검증�
                                       ↓
                               data/exports
                                       ↓
-                       대시보드(중기부 MVP 구현)
+                       대시보드(다부처 MVP)
 ```
 
 ## 코드 경계
@@ -82,18 +82,22 @@ LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원�
   일반회계·특별회계·기금을 분리한 재정 마스터와 결합합니다. 공식 달성률의
   평균·합산은 만들지 않고 산식 비교 적격 지표의 100% 미만·이상 건수만
   프로그램 신호로 사용합니다.
-- `mss_priority_scenario_analysis`: 중기부 결합표와 기존 M3 재정 신호를
+- `mss_priority_scenario_analysis`: 설정된 N개 부처의 결합표와 기존 M3 재정 신호를
   프로그램-연도-회계유형으로 연결해 점검 후보군을 만들고, 균등·성과중심·
   집행중심·재정영향 보정 시나리오의 Spearman 순위상관, 상위 K 중복,
-  후보별 순위 범위를 산출합니다. 전 시나리오 Top 5 후보는 부처·프로그램·
-  연도·회계유형 키로 M3 세부사업 재정 신호와 연결하며, 성과를 세부사업에
-  귀속하지 않습니다. 최종 복합점수나 정책 판정은 만들지 않습니다.
+  후보별 전체·부처내 순위 범위를 산출합니다. 전체 또는 부처내 전 시나리오
+  Top 5 후보는 부처·프로그램·연도·회계유형 키로 M3 세부사업 재정 신호와
+  연결하며, 성과를 세부사업에 귀속하지 않습니다. 최종 복합점수나 정책
+  판정은 만들지 않습니다.
 
 ### 대시보드
 
-`fiscal_dashboard`는 검증 완료된
-`data/analytics/three_ministry_priority_scenarios/`와 3개 부처 PDF 대조
-산출물만 읽는 Streamlit 소비자입니다.
+`fiscal_dashboard`는 검증 완료된 분석 산출물과 PDF 대조 산출물만 읽는
+Streamlit 소비자입니다. 분석 파이프라인의 정식 다부처 출력은
+`data/analytics/multi_ministry_priority_scenarios/`이며, 화면도 이 경로만
+읽습니다. `eligible_candidate_project_review_queue.csv`는 순위 적격
+프로그램 후보 아래의 모든 세부사업을 재정신호와 예산규모 기준으로
+검토할 순서만 제공합니다.
 후보 생성·가중치·순위 계산을 화면에 복사하지 않고, 다음 기능만 담당합니다.
 
 - 시작 → 데이터 확인 → 후보 분석 → 기준 비교 → 원문 검수 단계 이동
@@ -106,9 +110,10 @@ LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원�
 - 선택 프로그램의 성과지표 PDF 검수 연결과 감사 CSV 저장
 - 현재 필터 후보표 다운로드
 
-현재 MVP는 고용노동부·보건복지부·과학기술정보통신부 3개 부처
-2022~2024년 표본용입니다. 최종 제출용 데이터 계약이 승인되면 입력 경로만
-`data/exports` 계약으로 교체하고 화면의 분석 정의는 늘리지 않습니다.
+현재 분석 MVP는 고용노동부·보건복지부·중소벤처기업부·
+과학기술정보통신부 4개 부처의 2022~2024년 표본입니다. 최종 제출용 데이터
+계약이 승인되면 입력 경로만 `data/exports` 계약으로 교체하고 화면의 분석
+정의는 늘리지 않습니다.
 
 ## 의존 방향
 
@@ -142,6 +147,7 @@ performance_pipeline ─┘                          ↓
 - `configs/datasets.yaml`: OpenAPI·로컬 데이터셋 명세
 - `configs/llm.yaml`: 환경변수 이름, 프롬프트·스키마 버전, 추출·검토 정책
 - `configs/join_keys.yaml`: 마스터 키, 코드 정규화, 단계별 매칭 규칙
+- `configs/priority_scenarios.yaml`: 다부처 분석범위·시나리오·임계값
 
 API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로만 전달합니다.
 
@@ -167,6 +173,7 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 - `fiscal-analytics analyze-mss-same-year-budget --root . --overwrite`
 - `fiscal-analytics analyze-manual-same-year-budget`
 - `fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite`
+- `fiscal-analytics analyze-priority-scenarios --root . --overwrite`
 
 이 명령들은 OpenAI API 키 없이 로컬 파일만으로 실행합니다. 수기 골드셋 경로는
 보고서 최종 목표가 없으면 계획 목표로 대체하지 않고 결측으로 유지합니다. 향후 LLM 추출

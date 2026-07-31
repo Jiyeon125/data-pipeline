@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
+from analytics.mss_same_year_budget_check import run_same_year_budget_check
+
 PROGRAM_ID_KEY = ["ministry_code", "field_name", "sector_name", "program_code"]
 KEY = [*PROGRAM_ID_KEY, "fiscal_year", "account_type"]
 COMPONENTS = (
@@ -66,15 +68,15 @@ class PriorityScenarioPaths:
         )
 
     @classmethod
-    def three_ministry_from_root(cls, root: Path) -> PriorityScenarioPaths:
+    def multi_ministry_from_root(cls, root: Path) -> PriorityScenarioPaths:
         return cls(
-            same_year_analysis=root / "data/analytics/three_ministry_same_year_budget_check/"
+            same_year_analysis=root / "data/analytics/multi_ministry_same_year_budget_check/"
             "program_year_account_type_check.csv",
             financial_features=root / "data/analytics/m3/financial_signal_features.parquet",
-            config=root / "configs/three_ministry_priority_scenarios.yaml",
-            output_dir=root / "data/analytics/three_ministry_priority_scenarios",
+            config=root / "configs/priority_scenarios.yaml",
+            output_dir=root / "data/analytics/multi_ministry_priority_scenarios",
             figure_dir=root / "artifacts/figures/presentation",
-            figure_prefix="three_ministry_priority_scenario",
+            figure_prefix="multi_ministry_priority_scenario",
         )
 
 
@@ -84,6 +86,7 @@ class PriorityScenarioResult:
     scenario_scores: pd.DataFrame
     stability: pd.DataFrame
     drilldown: pd.DataFrame
+    project_review_queue: pd.DataFrame
     spearman: pd.DataFrame
     top_k_overlap: pd.DataFrame
     summary: dict[str, Any]
@@ -261,7 +264,11 @@ def build_stable_top5_project_drilldown(
     )
     _require_columns(
         stability,
-        {"candidate_id", "all_scenario_top_5"},
+        {
+            "candidate_id",
+            "all_scenario_top_5",
+            "all_scenario_top_5_within_ministry",
+        },
         "순위 안정성표",
     )
     _require_columns(
@@ -293,12 +300,17 @@ def build_stable_top5_project_drilldown(
         },
         "M3 세부사업 재정 신호",
     )
-    stable_ids = stability.loc[
-        stability["all_scenario_top_5"].fillna(False),
-        "candidate_id",
+    stable_flags = stability.loc[
+        stability["all_scenario_top_5"].fillna(False)
+        | stability["all_scenario_top_5_within_ministry"].fillna(False),
+        [
+            "candidate_id",
+            "all_scenario_top_5",
+            "all_scenario_top_5_within_ministry",
+        ],
     ]
     stable = candidates.loc[
-        candidates["candidate_id"].isin(stable_ids),
+        candidates["candidate_id"].isin(stable_flags["candidate_id"]),
         [
             "candidate_id",
             *KEY,
@@ -308,7 +320,13 @@ def build_stable_top5_project_drilldown(
             "account_current_budget",
             "account_settlement_expenditure",
         ],
-    ].copy()
+    ].merge(stable_flags, on="candidate_id", validate="one_to_one")
+    stable["drilldown_selection_scope"] = "WITHIN_MINISTRY"
+    stable.loc[stable["all_scenario_top_5"], "drilldown_selection_scope"] = "OVERALL"
+    stable.loc[
+        stable["all_scenario_top_5"] & stable["all_scenario_top_5_within_ministry"],
+        "drilldown_selection_scope",
+    ] = "OVERALL_AND_WITHIN_MINISTRY"
     stable["ministry_code"] = stable["ministry_code"].astype("string").str.zfill(3)
     stable["program_code"] = stable["program_code"].astype("string")
     if stable["candidate_id"].duplicated().any():
@@ -424,6 +442,9 @@ def build_stable_top5_project_drilldown(
         *KEY,
         "performance_program_name",
         "priority_reason",
+        "all_scenario_top_5",
+        "all_scenario_top_5_within_ministry",
+        "drilldown_selection_scope",
         "program_performance_signal",
         "project_performance_attributed",
         "drilldown_role",
@@ -459,6 +480,15 @@ def build_stable_top5_project_drilldown(
     )
     summary = {
         "candidate_count": int(result["candidate_id"].nunique()),
+        "overall_stable_top5_candidate_count": int(
+            result.loc[result["all_scenario_top_5"], "candidate_id"].nunique()
+        ),
+        "within_ministry_stable_top5_candidate_count": int(
+            result.loc[
+                result["all_scenario_top_5_within_ministry"],
+                "candidate_id",
+            ].nunique()
+        ),
         "unique_program_count": len(result[PROGRAM_ID_KEY].drop_duplicates()),
         "project_row_count": len(result),
         "other_ministry_row_count": int(
@@ -473,6 +503,132 @@ def build_stable_top5_project_drilldown(
         ),
     }
     return result.convert_dtypes(), summary
+
+
+def build_eligible_project_review_queue(
+    candidates: pd.DataFrame,
+    stability: pd.DataFrame,
+    features: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """순위 적격 후보의 모든 세부사업을 2단계 검토 순서로 연결합니다."""
+    _require_columns(candidates, {"candidate_id", "scenario_ranking_eligible"}, "후보표")
+    rank_columns = [
+        "candidate_id",
+        "mean_scenario_rank",
+        "scenario_rank_range",
+        "mean_scenario_rank_within_ministry",
+        "scenario_rank_range_within_ministry",
+        "exploratory_consensus_order",
+        "all_scenario_top_5",
+        "all_scenario_top_5_within_ministry",
+    ]
+    _require_columns(stability, set(rank_columns), "순위 안정성표")
+    eligible_ids = candidates.loc[
+        candidates["scenario_ranking_eligible"].fillna(False),
+        ["candidate_id"],
+    ]
+    selection = eligible_ids.assign(
+        all_scenario_top_5=False,
+        all_scenario_top_5_within_ministry=True,
+    )
+    queue, validation = build_stable_top5_project_drilldown(candidates, selection, features)
+    queue = queue.drop(columns=["all_scenario_top_5", "all_scenario_top_5_within_ministry"])
+    queue = queue.merge(stability[rank_columns], on="candidate_id", validate="many_to_one")
+    queue["drilldown_selection_scope"] = "SCENARIO_RANKING_ELIGIBLE"
+
+    signals = queue["project_financial_signal_types"].astype("string").fillna("NONE")
+    data_review = (
+        signals.str.contains("DATA_VALIDATION_PRIORITY|DENOMINATOR_OR_MATCHING_REVIEW")
+        | queue["financial_quality_level"].eq("RESTRICTED")
+    )
+    project_signal = signals.str.contains("REPEATED_|BUDGET_RAPID_|ACCOUNTING_ADJUSTMENT_PATTERN")
+    program_context = signals.str.contains(
+        "PROGRAM_BUDGET_CONCENTRATION|MULTIPLE_FINANCIAL_SIGNALS"
+    )
+    queue["project_review_group"] = "LARGE_BUDGET_CONTEXT"
+    queue.loc[program_context, "project_review_group"] = "PROGRAM_STRUCTURE_CONTEXT"
+    queue.loc[project_signal, "project_review_group"] = "PROJECT_FINANCIAL_SIGNAL"
+    queue.loc[data_review, "project_review_group"] = "DATA_VALIDATION_FIRST"
+    group_order = {
+        "DATA_VALIDATION_FIRST": 0,
+        "PROJECT_FINANCIAL_SIGNAL": 1,
+        "PROGRAM_STRUCTURE_CONTEXT": 2,
+        "LARGE_BUDGET_CONTEXT": 3,
+    }
+    queue["_project_review_group_order"] = queue["project_review_group"].map(group_order)
+    queue = queue.sort_values(
+        [
+            "candidate_id",
+            "_project_review_group_order",
+            "budget_rank_within_candidate",
+            "project_id",
+        ]
+    )
+    queue["project_review_order_within_candidate"] = queue.groupby("candidate_id").cumcount() + 1
+    queue = queue.sort_values(
+        [
+            "exploratory_consensus_order",
+            "project_review_order_within_candidate",
+            "project_id",
+        ],
+        ignore_index=True,
+    )
+    queue["review_sequence_overall"] = range(1, len(queue) + 1)
+    ministry_order = queue.sort_values(
+        [
+            "ministry_code",
+            "mean_scenario_rank_within_ministry",
+            "candidate_id",
+            "project_review_order_within_candidate",
+            "project_id",
+        ]
+    )
+    queue["review_sequence_within_ministry"] = (
+        ministry_order.groupby("ministry_code").cumcount().add(1).reindex(queue.index)
+    )
+    queue = queue.drop(columns="_project_review_group_order").convert_dtypes()
+
+    eligible = candidates.loc[candidates["scenario_ranking_eligible"].fillna(False)]
+    source_budget = pd.to_numeric(candidates["account_original_budget"], errors="coerce")
+    eligible_budget = pd.to_numeric(eligible["account_original_budget"], errors="coerce")
+    summary = {
+        "source_candidate_count": len(candidates),
+        "eligible_candidate_count": len(eligible),
+        "ineligible_candidate_count": int(
+            (~candidates["scenario_ranking_eligible"].fillna(False)).sum()
+        ),
+        "eligible_candidate_coverage_rate": queue["candidate_id"].nunique() / len(eligible),
+        "unique_program_count": len(queue[PROGRAM_ID_KEY].drop_duplicates()),
+        "project_row_count": len(queue),
+        "project_review_group_counts": {
+            str(key): int(value)
+            for key, value in queue["project_review_group"].value_counts().items()
+        },
+        "ministry_candidate_counts": {
+            str(key): int(value)
+            for key, value in queue.groupby("ministry_code")["candidate_id"].nunique().items()
+        },
+        "ministry_project_row_counts": {
+            str(key): int(value) for key, value in queue["ministry_code"].value_counts().items()
+        },
+        "source_original_budget": float(source_budget.sum()),
+        "eligible_original_budget": float(eligible_budget.sum()),
+        "ineligible_original_budget": float(source_budget.sum() - eligible_budget.sum()),
+        "eligible_original_budget_share": float(eligible_budget.sum() / source_budget.sum()),
+        "project_original_budget": float(queue["project_original_budget"].sum()),
+        "project_current_budget": float(queue["project_current_budget"].sum()),
+        "project_expenditure": float(queue["project_expenditure"].sum()),
+        "other_ministry_row_count": validation["other_ministry_row_count"],
+        "candidate_project_key_unique": validation["candidate_project_key_unique"],
+        "original_budget_reconciled": validation["original_budget_reconciled"],
+        "current_budget_reconciled": validation["current_budget_reconciled"],
+        "expenditure_reconciled": validation["expenditure_reconciled"],
+        "project_performance_attribution_count": validation[
+            "project_performance_attribution_count"
+        ],
+        "final_policy_rank_generated": False,
+    }
+    return queue, summary
 
 
 def _current_execution_severity(
@@ -528,7 +684,7 @@ def build_candidate_population(
             "account_financial_linkage_status",
             "account_financial_quality_level",
         },
-        "중기부 성과·재정 결합표",
+        "성과·재정 결합표",
     )
     analysis = analysis.copy()
     analysis["ministry_code"] = analysis["ministry_code"].astype("string")
@@ -1286,6 +1442,11 @@ def run_priority_scenario_analysis(
         stability,
         features,
     )
+    project_review_queue, project_review_summary = build_eligible_project_review_queue(
+        candidates,
+        stability,
+        features,
+    )
     spearman = build_spearman_table(scenario_scores, scenario_names)
     top_k_overlap = build_top_k_overlap(
         scenario_scores,
@@ -1302,6 +1463,7 @@ def run_priority_scenario_analysis(
         input_hashes=input_hashes,
     )
     summary["drilldown"] = drilldown_summary
+    summary["project_review_queue"] = project_review_summary
     if {
         str(source): _sha256(source)
         for source in (paths.same_year_analysis, paths.financial_features, paths.config)
@@ -1315,6 +1477,7 @@ def run_priority_scenario_analysis(
         "scenario_scores.csv": scenario_scores,
         "rank_stability.csv": stability,
         "stable_top5_project_drilldown.csv": drilldown,
+        "eligible_candidate_project_review_queue.csv": project_review_queue,
         "scenario_spearman.csv": spearman,
         "top_k_overlap.csv": top_k_overlap,
     }
@@ -1342,9 +1505,70 @@ def run_priority_scenario_analysis(
         scenario_scores=scenario_scores,
         stability=stability,
         drilldown=drilldown,
+        project_review_queue=project_review_queue,
         spearman=spearman,
         top_k_overlap=top_k_overlap,
         summary=summary,
         output_paths=(*output_paths, summary_path),
         figure_paths=(rank_figure, spearman_figure),
     )
+
+
+def run_configured_multi_ministry_priority_analysis(
+    root: Path,
+    *,
+    overwrite: bool = False,
+) -> tuple[Path, PriorityScenarioResult]:
+    paths = PriorityScenarioPaths.multi_ministry_from_root(root)
+    config = load_scenario_config(paths.config)
+    scope = config.get("scope", {})
+    ministry_codes = tuple(str(code).zfill(3) for code in scope.get("ministry_codes", ()))
+    if not ministry_codes or len(set(ministry_codes)) != len(ministry_codes):
+        raise PriorityScenarioError(
+            "scope.ministry_codes에는 중복 없는 부처코드가 하나 이상 필요합니다."
+        )
+
+    combined_path = paths.same_year_analysis
+    if combined_path.exists() and not overwrite:
+        raise FileExistsError(f"다부처 성과·재정 결합표가 이미 있습니다: {combined_path}")
+
+    frames: list[pd.DataFrame] = []
+    start_year = int(scope["start_year"])
+    end_year = int(scope["end_year"])
+    for code in ministry_codes:
+        result = run_same_year_budget_check(
+            indicator_path=root / f"data/processed/performance/by_ministry/ministry_code={code}/"
+            "analysis_ready/program_kpi_year_analysis_ready.parquet",
+            overall_financial_path=root / "data/processed/masters/program_year_financial.parquet",
+            project_financial_path=root
+            / "data/processed/masters/project_year_financial_v2.parquet",
+            output_dir=root
+            / f"data/analytics/by_ministry/ministry_code={code}/same_year_budget_check",
+            ministry_code=code,
+            start_year=start_year,
+            end_year=end_year,
+            overwrite=overwrite,
+        )
+        frames.append(result.analysis)
+
+    combined = pd.concat(frames, ignore_index=True).convert_dtypes()
+    key = [
+        "ministry_code",
+        "fiscal_year",
+        "program_goal_number",
+        "performance_program_name",
+        "account_type",
+    ]
+    if combined.duplicated(key).any():
+        raise PriorityScenarioError("다부처 결합표의 분석 키가 중복되었습니다.")
+    actual_codes = set(combined["ministry_code"].astype("string").str.zfill(3))
+    if actual_codes != set(ministry_codes):
+        raise PriorityScenarioError(
+            "다부처 결합표의 부처 범위가 설정과 다릅니다: "
+            f"설정={sorted(ministry_codes)}, 결과={sorted(actual_codes)}"
+        )
+
+    combined_path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(combined_path, index=False, encoding="utf-8-sig")
+    priority = run_priority_scenario_analysis(paths, overwrite=overwrite)
+    return combined_path, priority

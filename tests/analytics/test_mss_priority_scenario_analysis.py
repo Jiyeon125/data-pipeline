@@ -4,8 +4,10 @@ import pandas as pd
 
 from analytics.mss_priority_scenario_analysis import (
     SIGNAL_FLAGS,
+    PriorityScenarioPaths,
     aggregate_program_account_signals,
     build_candidate_population,
+    build_eligible_project_review_queue,
     build_rank_stability,
     build_spearman_table,
     build_stable_top5_project_drilldown,
@@ -13,6 +15,14 @@ from analytics.mss_priority_scenario_analysis import (
     load_scenario_config,
     score_scenarios,
 )
+
+
+def test_multi_ministry_paths_and_scope_are_configuration_driven() -> None:
+    paths = PriorityScenarioPaths.multi_ministry_from_root(Path("."))
+    config = load_scenario_config(paths.config)
+
+    assert paths.output_dir.name == "multi_ministry_priority_scenarios"
+    assert config["scope"]["ministry_codes"] == ["019", "075", "102", "162"]
 
 
 def _manual_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -142,6 +152,7 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
                 "account_original_budget": 100,
                 "account_current_budget": 110,
                 "account_settlement_expenditure": 90,
+                "scenario_ranking_eligible": True,
             }
         ]
     )
@@ -150,6 +161,12 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
             {
                 "candidate_id": "102:2024:2100:GENERAL_ACCOUNT",
                 "all_scenario_top_5": True,
+                "all_scenario_top_5_within_ministry": True,
+                "mean_scenario_rank": 1.0,
+                "scenario_rank_range": 0.0,
+                "mean_scenario_rank_within_ministry": 1.0,
+                "scenario_rank_range_within_ministry": 0.0,
+                "exploratory_consensus_order": 1,
             }
         ]
     )
@@ -205,5 +222,18 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     assert drilldown["project_current_budget"].sum() == 110
     assert drilldown["project_expenditure"].sum() == 90
     assert drilldown["budget_share_within_candidate"].sum() == 1
+    assert drilldown["drilldown_selection_scope"].eq("OVERALL_AND_WITHIN_MINISTRY").all()
     assert not drilldown["project_performance_attributed"].any()
     assert summary["other_ministry_row_count"] == 0
+
+    queue, queue_summary = build_eligible_project_review_queue(
+        candidate,
+        stability,
+        features,
+    )
+    assert queue["project_id"].tolist() == ["A", "B"]
+    assert queue["project_review_group"].eq("LARGE_BUDGET_CONTEXT").all()
+    assert queue["project_review_order_within_candidate"].tolist() == [1, 2]
+    assert queue["review_sequence_overall"].tolist() == [1, 2]
+    assert queue_summary["eligible_candidate_coverage_rate"] == 1
+    assert queue_summary["project_performance_attribution_count"] == 0

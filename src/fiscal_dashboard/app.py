@@ -1,4 +1,4 @@
-"""3개 부처 점검 후보·순위 안정성·성과 원문 검수 Streamlit 대시보드."""
+"""다부처 점검 후보·순위 안정성·성과 원문 검수 Streamlit 대시보드."""
 
 from __future__ import annotations
 
@@ -20,12 +20,14 @@ from performance_pipeline.pdf_reconciliation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = Path("data/analytics/three_ministry_priority_scenarios")
+DATA_DIR = Path("data/analytics/multi_ministry_priority_scenarios")
 MINISTRY_LABELS = {
     "019": "고용노동부",
     "075": "보건복지부",
+    "102": "중소벤처기업부",
     "162": "과학기술정보통신부",
 }
+PDF_REVIEW_MINISTRY_CODES = ("019", "075", "162")
 
 ACCOUNT_LABELS = {
     "GENERAL_ACCOUNT": "일반회계",
@@ -73,6 +75,12 @@ FINANCIAL_SIGNAL_LABELS = {
     "MULTIPLE_FINANCIAL_SIGNALS": "복수 재정신호",
     "DATA_VALIDATION_PRIORITY": "데이터 검증 우선",
     "NONE": "추가 재정신호 없음",
+}
+PROJECT_REVIEW_GROUP_LABELS = {
+    "DATA_VALIDATION_FIRST": "데이터 먼저 확인",
+    "PROJECT_FINANCIAL_SIGNAL": "세부사업 재정신호",
+    "PROGRAM_STRUCTURE_CONTEXT": "프로그램 구조 맥락",
+    "LARGE_BUDGET_CONTEXT": "예산규모 맥락",
 }
 WORKFLOW_STEPS = [
     "1. 전체 현황",
@@ -123,6 +131,7 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
         "scores": "scenario_scores.csv",
         "stability": "rank_stability.csv",
         "drilldown": "stable_top5_project_drilldown.csv",
+        "project_queue": "eligible_candidate_project_review_queue.csv",
         "spearman": "scenario_spearman.csv",
         "overlap": "top_k_overlap.csv",
     }
@@ -131,7 +140,7 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     if missing:
         raise FileNotFoundError(
             "대시보드 입력이 없습니다. 먼저 "
-            "`fiscal-analytics analyze-three-ministry-priority-scenarios "
+            "`fiscal-analytics analyze-priority-scenarios "
             "--root . --overwrite`를 "
             f"실행하세요: {', '.join(str(path) for path in missing)}"
         )
@@ -194,6 +203,27 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "project_financial_signal_types",
             "project_performance_attributed",
         },
+        "project_queue": {
+            "candidate_id",
+            "project_id",
+            "project_name",
+            "activity_name_budget_api",
+            "project_review_group",
+            "project_review_order_within_candidate",
+            "review_sequence_overall",
+            "review_sequence_within_ministry",
+            "project_original_budget",
+            "project_current_budget",
+            "project_expenditure",
+            "project_remaining_amount",
+            "project_carryover",
+            "project_unused",
+            "execution_rate",
+            "budget_share_within_candidate",
+            "remaining_share_within_candidate",
+            "project_financial_signal_types",
+            "project_performance_attributed",
+        },
     }
     for name, columns in required_columns.items():
         missing_columns = sorted(columns - set(data[name].columns))
@@ -220,7 +250,7 @@ def _program_count(frame: pd.DataFrame) -> int:
 def load_pdf_review_queue(root: Path = PROJECT_ROOT) -> pd.DataFrame:
     """3개 부처 PDF 대조 결과와 현재 사람 검수 상태를 읽습니다."""
     frames = []
-    for code in MINISTRY_LABELS:
+    for code in PDF_REVIEW_MINISTRY_CODES:
         path = (
             root
             / "data/processed/performance/pdf_reconciliation"
@@ -358,7 +388,7 @@ def _rank_range_figure(
     )
     ax.set_yticks(range(len(plot)), labels)
     ax.set_xlabel("시나리오 순위 (낮을수록 상위)")
-    scope_label = "부처 내부" if within_ministry else "3개 부처 전체"
+    scope_label = "부처 내부" if within_ministry else "전체 부처"
     ax.set_title(
         f"{scope_label} 후보별 순위 범위",
         loc="left",
@@ -452,7 +482,7 @@ def _scenario_top_figure(
     ax.set_yticks(range(len(plot)), labels)
     ax.set_xlabel("탐색 점수 (0~1)")
     ax.set_xlim(0, max(1, float(plot[score_column].max()) * 1.15))
-    scope_label = "부처 내부" if within_ministry else "3개 부처 전체"
+    scope_label = "부처 내부" if within_ministry else "전체 부처"
     ax.set_title(
         f"{scope_label} · {SCENARIO_LABELS.get(scenario, scenario)} 상위 후보",
         loc="left",
@@ -498,6 +528,7 @@ def _project_budget_figure(projects: pd.DataFrame) -> plt.Figure:
 
 def _project_table_view(projects: pd.DataFrame) -> pd.DataFrame:
     table = projects.copy()
+    table["검토유형"] = table["project_review_group"].map(PROJECT_REVIEW_GROUP_LABELS)
     table["본예산(억원)"] = table["project_original_budget"].div(100_000_000)
     table["예산비중"] = table["budget_share_within_candidate"]
     table["집행률"] = table["execution_rate"]
@@ -508,6 +539,8 @@ def _project_table_view(projects: pd.DataFrame) -> pd.DataFrame:
     table["재정신호"] = table["project_financial_signal_types"].map(_financial_signal_text)
     return table[
         [
+            "project_review_order_within_candidate",
+            "검토유형",
             "project_name",
             "activity_name_budget_api",
             "본예산(억원)",
@@ -521,6 +554,7 @@ def _project_table_view(projects: pd.DataFrame) -> pd.DataFrame:
         ]
     ].rename(
         columns={
+            "project_review_order_within_candidate": "검토순서",
             "project_name": "세부사업",
             "activity_name_budget_api": "단위사업",
         }
@@ -817,7 +851,7 @@ def main() -> None:
     )
     st.title("재정사업 점검 작업대")
     st.caption(
-        "고용노동부·보건복지부·과학기술정보통신부 2022–2024 파일럿 · "
+        "고용노동부·보건복지부·중소벤처기업부·과학기술정보통신부 2022–2024 파일럿 · "
         "데이터 문제 먼저 → 후보 근거 → 순위 안정성 → PDF 원문 검수 순서로 진행합니다."
     )
 
@@ -830,7 +864,7 @@ def main() -> None:
     candidates = data["candidates"]
     stability = data["stability"]
     scores = data["scores"]
-    drilldown = data["drilldown"]
+    project_queue = data["project_queue"]
     summary = data["summary"]
     counts = summary["counts"]
     top_k = summary["stability"]["all_scenario_top_k"]
@@ -1184,12 +1218,13 @@ def main() -> None:
                     else f"{float(row['account_execution_rate']):.1%}"
                 )
             )
-            projects = drilldown.loc[drilldown["candidate_id"].eq(selected_id)].copy()
+            projects = project_queue.loc[project_queue["candidate_id"].eq(selected_id)].copy()
             if not projects.empty:
-                st.subheader("세부사업 재정 원인")
+                st.subheader("세부사업 검토 순서")
                 st.warning(
-                    "아래 표는 재정 원인만 확인합니다. 프로그램 성과를 세부사업 성과로 "
-                    "귀속하지 않습니다."
+                    "프로그램 순위를 먼저 보고, 그 안에서는 데이터 검증 → 세부사업 재정신호 "
+                    "→ 프로그램 구조 → 예산규모 순으로 확인합니다. 프로그램 성과를 "
+                    "세부사업 성과로 귀속하지 않습니다."
                 )
                 total_remaining = float(projects["project_remaining_amount"].sum())
                 top_remaining = float(projects["project_remaining_amount"].max())
@@ -1217,8 +1252,7 @@ def main() -> None:
                 st.dataframe(
                     _project_table_view(
                         projects.sort_values(
-                            "project_remaining_amount",
-                            ascending=False,
+                            "project_review_order_within_candidate",
                         )
                     ),
                     hide_index=True,
@@ -1242,12 +1276,19 @@ def main() -> None:
                 args=(WORKFLOW_STEPS[3],),
                 width="stretch",
             )
+            pdf_review_available = str(row["ministry_code"]) in PDF_REVIEW_MINISTRY_CODES
             action_columns[1].button(
                 "이 프로그램 PDF 원문 확인",
                 icon=":material/description:",
                 on_click=_go_to_review,
                 args=(str(row["performance_program_name"]), str(row["ministry_code"])),
                 width="stretch",
+                disabled=not pdf_review_available,
+                help=(
+                    None
+                    if pdf_review_available
+                    else "중기부는 아직 공통 PDF 원문 검수 큐에 연결되지 않았습니다."
+                ),
             )
             with st.expander(
                 "현재 필터의 전체 후보표와 CSV",
@@ -1268,7 +1309,7 @@ def main() -> None:
                 st.download_button(
                     "현재 후보표 CSV 내려받기",
                     display_table.to_csv(index=False).encode("utf-8-sig"),
-                    file_name="three_ministry_priority_candidates_filtered.csv",
+                    file_name="multi_ministry_priority_candidates_filtered.csv",
                     mime="text/csv",
                     icon=":material/download:",
                 )
@@ -1283,7 +1324,7 @@ def main() -> None:
         if eligible_scores.empty:
             st.warning("현재 필터에는 순위를 비교할 수 있는 후보가 없습니다.")
         else:
-            rank_options = ["3개 부처 전체"]
+            rank_options = ["전체 부처"]
             if len(selected_ministries) == 1:
                 rank_options.append("선택 부처 내부")
             rank_basis = st.segmented_control(
@@ -1298,7 +1339,7 @@ def main() -> None:
             rank_scope_label = (
                 f"{MINISTRY_LABELS.get(selected_ministries[0], selected_ministries[0])} 내부"
                 if within_ministry
-                else "3개 부처 전체"
+                else "전체 부처"
             )
             scenario = st.selectbox(
                 "강조할 기준",
@@ -1357,7 +1398,8 @@ def main() -> None:
         st.subheader("사람 확인이 필요한 성과지표부터 PDF 원문으로 검수합니다")
         st.caption(
             "기본 화면은 자동 강근거 160행을 제외한 필수 검수 201행입니다. "
-            "수기값과 PDF값을 나란히 보고 결과를 별도 감사 CSV에 저장합니다."
+            "수기값과 PDF값을 나란히 보고 결과를 별도 감사 CSV에 저장합니다. "
+            "현재 공통 검수 큐는 고용노동부·보건복지부·과학기술정보통신부를 지원합니다."
         )
         with st.expander("검수 전에 30초만 읽어주세요", icon=":material/help:"):
             st.markdown(
@@ -1552,14 +1594,14 @@ def main() -> None:
             - **분석 단위:** 부처 × 프로그램 × 회계연도 × 회계유형
             - **시나리오:** 균등가중, 성과중심, 집행중심, 재정영향 보정
             - **금지 해석:** 실패·낭비·삭감 대상 자동 판정
-             - **원천:** 3개 부처 수기 성과표, PDF 자동 대조 결과, 검증된 M3 재정 신호
+             - **원천:** 4개 부처 수기 성과표, 3개 부처 PDF 자동 대조 결과, 검증된 M3 재정 신호
              - **전체/부처별:** 전체는 연도 내, 부처별은 부처·연도 내 재정규모 백분위 사용
              - **제한:** 사람 PDF 검수·성과지표 유형·자율평가 의견 미반영
-             - **현재 상태:** 3개 부처 파일럿이며 최종 정책 순위가 아님
+             - **현재 상태:** 4개 부처 파일럿이며 최종 정책 순위가 아님
              """
         )
         st.code(
-            "fiscal-analytics analyze-three-ministry-priority-scenarios --root . --overwrite",
+            "fiscal-analytics analyze-priority-scenarios --root . --overwrite",
             language="powershell",
         )
         st.caption(f"분석 생성 시각(UTC): {summary.get('generated_at', '확인 불가')}")
