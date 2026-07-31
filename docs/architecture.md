@@ -95,9 +95,12 @@ LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원�
 `fiscal_dashboard`는 검증 완료된 분석 산출물과 PDF 대조 산출물만 읽는
 Streamlit 소비자입니다. 분석 파이프라인의 정식 다부처 출력은
 `data/analytics/multi_ministry_priority_scenarios/`이며, 화면도 이 경로만
-읽습니다. `eligible_candidate_project_review_queue.csv`는 순위 적격
-프로그램 후보 아래의 모든 세부사업을 재정신호와 예산규모 기준으로
-검토할 순서만 제공합니다.
+읽습니다. `full_population_review_work_queue.csv`는 후보 모집단 412행을
+데이터 검증·성과집행 신호·맥락 검토·현재 신호 미검출 모니터링 레인으로
+빠짐없이 배치합니다. `full_population_project_review_queue.csv`는 데이터
+검증 선행 15행을 제외한 397개 프로그램 후보 아래의 세부사업을 자체
+재정신호와 예산규모 기준으로 검토할 순서만 제공합니다. 신호 미검출은
+안전 판정이 아닙니다.
 후보 생성·가중치·순위 계산을 화면에 복사하지 않고, 다음 기능만 담당합니다.
 
 - 시작 → 데이터 확인 → 후보 분석 → 기준 비교 → 원문 검수 단계 이동

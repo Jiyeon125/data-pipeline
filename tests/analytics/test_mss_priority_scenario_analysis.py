@@ -7,7 +7,8 @@ from analytics.mss_priority_scenario_analysis import (
     PriorityScenarioPaths,
     aggregate_program_account_signals,
     build_candidate_population,
-    build_eligible_project_review_queue,
+    build_full_population_review_work_queue,
+    build_project_review_work_queue,
     build_rank_stability,
     build_spearman_table,
     build_stable_top5_project_drilldown,
@@ -126,6 +127,10 @@ def test_manual_scenario_rank_stability() -> None:
     scenarios = list(config["scenarios"])
     spearman = build_spearman_table(scores, scenarios)
     overlap = build_top_k_overlap(scores, scenarios, [1])
+    work_queue, work_summary = build_full_population_review_work_queue(
+        candidates,
+        stability,
+    )
 
     assert len(stability) == 2
     assert scores.groupby("candidate_id")["scenario"].nunique().eq(len(scenarios)).all()
@@ -134,6 +139,14 @@ def test_manual_scenario_rank_stability() -> None:
     assert stability["scenario_rank_range"].equals(stability["scenario_rank_range_within_ministry"])
     assert len(spearman) == len(scenarios) ** 2
     assert overlap["comparison_type"].eq("ALL_SCENARIOS").sum() == 1
+    assert work_summary["candidate_coverage_rate"] == 1
+    assert work_queue["work_lane"].value_counts().to_dict() == {
+        "MODELED_SIGNAL_REVIEW": 2,
+        "DATA_VERIFICATION": 1,
+        "CONTEXT_REVIEW": 1,
+        "NO_TRIGGER_MONITORING": 1,
+    }
+    assert work_queue["safety_conclusion"].eq("NOT_ASSESSED").all()
 
 
 def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
@@ -152,7 +165,11 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
                 "account_original_budget": 100,
                 "account_current_budget": 110,
                 "account_settlement_expenditure": 90,
+                "analysis_status": "JOINT_ANALYSIS",
                 "scenario_ranking_eligible": True,
+                "data_validation_signal": False,
+                "context_only_candidate": False,
+                "context_signal_family_count": 0,
             }
         ]
     )
@@ -226,14 +243,18 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     assert not drilldown["project_performance_attributed"].any()
     assert summary["other_ministry_row_count"] == 0
 
-    queue, queue_summary = build_eligible_project_review_queue(
+    work_queue, _ = build_full_population_review_work_queue(
         candidate,
         stability,
+    )
+    queue, queue_summary = build_project_review_work_queue(
+        candidate,
+        work_queue,
         features,
     )
     assert queue["project_id"].tolist() == ["A", "B"]
     assert queue["project_review_group"].eq("LARGE_BUDGET_CONTEXT").all()
     assert queue["project_review_order_within_candidate"].tolist() == [1, 2]
     assert queue["review_sequence_overall"].tolist() == [1, 2]
-    assert queue_summary["eligible_candidate_coverage_rate"] == 1
+    assert queue_summary["reviewable_candidate_coverage_rate"] == 1
     assert queue_summary["project_performance_attribution_count"] == 0

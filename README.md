@@ -449,10 +449,13 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 우선순위 정책 초안: `docs/PRIORITY_POLICY_DECISION_DRAFT.md`
 - 기본 원문 검수 큐: 자동 강근거 160행을 제외한 필수 201행
 - 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
-- 다운로드: 현재 필터의 후보표 CSV
+- 다운로드: 현재 필터의 전체 점검 업무대기열 CSV
 - 정식 분석 입력: `data/analytics/multi_ministry_priority_scenarios/`
-- 순위 적격 후보 세부사업 검토대기열:
-  `eligible_candidate_project_review_queue.csv`
+- 전체 412행 점검 업무대기열: `full_population_review_work_queue.csv`
+- 데이터 검증 15행을 제외한 세부사업 검토대기열:
+  `full_population_project_review_queue.csv`
+- 성과·집행 신호 레인 235행에만 기존 네 시나리오 순위를 표시하며,
+  신호 미검출 행을 안전하다고 판정하지 않음
 - 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
 
 ## UNKNOWN 예산 80% 커버리지 사람 검수

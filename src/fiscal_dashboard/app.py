@@ -82,6 +82,18 @@ PROJECT_REVIEW_GROUP_LABELS = {
     "PROGRAM_STRUCTURE_CONTEXT": "프로그램 구조 맥락",
     "LARGE_BUDGET_CONTEXT": "예산규모 맥락",
 }
+WORK_LANE_LABELS = {
+    "DATA_VERIFICATION": "데이터 검증 우선",
+    "MODELED_SIGNAL_REVIEW": "성과·집행 신호 검토",
+    "CONTEXT_REVIEW": "회계·사업구조 맥락 검토",
+    "NO_TRIGGER_MONITORING": "현재 신호 미검출·모니터링",
+}
+WORK_SCOPE_TO_LANE = {
+    "데이터 검증 우선": "DATA_VERIFICATION",
+    "성과·집행 신호 검토": "MODELED_SIGNAL_REVIEW",
+    "회계·사업구조 맥락 검토": "CONTEXT_REVIEW",
+    "현재 신호 미검출·모니터링": "NO_TRIGGER_MONITORING",
+}
 WORKFLOW_STEPS = [
     "1. 전체 현황",
     "2. 먼저 해결",
@@ -128,10 +140,11 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     base = root / DATA_DIR
     filenames = {
         "candidates": "candidate_population.csv",
+        "work_queue": "full_population_review_work_queue.csv",
         "scores": "scenario_scores.csv",
         "stability": "rank_stability.csv",
         "drilldown": "stable_top5_project_drilldown.csv",
-        "project_queue": "eligible_candidate_project_review_queue.csv",
+        "project_queue": "full_population_project_review_queue.csv",
         "spearman": "scenario_spearman.csv",
         "overlap": "top_k_overlap.csv",
     }
@@ -153,7 +166,8 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             frame["ministry_code"] = frame["ministry_code"].astype("string").str.zfill(3)
         if "program_code" in frame:
             frame["program_code"] = frame["program_code"].astype("string").str.zfill(4)
-    data["candidates"]["account_type"] = data["candidates"]["account_type"].fillna("NOT_AVAILABLE")
+    for name in ("candidates", "work_queue"):
+        data[name]["account_type"] = data[name]["account_type"].fillna("NOT_AVAILABLE")
     data["summary"] = json.loads((base / "analysis_summary.json").read_text(encoding="utf-8"))
     required_columns = {
         "candidates": {
@@ -170,6 +184,28 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "scenario_ranking_eligible",
             "data_validation_signal",
             "account_original_budget",
+        },
+        "work_queue": {
+            "candidate_id",
+            "field_name",
+            "sector_name",
+            "program_code",
+            "fiscal_year",
+            "account_type",
+            "performance_program_name",
+            "priority_tier",
+            "priority_reason",
+            "review_candidate",
+            "scenario_ranking_eligible",
+            "data_validation_signal",
+            "account_original_budget",
+            "work_lane",
+            "work_item_status",
+            "work_queue_order",
+            "work_queue_order_within_ministry",
+            "work_lane_rank_overall",
+            "work_lane_rank_within_ministry",
+            "safety_conclusion",
         },
         "scores": {
             "candidate_id",
@@ -223,6 +259,9 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "remaining_share_within_candidate",
             "project_financial_signal_types",
             "project_performance_attributed",
+            "work_lane",
+            "work_queue_order",
+            "work_queue_order_within_ministry",
         },
     }
     for name, columns in required_columns.items():
@@ -231,6 +270,12 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             raise DashboardDataError(f"{name} 입력 컬럼 누락: {missing_columns}")
     if data["candidates"]["candidate_id"].duplicated().any():
         raise DashboardDataError("후보표 candidate_id가 중복되었습니다.")
+    if data["work_queue"]["candidate_id"].duplicated().any():
+        raise DashboardDataError("전체 업무대기열 candidate_id가 중복되었습니다.")
+    if set(data["work_queue"]["candidate_id"]) != set(data["candidates"]["candidate_id"]):
+        raise DashboardDataError(
+            "전체 업무대기열이 후보 모집단 412행을 빠짐없이 보존하지 못했습니다."
+        )
     if data["stability"]["candidate_id"].duplicated().any():
         raise DashboardDataError("안정성표 candidate_id가 중복되었습니다.")
     if data["scores"].duplicated(["candidate_id", "scenario"]).any():
@@ -302,7 +347,9 @@ def filter_candidates(
     ministry_codes: list[str] | None = None,
 ) -> pd.DataFrame:
     """화면 필터만 적용하고 후보·점수 정의는 변경하지 않습니다."""
-    if scope == "순위 적격 후보":
+    if scope in WORK_SCOPE_TO_LANE:
+        mask = candidates["work_lane"].eq(WORK_SCOPE_TO_LANE[scope])
+    elif scope == "순위 적격 후보":
         mask = candidates["scenario_ranking_eligible"].fillna(False)
     elif scope == "전체 점검 후보":
         mask = candidates["review_candidate"].fillna(False)
@@ -569,6 +616,8 @@ def _table_view(frame: pd.DataFrame) -> pd.DataFrame:
     table["회계유형"] = table["account_type"].map(ACCOUNT_LABELS).fillna(table["account_type"])
     table["점검단계"] = table["priority_tier"].map(TIER_LABELS).fillna(table["priority_tier"])
     table["점검근거"] = table["priority_reason"].map(_reason_text)
+    if "work_lane" in table:
+        table["업무레인"] = table["work_lane"].map(WORK_LANE_LABELS).fillna(table["work_lane"])
     table["본예산(억원)"] = pd.to_numeric(table["account_original_budget"], errors="coerce").div(
         100_000_000
     )
@@ -579,6 +628,8 @@ def _table_view(frame: pd.DataFrame) -> pd.DataFrame:
         "scenario_rank_range": "순위범위",
         "all_scenario_top_5": "전시나리오 Top5",
         "all_scenario_top_10": "전시나리오 Top10",
+        "work_queue_order": "업무순서",
+        "work_lane_rank_overall": "레인내순서",
     }
     table = table.rename(columns=rename)
     columns = [
@@ -590,7 +641,12 @@ def _table_view(frame: pd.DataFrame) -> pd.DataFrame:
         "점검근거",
         "본예산(억원)",
     ]
+    if "업무순서" in table:
+        columns.insert(0, "업무순서")
+    if "업무레인" in table:
+        columns.insert(2, "업무레인")
     for optional in (
+        "레인내순서",
         "평균순위",
         "순위범위",
         "전시나리오 Top5",
@@ -861,7 +917,7 @@ def main() -> None:
         st.error(str(exc))
         st.stop()
 
-    candidates = data["candidates"]
+    candidates = data["work_queue"]
     stability = data["stability"]
     scores = data["scores"]
     project_queue = data["project_queue"]
@@ -879,8 +935,8 @@ def main() -> None:
         key="global_ministries",
     )
     scope = st.sidebar.radio(
-        "후보 분석 범위",
-        ["전체 점검 후보", "순위 적격 후보", "데이터 검증 포함 전체"],
+        "점검 업무 범위",
+        ["전체 업무대기열", *WORK_SCOPE_TO_LANE],
     )
     years = sorted(candidates["fiscal_year"].dropna().astype(int).unique().tolist())
     selected_years = st.sidebar.multiselect(
@@ -910,7 +966,7 @@ def main() -> None:
     )
     filtered_all = filter_candidates(
         candidates,
-        scope="데이터 검증 포함 전체",
+        scope="전체 업무대기열",
         years=selected_years,
         account_types=selected_accounts,
         tiers=selected_tiers,
@@ -936,28 +992,33 @@ def main() -> None:
 
     st.caption(f"현재 필터: {len(filtered_all):,}행 · {_program_count(filtered_all):,}개 프로그램")
     with st.container(horizontal=True):
-        st.metric("분석행", f"{len(filtered_all):,}", border=True)
+        st.metric("전체 업무행", f"{len(filtered_all):,}", border=True)
         st.metric(
-            "점검 신호 있음",
-            f"{filtered_all['review_candidate'].fillna(False).sum():,}",
+            "성과·집행 신호",
+            f"{filtered_all['work_lane'].eq('MODELED_SIGNAL_REVIEW').sum():,}",
             border=True,
         )
         st.metric(
-            "순위 비교 가능",
-            f"{filtered_all['scenario_ranking_eligible'].fillna(False).sum():,}",
+            "맥락 검토",
+            f"{filtered_all['work_lane'].eq('CONTEXT_REVIEW').sum():,}",
             border=True,
         )
         st.metric(
-            "데이터 먼저 확인",
-            f"{filtered_all['data_validation_signal'].fillna(False).sum():,}",
+            "데이터 먼저",
+            f"{filtered_all['work_lane'].eq('DATA_VERIFICATION').sum():,}",
+            border=True,
+        )
+        st.metric(
+            "신호 미검출",
+            f"{filtered_all['work_lane'].eq('NO_TRIGGER_MONITORING').sum():,}",
             border=True,
         )
 
     if workflow_step == WORKFLOW_STEPS[0]:
         st.subheader("지금 해야 할 일부터 보여드립니다")
         st.info(
-            "먼저 데이터 연결을 확인하고, 후보의 근거를 본 뒤, 기준을 바꿔도 "
-            "순위가 유지되는지 확인합니다. 발표에 쓸 후보만 마지막에 PDF 원문을 검수합니다.",
+            "412행 모두를 데이터 검증, 성과·집행 신호 검토, 맥락 검토, 현재 신호 "
+            "미검출 모니터링 중 하나에 배치했습니다. ‘신호 미검출’은 안전 판정이 아닙니다.",
             icon=":material/route:",
         )
         try:
@@ -1002,8 +1063,23 @@ def main() -> None:
         status_columns[2].caption("네 기준을 모두 계산할 수 있는 후보입니다.")
         status_columns[3].metric("4. 원문 검수", f"{done_reviews:,}/{total_reviews:,}행")
         status_columns[3].caption("발표 사례로 쓸 성과지표를 사람이 확인합니다.")
+        st.markdown("#### 전체 점검 업무대기열")
+        st.dataframe(
+            _table_view(filtered_all.sort_values("work_queue_order").head(10)),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "본예산(억원)": st.column_config.NumberColumn(format="%.1f"),
+                "평균순위": st.column_config.NumberColumn(format="%.1f"),
+                "순위범위": st.column_config.NumberColumn(format="%.1f"),
+            },
+        )
+        st.caption(
+            f"업무순서 상위 10행입니다. 현재 필터의 전체 {len(filtered_all):,}행은 "
+            "‘3. 후보 살펴보기’에서 확인하고 내려받을 수 있습니다."
+        )
         st.warning(
-            f"전체 Top 5는 안정적이지 않습니다. 네 기준의 공통 후보는 "
+            f"성과·집행 신호 레인의 Top 5는 안정적이지 않습니다. 네 기준의 공통 후보는 "
             f"{top_k['5']['intersection_count']}행, 한 번이라도 포함된 후보는 "
             f"{top_k['5']['union_count']}행입니다. 단일 최종 순위로 확정하지 않습니다.",
             icon=":material/warning:",
@@ -1119,37 +1195,13 @@ def main() -> None:
         )
 
     elif workflow_step == WORKFLOW_STEPS[2]:
-        st.subheader("후보 하나를 골라 왜 올라왔는지 확인합니다")
+        st.subheader("업무 하나를 골라 왜 이 순서인지 확인합니다")
         if filtered.empty:
             st.warning("현재 필터에 해당하는 후보가 없습니다.")
         else:
             st.caption(f"현재 필터: {len(filtered)}행 · {_program_count(filtered)}개 프로그램")
-            joined = filtered.merge(
-                stability[
-                    [
-                        "candidate_id",
-                        "mean_scenario_rank",
-                        "scenario_rank_range",
-                        "all_scenario_top_5",
-                        "all_scenario_top_10",
-                    ]
-                ],
-                on="candidate_id",
-                how="left",
-                validate="one_to_one",
-            ).sort_values(
-                ["mean_scenario_rank", "priority_tier_order", "account_original_budget"],
-                ascending=[True, True, False],
-                na_position="last",
-            )
-            option_frame = filtered.sort_values(
-                [
-                    "scenario_ranking_eligible",
-                    "priority_tier_order",
-                    "account_original_budget",
-                ],
-                ascending=[False, True, False],
-            )
+            joined = filtered.sort_values("work_queue_order")
+            option_frame = joined
             option_labels = {
                 row.candidate_id: (
                     f"{MINISTRY_LABELS.get(str(row.ministry_code), row.ministry_code)} · "
@@ -1166,8 +1218,10 @@ def main() -> None:
             )
             row = candidates.loc[candidates["candidate_id"].eq(selected_id)].iloc[0]
             tier_label = TIER_LABELS.get(row["priority_tier"], row["priority_tier"])
+            lane_label = WORK_LANE_LABELS.get(row["work_lane"], row["work_lane"])
             st.info(
-                f"**{tier_label}** · {_reason_text(row['priority_reason'])}",
+                f"**업무순서 {int(row['work_queue_order']):,} · {lane_label}**  \n"
+                f"{tier_label} · {_reason_text(row['priority_reason'])}",
                 icon=":material/flag:",
             )
             component_specs = [
@@ -1187,7 +1241,26 @@ def main() -> None:
 
             candidate_scores = scores.loc[scores["candidate_id"].eq(selected_id)].copy()
             if candidate_scores.empty:
-                st.warning("이 행은 데이터 또는 구성요소 제한으로 시나리오 순위에서 제외됩니다.")
+                lane_guidance = {
+                    "DATA_VERIFICATION": (
+                        "재정 연결이나 프로그램 식별을 먼저 검증해야 하므로 시나리오 순위를 "
+                        "계산하지 않았습니다."
+                    ),
+                    "CONTEXT_REVIEW": (
+                        "회계·사업구조 맥락을 확인할 업무입니다. 비교 가능한 성과·집행 "
+                        "시나리오 점수는 만들지 않았습니다."
+                    ),
+                    "NO_TRIGGER_MONITORING": (
+                        "현재 정의한 신호가 검출되지 않아 모니터링 레인에 배치했습니다. "
+                        "안전하거나 문제가 없다는 판정은 아닙니다."
+                    ),
+                }
+                st.warning(
+                    lane_guidance.get(
+                        row["work_lane"],
+                        "필수 구성요소가 없어 시나리오 순위를 계산하지 않았습니다.",
+                    )
+                )
             else:
                 candidate_scores["시나리오"] = candidate_scores["scenario"].map(SCENARIO_LABELS)
                 candidate_scores = candidate_scores.rename(
@@ -1268,6 +1341,11 @@ def main() -> None:
                         "불용(억원)": st.column_config.NumberColumn(format="%.1f"),
                     },
                 )
+            elif row["work_lane"] == "DATA_VERIFICATION":
+                st.info(
+                    "이 행은 데이터 검증을 마친 뒤 세부사업 검토 순서를 연결합니다. "
+                    "대기열에서 삭제된 것이 아닙니다."
+                )
             action_columns = st.columns(2)
             action_columns[0].button(
                 "기준을 바꿨을 때 순위 확인",
@@ -1275,6 +1353,12 @@ def main() -> None:
                 on_click=_go_to_step,
                 args=(WORKFLOW_STEPS[3],),
                 width="stretch",
+                disabled=not bool(row["scenario_ranking_eligible"]),
+                help=(
+                    None
+                    if bool(row["scenario_ranking_eligible"])
+                    else "성과·집행 신호 레인에서만 네 시나리오 순위를 비교합니다."
+                ),
             )
             pdf_review_available = str(row["ministry_code"]) in PDF_REVIEW_MINISTRY_CODES
             action_columns[1].button(
@@ -1291,7 +1375,7 @@ def main() -> None:
                 ),
             )
             with st.expander(
-                "현재 필터의 전체 후보표와 CSV",
+                "현재 필터의 전체 업무대기열과 CSV",
                 icon=":material/table_chart:",
             ):
                 display_table = _table_view(joined)
@@ -1307,9 +1391,9 @@ def main() -> None:
                     },
                 )
                 st.download_button(
-                    "현재 후보표 CSV 내려받기",
+                    "현재 업무대기열 CSV 내려받기",
                     display_table.to_csv(index=False).encode("utf-8-sig"),
-                    file_name="multi_ministry_priority_candidates_filtered.csv",
+                    file_name="multi_ministry_review_work_queue_filtered.csv",
                     mime="text/csv",
                     icon=":material/download:",
                 )

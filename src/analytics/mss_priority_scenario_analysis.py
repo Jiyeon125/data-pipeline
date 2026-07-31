@@ -41,6 +41,12 @@ TIER_ORDER = {
     "CONTEXT_REVIEW": 4,
     "INFORMATION": 5,
 }
+WORK_LANE_ORDER = {
+    "DATA_VERIFICATION": 1,
+    "MODELED_SIGNAL_REVIEW": 2,
+    "CONTEXT_REVIEW": 3,
+    "NO_TRIGGER_MONITORING": 4,
+}
 
 
 class PriorityScenarioError(ValueError):
@@ -83,6 +89,7 @@ class PriorityScenarioPaths:
 @dataclass(frozen=True)
 class PriorityScenarioResult:
     candidates: pd.DataFrame
+    work_queue: pd.DataFrame
     scenario_scores: pd.DataFrame
     stability: pd.DataFrame
     drilldown: pd.DataFrame
@@ -505,13 +512,25 @@ def build_stable_top5_project_drilldown(
     return result.convert_dtypes(), summary
 
 
-def build_eligible_project_review_queue(
+def build_full_population_review_work_queue(
     candidates: pd.DataFrame,
     stability: pd.DataFrame,
-    features: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """순위 적격 후보의 모든 세부사업을 2단계 검토 순서로 연결합니다."""
-    _require_columns(candidates, {"candidate_id", "scenario_ranking_eligible"}, "후보표")
+    """모든 후보를 점검 업무레인과 레인 내부 순서에 빠짐없이 배정합니다."""
+    _require_columns(
+        candidates,
+        {
+            "candidate_id",
+            "ministry_code",
+            "analysis_status",
+            "scenario_ranking_eligible",
+            "data_validation_signal",
+            "context_only_candidate",
+            "context_signal_family_count",
+            "account_original_budget",
+        },
+        "후보표",
+    )
     rank_columns = [
         "candidate_id",
         "mean_scenario_rank",
@@ -523,24 +542,206 @@ def build_eligible_project_review_queue(
         "all_scenario_top_5_within_ministry",
     ]
     _require_columns(stability, set(rank_columns), "순위 안정성표")
-    eligible_ids = candidates.loc[
-        candidates["scenario_ranking_eligible"].fillna(False),
+    result = candidates.merge(
+        stability[rank_columns],
+        on="candidate_id",
+        how="left",
+        validate="one_to_one",
+    )
+    result["work_lane"] = "NO_TRIGGER_MONITORING"
+    result.loc[
+        result["context_only_candidate"].fillna(False),
+        "work_lane",
+    ] = "CONTEXT_REVIEW"
+    result.loc[
+        result["scenario_ranking_eligible"].fillna(False),
+        "work_lane",
+    ] = "MODELED_SIGNAL_REVIEW"
+    result.loc[
+        result["data_validation_signal"].fillna(False),
+        "work_lane",
+    ] = "DATA_VERIFICATION"
+
+    resolved = result["analysis_status"].isin(
+        {
+            "EXTERNAL_MINISTRY_FINANCIAL_PROGRAM",
+            "STRUCTURAL_PROGRAM_DELETED_TRANSFERRED",
+        }
+    )
+    result["work_item_status"] = "READY_FOR_REVIEW"
+    result.loc[result["work_lane"].eq("DATA_VERIFICATION"), "work_item_status"] = (
+        "PENDING_DATA_VERIFICATION"
+    )
+    result.loc[result["work_lane"].eq("NO_TRIGGER_MONITORING"), "work_item_status"] = "MONITOR"
+    result.loc[resolved, "work_item_status"] = "RESOLVED_CONTEXT"
+    result["work_lane_order"] = result["work_lane"].map(WORK_LANE_ORDER)
+    result["work_lane_interpretation"] = result["work_lane"].map(
+        {
+            "DATA_VERIFICATION": "DATA_OR_LINKAGE_REVIEW_REQUIRED",
+            "MODELED_SIGNAL_REVIEW": "OBSERVED_MODELED_SIGNAL",
+            "CONTEXT_REVIEW": "CONTEXT_SIGNAL_ONLY",
+            "NO_TRIGGER_MONITORING": "NO_CURRENT_TRIGGER_DETECTED_NOT_SAFE_CONCLUSION",
+        }
+    )
+    result.loc[resolved, "work_lane_interpretation"] = "RESOLVED_STRUCTURAL_CONTEXT"
+    result["safety_conclusion"] = "NOT_ASSESSED"
+    result["work_queue_role"] = "REVIEW_WORKFLOW_ORDER_NOT_POLICY_EFFECTIVENESS_RANK"
+
+    budget = pd.to_numeric(result["account_original_budget"], errors="coerce").fillna(0)
+    result["_resolved_order"] = resolved.astype(int)
+    result["_lane_primary"] = 0.0
+    result["_lane_secondary"] = -budget
+    modeled = result["work_lane"].eq("MODELED_SIGNAL_REVIEW")
+    context = result["work_lane"].eq("CONTEXT_REVIEW")
+    result.loc[modeled, "_lane_primary"] = pd.to_numeric(
+        result.loc[modeled, "mean_scenario_rank"],
+        errors="coerce",
+    )
+    result.loc[context, "_lane_primary"] = -pd.to_numeric(
+        result.loc[context, "context_signal_family_count"],
+        errors="coerce",
+    ).fillna(0)
+
+    result = result.sort_values(
+        [
+            "work_lane_order",
+            "_lane_primary",
+            "_lane_secondary",
+            "candidate_id",
+        ],
+        ignore_index=True,
+    )
+    result["work_lane_rank_overall"] = result.groupby("work_lane").cumcount() + 1
+    ministry_order = result.sort_values(
+        [
+            "ministry_code",
+            "work_lane_order",
+            "_lane_primary",
+            "_lane_secondary",
+            "candidate_id",
+        ]
+    )
+    result["work_lane_rank_within_ministry"] = (
+        ministry_order.groupby(["ministry_code", "work_lane"])
+        .cumcount()
+        .add(1)
+        .reindex(result.index)
+    )
+    overall_order = result.sort_values(
+        [
+            "_resolved_order",
+            "work_lane_order",
+            "work_lane_rank_overall",
+            "candidate_id",
+        ]
+    )
+    result["work_queue_order"] = pd.Series(
+        range(1, len(result) + 1),
+        index=overall_order.index,
+    ).reindex(result.index)
+    ministry_queue_order = result.sort_values(
+        [
+            "ministry_code",
+            "_resolved_order",
+            "work_lane_order",
+            "work_lane_rank_within_ministry",
+            "candidate_id",
+        ]
+    )
+    result["work_queue_order_within_ministry"] = (
+        ministry_queue_order.groupby("ministry_code").cumcount().add(1).reindex(result.index)
+    )
+    result = result.sort_values("work_queue_order", ignore_index=True)
+    result = result.drop(
+        columns=["_resolved_order", "_lane_primary", "_lane_secondary"]
+    ).convert_dtypes()
+
+    if len(result) != len(candidates) or set(result["candidate_id"]) != set(
+        candidates["candidate_id"]
+    ):
+        raise PriorityScenarioError("전체 업무대기열에서 후보행이 누락되거나 추가되었습니다.")
+    if result["work_queue_order"].nunique() != len(result):
+        raise PriorityScenarioError("전체 업무대기열 순서가 중복되었습니다.")
+    if (
+        not result.loc[
+            result["scenario_ranking_eligible"],
+            "mean_scenario_rank",
+        ]
+        .notna()
+        .all()
+    ):
+        raise PriorityScenarioError(
+            "기존 시나리오 적격 후보의 순위가 업무대기열에서 누락되었습니다."
+        )
+    lane_counts = result["work_lane"].value_counts()
+    if not set(lane_counts.index).issubset(WORK_LANE_ORDER):
+        raise PriorityScenarioError("전체 업무대기열에 정의되지 않은 레인이 있습니다.")
+
+    source_budget = pd.to_numeric(candidates["account_original_budget"], errors="coerce").sum()
+    result_budget = pd.to_numeric(result["account_original_budget"], errors="coerce").sum()
+    if abs(float(source_budget - result_budget)) > 0.5:
+        raise PriorityScenarioError("전체 업무대기열에서 본예산 합계가 보존되지 않았습니다.")
+    summary = {
+        "candidate_count": len(result),
+        "candidate_coverage_rate": len(result) / len(candidates),
+        "lane_counts": {str(key): int(value) for key, value in lane_counts.items()},
+        "lane_original_budget": {
+            str(key): float(value)
+            for key, value in result.groupby("work_lane")["account_original_budget"].sum().items()
+        },
+        "resolved_context_count": int(result["work_item_status"].eq("RESOLVED_CONTEXT").sum()),
+        "scenario_ranking_rows_preserved": int(
+            result["scenario_ranking_eligible"].fillna(False).sum()
+        ),
+        "work_queue_order_unique": True,
+        "original_budget_reconciled": True,
+        "safety_conclusion_generated": False,
+        "final_policy_rank_generated": False,
+    }
+    return result, summary
+
+
+def build_project_review_work_queue(
+    candidates: pd.DataFrame,
+    work_queue: pd.DataFrame,
+    features: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """데이터 검증 레인을 제외한 모든 후보의 세부사업 검토순서를 연결합니다."""
+    _require_columns(candidates, {"candidate_id", "data_validation_signal"}, "후보표")
+    work_columns = [
+        "candidate_id",
+        "work_lane",
+        "work_item_status",
+        "work_queue_order",
+        "work_queue_order_within_ministry",
+        "mean_scenario_rank",
+        "scenario_rank_range",
+        "mean_scenario_rank_within_ministry",
+        "scenario_rank_range_within_ministry",
+        "exploratory_consensus_order",
+        "all_scenario_top_5",
+        "all_scenario_top_5_within_ministry",
+    ]
+    _require_columns(work_queue, set(work_columns), "전체 업무대기열")
+    reviewable_ids = candidates.loc[
+        ~candidates["data_validation_signal"].fillna(False),
         ["candidate_id"],
     ]
-    selection = eligible_ids.assign(
+    selection = reviewable_ids.assign(
         all_scenario_top_5=False,
         all_scenario_top_5_within_ministry=True,
     )
     queue, validation = build_stable_top5_project_drilldown(candidates, selection, features)
     queue = queue.drop(columns=["all_scenario_top_5", "all_scenario_top_5_within_ministry"])
-    queue = queue.merge(stability[rank_columns], on="candidate_id", validate="many_to_one")
-    queue["drilldown_selection_scope"] = "SCENARIO_RANKING_ELIGIBLE"
+    queue = queue.merge(work_queue[work_columns], on="candidate_id", validate="many_to_one")
+    for column in ("all_scenario_top_5", "all_scenario_top_5_within_ministry"):
+        queue[column] = queue[column].fillna(False)
+    queue["drilldown_selection_scope"] = "FULL_POPULATION_REVIEWABLE"
 
     signals = queue["project_financial_signal_types"].astype("string").fillna("NONE")
-    data_review = (
-        signals.str.contains("DATA_VALIDATION_PRIORITY|DENOMINATOR_OR_MATCHING_REVIEW")
-        | queue["financial_quality_level"].eq("RESTRICTED")
-    )
+    data_review = signals.str.contains(
+        "DATA_VALIDATION_PRIORITY|DENOMINATOR_OR_MATCHING_REVIEW"
+    ) | queue["financial_quality_level"].eq("RESTRICTED")
     project_signal = signals.str.contains("REPEATED_|BUDGET_RAPID_|ACCOUNTING_ADJUSTMENT_PATTERN")
     program_context = signals.str.contains(
         "PROGRAM_BUDGET_CONCENTRATION|MULTIPLE_FINANCIAL_SIGNALS"
@@ -567,7 +768,7 @@ def build_eligible_project_review_queue(
     queue["project_review_order_within_candidate"] = queue.groupby("candidate_id").cumcount() + 1
     queue = queue.sort_values(
         [
-            "exploratory_consensus_order",
+            "work_queue_order",
             "project_review_order_within_candidate",
             "project_id",
         ],
@@ -577,8 +778,7 @@ def build_eligible_project_review_queue(
     ministry_order = queue.sort_values(
         [
             "ministry_code",
-            "mean_scenario_rank_within_ministry",
-            "candidate_id",
+            "work_queue_order_within_ministry",
             "project_review_order_within_candidate",
             "project_id",
         ]
@@ -588,16 +788,16 @@ def build_eligible_project_review_queue(
     )
     queue = queue.drop(columns="_project_review_group_order").convert_dtypes()
 
-    eligible = candidates.loc[candidates["scenario_ranking_eligible"].fillna(False)]
+    reviewable = candidates.loc[~candidates["data_validation_signal"].fillna(False)]
+    blocked = candidates.loc[candidates["data_validation_signal"].fillna(False)]
     source_budget = pd.to_numeric(candidates["account_original_budget"], errors="coerce")
-    eligible_budget = pd.to_numeric(eligible["account_original_budget"], errors="coerce")
+    reviewable_budget = pd.to_numeric(reviewable["account_original_budget"], errors="coerce")
+    blocked_budget = pd.to_numeric(blocked["account_original_budget"], errors="coerce")
     summary = {
         "source_candidate_count": len(candidates),
-        "eligible_candidate_count": len(eligible),
-        "ineligible_candidate_count": int(
-            (~candidates["scenario_ranking_eligible"].fillna(False)).sum()
-        ),
-        "eligible_candidate_coverage_rate": queue["candidate_id"].nunique() / len(eligible),
+        "reviewable_candidate_count": len(reviewable),
+        "data_verification_blocked_candidate_count": len(blocked),
+        "reviewable_candidate_coverage_rate": queue["candidate_id"].nunique() / len(reviewable),
         "unique_program_count": len(queue[PROGRAM_ID_KEY].drop_duplicates()),
         "project_row_count": len(queue),
         "project_review_group_counts": {
@@ -612,9 +812,9 @@ def build_eligible_project_review_queue(
             str(key): int(value) for key, value in queue["ministry_code"].value_counts().items()
         },
         "source_original_budget": float(source_budget.sum()),
-        "eligible_original_budget": float(eligible_budget.sum()),
-        "ineligible_original_budget": float(source_budget.sum() - eligible_budget.sum()),
-        "eligible_original_budget_share": float(eligible_budget.sum() / source_budget.sum()),
+        "reviewable_original_budget": float(reviewable_budget.sum()),
+        "data_verification_blocked_original_budget": float(blocked_budget.sum()),
+        "reviewable_original_budget_share": float(reviewable_budget.sum() / source_budget.sum()),
         "project_original_budget": float(queue["project_original_budget"].sum()),
         "project_current_budget": float(queue["project_current_budget"].sum()),
         "project_expenditure": float(queue["project_expenditure"].sum()),
@@ -626,6 +826,7 @@ def build_eligible_project_review_queue(
         "project_performance_attribution_count": validation[
             "project_performance_attribution_count"
         ],
+        "safety_conclusion_generated": False,
         "final_policy_rank_generated": False,
     }
     return queue, summary
@@ -1437,14 +1638,18 @@ def run_priority_scenario_analysis(
     scenario_scores = score_scenarios(candidates, config)
     scenario_names = list(config["scenarios"])
     stability = build_rank_stability(candidates, scenario_scores, config)
+    work_queue, work_queue_summary = build_full_population_review_work_queue(
+        candidates,
+        stability,
+    )
     drilldown, drilldown_summary = build_stable_top5_project_drilldown(
         candidates,
         stability,
         features,
     )
-    project_review_queue, project_review_summary = build_eligible_project_review_queue(
+    project_review_queue, project_review_summary = build_project_review_work_queue(
         candidates,
-        stability,
+        work_queue,
         features,
     )
     spearman = build_spearman_table(scenario_scores, scenario_names)
@@ -1462,6 +1667,7 @@ def run_priority_scenario_analysis(
         config,
         input_hashes=input_hashes,
     )
+    summary["full_population_review_work_queue"] = work_queue_summary
     summary["drilldown"] = drilldown_summary
     summary["project_review_queue"] = project_review_summary
     if {
@@ -1474,10 +1680,11 @@ def run_priority_scenario_analysis(
     paths.figure_dir.mkdir(parents=True, exist_ok=True)
     output_map = {
         "candidate_population.csv": candidates,
+        "full_population_review_work_queue.csv": work_queue,
         "scenario_scores.csv": scenario_scores,
         "rank_stability.csv": stability,
         "stable_top5_project_drilldown.csv": drilldown,
-        "eligible_candidate_project_review_queue.csv": project_review_queue,
+        "full_population_project_review_queue.csv": project_review_queue,
         "scenario_spearman.csv": spearman,
         "top_k_overlap.csv": top_k_overlap,
     }
@@ -1502,6 +1709,7 @@ def run_priority_scenario_analysis(
     _plot_spearman_heatmap(spearman, scenario_names, spearman_figure)
     return PriorityScenarioResult(
         candidates=candidates,
+        work_queue=work_queue,
         scenario_scores=scenario_scores,
         stability=stability,
         drilldown=drilldown,
