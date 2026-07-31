@@ -21,6 +21,7 @@ from performance_pipeline.pdf_reconciliation import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path("data/analytics/multi_ministry_priority_scenarios")
+CASE_REVIEW_DIR = Path("data/analytics/priority_case_evidence_review")
 MINISTRY_LABELS = {
     "019": "고용노동부",
     "075": "보건복지부",
@@ -64,10 +65,10 @@ REASON_LABELS = {
     "BUDGET_PERFORMANCE_MISMATCH": "성과·예산변화 불일치",
     "ACCOUNTING_ADJUSTMENT_CONTEXT": "회계조정 맥락",
     "PROGRAM_STRUCTURE_CONTEXT": "프로그램 구조 맥락",
-    "LOW_PERFORMANCE_BUDGET_INCREASE_T1": "성과 미달 뒤 T+1 예산 증가",
-    "LOW_PERFORMANCE_BUDGET_INCREASE_T2": "성과 미달 뒤 T+2 예산 증가",
-    "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT": "성과 양호 뒤 T+1 예산 감소 맥락",
-    "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT": "성과 양호 뒤 T+2 예산 감소 맥락",
+    "LOW_PERFORMANCE_BUDGET_INCREASE_T1": "성과 미달 뒤 연속 분석사업 T+1 예산 증가",
+    "LOW_PERFORMANCE_BUDGET_INCREASE_T2": "성과 미달 뒤 연속 분석사업 T+2 예산 증가",
+    "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT": "성과 양호 뒤 연속 분석사업 T+1 예산 감소 맥락",
+    "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT": "성과 양호 뒤 연속 분석사업 T+2 예산 감소 맥락",
     "DATA_VALIDATION": "데이터 검증",
     "FINANCIAL_LINKAGE_LIMITED": "재정 연결 제한",
     "PROGRAM_MATCH_REVIEW": "프로그램 매칭 검토",
@@ -173,6 +174,29 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     for name in ("candidates", "work_queue", "review_queue"):
         data[name]["account_type"] = data[name]["account_type"].fillna("NOT_AVAILABLE")
     data["summary"] = json.loads((base / "analysis_summary.json").read_text(encoding="utf-8"))
+    case_base = root / CASE_REVIEW_DIR
+    case_filenames = {
+        "case_review": "selected_cases.csv",
+        "case_indicators": "indicator_evidence.csv",
+        "case_projects": "project_drilldown.csv",
+        "case_t1_direction": "t1_direction_summary.csv",
+    }
+    case_paths = {key: case_base / filename for key, filename in case_filenames.items()}
+    case_summary_path = case_base / "case_validation_summary.json"
+    missing_case_paths = [
+        path for path in (*case_paths.values(), case_summary_path) if not path.exists()
+    ]
+    if missing_case_paths:
+        raise FileNotFoundError(
+            "대표 사례·반례 검수 입력이 없습니다. 먼저 "
+            "`fiscal-analytics review-priority-cases --root .`를 실행하세요: "
+            f"{', '.join(str(path) for path in missing_case_paths)}"
+        )
+    for key, path in case_paths.items():
+        data[key] = pd.read_csv(path)
+        if "ministry_code" in data[key]:
+            data[key]["ministry_code"] = data[key]["ministry_code"].astype("string").str.zfill(3)
+    data["case_summary"] = json.loads(case_summary_path.read_text(encoding="utf-8"))
     required_columns = {
         "candidates": {
             "candidate_id",
@@ -297,6 +321,10 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
         raise DashboardDataError("안정성표 candidate_id가 중복되었습니다.")
     if data["scores"].duplicated(["candidate_id", "scenario"]).any():
         raise DashboardDataError("시나리오 점수의 후보-시나리오 키가 중복되었습니다.")
+    if data["case_review"]["candidate_id"].duplicated().any():
+        raise DashboardDataError("대표 사례표 candidate_id가 중복되었습니다.")
+    if set(data["case_review"]["candidate_id"]) - set(data["candidates"]["candidate_id"]):
+        raise DashboardDataError("대표 사례표에 후보 모집단 밖의 candidate_id가 있습니다.")
     return data
 
 
@@ -1060,8 +1088,8 @@ def main() -> None:
     if workflow_step == WORKFLOW_STEPS[3]:
         comparison_mode = st.segmented_control(
             "검수 방식",
-            ["원문 검수", "고급 민감도"],
-            default="원문 검수",
+            ["대표 사례", "원문 검수", "고급 민감도"],
+            default="대표 사례",
             key="comparison_mode",
         )
     if st.session_state.pop("review_saved", False):
@@ -1357,15 +1385,16 @@ def main() -> None:
                     help="회계유형별 확인된 분모를 사용합니다.",
                     border=True,
                 )
-                st.metric("T+1 예산변화", t1_value, help=t1_help, border=True)
-                st.metric("T+2 예산변화", t2_value, help=t2_help, border=True)
+                st.metric("연속 분석사업 T+1", t1_value, help=t1_help, border=True)
+                st.metric("연속 분석사업 T+2", t2_value, help=t2_help, border=True)
                 st.metric(
                     "반복 신호",
                     f"{int(row['repeated_signal_family_count'])}종",
                     border=True,
                 )
             st.caption(
-                "T+1과 T+2는 합치지 않습니다. 성과미달 뒤 예산증가는 점검 신호로, "
+                "이 값은 프로그램 전체가 아니라 연속 분석사업 소계이며 T+1과 T+2를 합치지 않습니다. "
+                "성과미달 뒤 예산증가는 점검 신호로, "
                 "성과양호 뒤 예산감소는 사업종료·단계전환 가능성을 확인하는 맥락으로 표시합니다."
             )
             if row["account_type"] == "FUND":
@@ -1486,6 +1515,179 @@ def main() -> None:
                     icon=":material/download:",
                 )
 
+    elif workflow_step == WORKFLOW_STEPS[3] and comparison_mode == "대표 사례":
+        cases = (
+            data["case_review"]
+            .loc[
+                data["case_review"]["ministry_code"].isin(selected_ministries)
+                & data["case_review"]["fiscal_year"].isin(selected_years)
+                & data["case_review"]["account_type"].isin(selected_accounts)
+            ]
+            .copy()
+        )
+        indicators = data["case_indicators"]
+        projects = data["case_projects"]
+        summary = data["case_summary"]
+        st.subheader("증액 사례와 반례를 함께 봐야 점검 신호를 과대해석하지 않습니다")
+        st.caption(
+            "성과 미달과 프로그램 전체 T+1 예산이 연결된 행만 방향을 비교했습니다. "
+            "대표 사례는 삭감·증액 대상이 아니라 원문과 예산변화 사유를 먼저 볼 순서입니다."
+        )
+        with st.container(horizontal=True):
+            st.metric(
+                "성과 미달·전체 T+1 연결",
+                f"{summary['low_performance_t1_complete_rows']:,}",
+                border=True,
+            )
+            st.metric(
+                "뒤이은 예산 증가",
+                f"{summary['low_performance_t1_increase_rows']:,}",
+                border=True,
+            )
+            st.metric(
+                "뒤이은 예산 감소",
+                f"{summary['low_performance_t1_decrease_rows']:,}",
+                border=True,
+            )
+            st.metric(
+                "확정근거 표본",
+                f"{summary['confirmed_low_performance_t1_rows']:,}",
+                border=True,
+            )
+        direction = data["case_t1_direction"].loc[
+            data["case_t1_direction"]["ministry_code"].isin(selected_ministries)
+        ]
+        direction_chart = (
+            direction.pivot(
+                index="ministry_name",
+                columns="t1_budget_direction",
+                values="program_account_rows",
+            )
+            .fillna(0)
+            .rename(columns={"INCREASE": "증가", "DECREASE": "감소"})
+            .reset_index()
+            .rename(columns={"ministry_name": "부처"})
+        )
+        st.bar_chart(
+            direction_chart,
+            x="부처",
+            y=[column for column in ("증가", "감소") if column in direction_chart],
+            stack=False,
+        )
+        if cases.empty:
+            st.warning("현재 필터에는 선정된 대표 사례가 없습니다.")
+        else:
+            role_labels = {
+                "DATA_BLOCKER": "데이터 먼저",
+                "MISS_THEN_T1_INCREASE": "성과 미달 뒤 증액",
+                "MISS_THEN_T1_DECREASE_COUNTEREXAMPLE": "성과 미달 뒤 감액 반례",
+                "ALL_MET_THEN_T1_INCREASE_CONTEXT": "성과 양호 뒤 증액 맥락",
+            }
+            case_table = cases.copy()
+            case_table["구분"] = case_table["case_role"].map(role_labels)
+            case_table["부처"] = case_table["ministry_name"]
+            case_table["연도"] = case_table["fiscal_year"]
+            case_table["프로그램"] = case_table["performance_program_name"]
+            case_table["회계"] = case_table["account_type"].map(ACCOUNT_LABELS)
+            case_table["성과미달지표"] = case_table["below_target_count"]
+            case_table["집행률"] = case_table["account_execution_rate"]
+            case_table["프로그램전체T+1"] = case_table["program_total_budget_change_rate_t1"]
+            case_table["연속분석사업T+1"] = case_table["feedback_budget_change_rate_t1"]
+            case_table["방향일치"] = case_table["budget_direction_reconciled"]
+            case_table["근거상태"] = case_table["evidence_status"]
+            st.dataframe(
+                case_table[
+                    [
+                        "구분",
+                        "부처",
+                        "연도",
+                        "프로그램",
+                        "회계",
+                        "성과미달지표",
+                        "집행률",
+                        "프로그램전체T+1",
+                        "연속분석사업T+1",
+                        "방향일치",
+                        "근거상태",
+                    ]
+                ],
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "집행률": st.column_config.NumberColumn(format="percent"),
+                    "프로그램전체T+1": st.column_config.NumberColumn(format="percent"),
+                    "연속분석사업T+1": st.column_config.NumberColumn(format="percent"),
+                },
+            )
+            case_labels = {
+                row.candidate_id: (
+                    f"{role_labels[row.case_role]} · {row.ministry_name} · "
+                    f"{int(row.fiscal_year)} · {row.performance_program_name}"
+                )
+                for row in cases.itertuples()
+            }
+            selected_case_id = st.selectbox(
+                "근거를 펼쳐볼 사례",
+                cases["candidate_id"].tolist(),
+                format_func=lambda value: case_labels[value],
+            )
+            selected_case = cases.loc[cases["candidate_id"].eq(selected_case_id)].iloc[0]
+            st.info(str(selected_case["case_selection_reason"]), icon=":material/search:")
+            case_indicators = indicators.loc[indicators["candidate_id"].eq(selected_case_id)].copy()
+            case_projects = projects.loc[projects["candidate_id"].eq(selected_case_id)].copy()
+            left, right = st.columns(2)
+            with left:
+                st.markdown("#### 프로그램 성과 원문 근거")
+                st.dataframe(
+                    case_indicators[
+                        [
+                            "indicator_name_report",
+                            "analysis_plan_target_raw",
+                            "analysis_actual_value_raw",
+                            "analysis_official_achievement_rate_numeric",
+                            "report_source_page",
+                        ]
+                    ].rename(
+                        columns={
+                            "indicator_name_report": "성과지표",
+                            "analysis_plan_target_raw": "계획목표",
+                            "analysis_actual_value_raw": "실적",
+                            "analysis_official_achievement_rate_numeric": "공식달성률(%)",
+                            "report_source_page": "보고서 근거",
+                        }
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+            with right:
+                st.markdown("#### 세부사업 재정 원인")
+                if case_projects.empty:
+                    st.info("데이터 검증을 먼저 마쳐야 세부사업을 연결할 수 있습니다.")
+                else:
+                    st.dataframe(
+                        case_projects[
+                            [
+                                "project_name",
+                                "project_original_budget",
+                                "execution_rate",
+                                "project_financial_signal_types",
+                            ]
+                        ].rename(
+                            columns={
+                                "project_name": "세부사업",
+                                "project_original_budget": "본예산",
+                                "execution_rate": "집행률",
+                                "project_financial_signal_types": "재정신호",
+                            }
+                        ),
+                        hide_index=True,
+                        width="stretch",
+                        column_config={
+                            "본예산": st.column_config.NumberColumn(format="compact"),
+                            "집행률": st.column_config.NumberColumn(format="percent"),
+                        },
+                    )
+
     elif workflow_step == WORKFLOW_STEPS[3] and comparison_mode == "고급 민감도":
         eligible = filtered_all.loc[filtered_all["scenario_ranking_eligible"].fillna(False)].copy()
         eligible_stability = stability.loc[
@@ -1570,7 +1772,7 @@ def main() -> None:
                         delta_color="off",
                     )
 
-    elif workflow_step == WORKFLOW_STEPS[3]:
+    elif workflow_step == WORKFLOW_STEPS[3] and comparison_mode == "원문 검수":
         st.subheader("사람 확인이 필요한 성과지표부터 PDF 원문으로 검수합니다")
         st.caption(
             "기본 화면은 자동 강근거 160행을 제외한 필수 검수 201행입니다. "

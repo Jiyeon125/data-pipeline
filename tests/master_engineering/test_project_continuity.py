@@ -130,9 +130,9 @@ def _program_row(
         "execution_denominator_status": "APPLIED",
         "execution_numerator_amount": 80 if core else pd.NA,
         "execution_denominator_amount": 100 if core else pd.NA,
-        "analysis_original_budget": budget if core else pd.NA,
-        "analysis_current_budget": budget if core else pd.NA,
-        "analysis_settlement_expenditure": 80 if core else pd.NA,
+        "analysis_original_budget": budget,
+        "analysis_current_budget": budget,
+        "analysis_settlement_expenditure": 80,
         "settlement_carryover_amount": 5 if core else pd.NA,
         "settlement_unused_amount": 15 if core else pd.NA,
         "project_status": "CONTINUING",
@@ -149,12 +149,18 @@ def test_program_amount_aggregation_and_partial_rate_guard() -> None:
         pd.DataFrame([_program_row("a", budget=100), _program_row("b", budget=200)])
     )
     assert complete.loc[0, "original_budget"] == 300
+    assert complete.loc[0, "program_total_original_budget"] == 300
+    assert complete.loc[0, "program_analysis_original_budget"] == 300
+    assert complete.loc[0, "analysis_scope_budget_share"] == 1
     assert complete.loc[0, "execution_rate"] == 0.8
 
     partial, _ = build_program_year_financial(
         pd.DataFrame([_program_row("a"), _program_row("b", core=False)])
     )
     assert partial.loc[0, "financial_linkage_status"] == "PARTIAL"
+    assert partial.loc[0, "program_total_original_budget"] == 200
+    assert partial.loc[0, "program_analysis_original_budget"] == 100
+    assert partial.loc[0, "analysis_scope_budget_share"] == 0.5
     assert pd.isna(partial.loc[0, "execution_rate"])
 
 

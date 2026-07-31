@@ -1009,7 +1009,7 @@ def build_financial_v2(
 
 
 def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """core 모집단을 프로그램-연도로 집계하고 연결·집행률 품질을 표시합니다."""
+    """프로그램 전체금액과 core 분석금액을 분리해 프로그램-연도로 집계합니다."""
     working = frame.copy()
     working["program_code_group"] = working["program_code"].fillna("UNKNOWN")
     working["program_name_group"] = working["program_name"].fillna("UNKNOWN")
@@ -1079,10 +1079,23 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
             "sector_name": sector_name,
             "program_code": program_code,
             "program_name": program_name,
-            "original_budget": core_group["analysis_original_budget"].sum(skipna=True),
-            "current_budget": core_group["analysis_current_budget"].sum(skipna=True),
-            "settlement_expenditure": core_group["analysis_settlement_expenditure"].sum(
-                skipna=True
+            "program_total_original_budget": source_group["analysis_original_budget"].sum(
+                min_count=1
+            ),
+            "program_total_current_budget": source_group["analysis_current_budget"].sum(
+                min_count=1
+            ),
+            "program_total_expenditure": source_group["analysis_settlement_expenditure"].sum(
+                min_count=1
+            ),
+            "program_analysis_original_budget": core_group["analysis_original_budget"].sum(
+                min_count=1
+            ),
+            "program_analysis_current_budget": core_group["analysis_current_budget"].sum(
+                min_count=1
+            ),
+            "program_analysis_expenditure": core_group["analysis_settlement_expenditure"].sum(
+                min_count=1
             ),
             "carryover_amount": core_group["settlement_carryover_amount"].sum(skipna=True),
             "unused_amount": core_group["settlement_unused_amount"].sum(skipna=True),
@@ -1137,6 +1150,16 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
                 ensure_ascii=False,
             ),
         }
+        row["analysis_scope_budget_share"] = (
+            row["program_analysis_original_budget"] / row["program_total_original_budget"]
+            if pd.notna(row["program_total_original_budget"])
+            and row["program_total_original_budget"] != 0
+            else None
+        )
+        # 기존 소비자 호환용 별칭이며, 전체 프로그램 금액으로 해석하면 안 됩니다.
+        row["original_budget"] = row["program_analysis_original_budget"]
+        row["current_budget"] = row["program_analysis_current_budget"]
+        row["settlement_expenditure"] = row["program_analysis_expenditure"]
         rows.append(row)
         issue_types: list[str] = []
         if linkage != "COMPLETE":
@@ -1166,6 +1189,12 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
             )
     result = pd.DataFrame(rows)
     for column in [
+        "program_total_original_budget",
+        "program_total_current_budget",
+        "program_total_expenditure",
+        "program_analysis_original_budget",
+        "program_analysis_current_budget",
+        "program_analysis_expenditure",
         "original_budget",
         "current_budget",
         "settlement_expenditure",
@@ -1176,6 +1205,9 @@ def build_program_year_financial(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.
     result["execution_rate"] = pd.to_numeric(result["execution_rate"], errors="coerce").astype(
         "Float64"
     )
+    result["analysis_scope_budget_share"] = pd.to_numeric(
+        result["analysis_scope_budget_share"], errors="coerce"
+    ).astype("Float64")
     return result, pd.DataFrame(issues)
 
 
@@ -1246,6 +1278,19 @@ def build_project_continuity(
         input_amount = int(program_input[source_column].sum(skipna=True))
         output_amount = int(program_year[program_column].sum(skipna=True))
         amount_reconciliation[program_column] = {
+            "input_amount": input_amount,
+            "output_amount": output_amount,
+            "difference": output_amount - input_amount,
+        }
+    total_amount_reconciliation = {}
+    for source_column, program_column in [
+        ("analysis_original_budget", "program_total_original_budget"),
+        ("analysis_current_budget", "program_total_current_budget"),
+        ("analysis_settlement_expenditure", "program_total_expenditure"),
+    ]:
+        input_amount = int(financial_v2[source_column].sum(skipna=True))
+        output_amount = int(program_year[program_column].sum(skipna=True))
+        total_amount_reconciliation[program_column] = {
             "input_amount": input_amount,
             "output_amount": output_amount,
             "difference": output_amount - input_amount,
@@ -1381,6 +1426,7 @@ def build_project_continuity(
         ),
         "quality_issue_count": len(program_issues),
         "amount_reconciliation": amount_reconciliation,
+        "program_total_amount_reconciliation": total_amount_reconciliation,
     }
     summaries = {
         "project_relation_summary": relation_summary,

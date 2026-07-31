@@ -26,6 +26,11 @@ from analytics.mss_same_year_budget_check import (
     SameYearBudgetCheckError,
     run_same_year_budget_check,
 )
+from analytics.priority_case_evidence_review import (
+    CaseEvidencePaths,
+    CaseEvidenceReviewError,
+    build_case_evidence_review,
+)
 from analytics.unknown_top16_review import (
     UnknownReviewPaths,
     build_unknown_review_workbook,
@@ -251,6 +256,27 @@ def analyze_priority_scenarios(
     typer.echo(json.dumps(priority.summary, ensure_ascii=False, indent=2))
     typer.echo(f"- {combined_path}")
     for path in (*priority.output_paths, *priority.figure_paths):
+        typer.echo(f"- {path}")
+
+
+@app.command("review-priority-cases")
+def review_priority_cases(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+) -> None:
+    """4개 부처 대표 점검사례와 반례의 원문·재정 근거를 검수합니다."""
+    try:
+        result = build_case_evidence_review(CaseEvidencePaths.from_root(root))
+    except (
+        CaseEvidenceReviewError,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"대표 사례·반례 검수 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    typer.echo(f"- {result.report_path}")
+    for path in result.output_paths:
         typer.echo(f"- {path}")
 
 

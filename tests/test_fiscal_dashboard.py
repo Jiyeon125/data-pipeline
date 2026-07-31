@@ -142,8 +142,12 @@ def test_dashboard_default_render() -> None:
 
     app.segmented_control[0].set_value("4. 비교·원문 검수").run()
     assert not app.exception
-    review_metric = next(metric for metric in app.metric if metric.label == "현재 검수 대상")
-    assert review_metric.value == "201"
+    assert app.segmented_control[1].value == "대표 사례"
+    assert (
+        next(metric for metric in app.metric if metric.label == "성과 미달·전체 T+1 연결").value
+        == "30"
+    )
+    assert any(frame.value.shape[0] == 7 for frame in app.dataframe)
 
 
 def test_dashboard_guided_steps_and_candidate_to_review() -> None:
@@ -192,6 +196,17 @@ def test_dashboard_ministry_rank_view() -> None:
         "고용노동부 내부 기준 현재 필터 41행 중 공통 Top 5는 2행" in item.value
         for item in app.warning
     )
+
+
+def test_dashboard_pdf_review_mode() -> None:
+    app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
+
+    app.segmented_control[0].set_value("4. 비교·원문 검수").run()
+    app.segmented_control[1].set_value("원문 검수").run()
+
+    assert not app.exception
+    review_metric = next(metric for metric in app.metric if metric.label == "현재 검수 대상")
+    assert review_metric.value == "201"
 
 
 def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
