@@ -65,10 +65,10 @@ REASON_LABELS = {
     "BUDGET_PERFORMANCE_MISMATCH": "성과·예산변화 불일치",
     "ACCOUNTING_ADJUSTMENT_CONTEXT": "회계조정 맥락",
     "PROGRAM_STRUCTURE_CONTEXT": "프로그램 구조 맥락",
-    "LOW_PERFORMANCE_BUDGET_INCREASE_T1": "성과 미달 뒤 연속 분석사업 T+1 예산 증가",
-    "LOW_PERFORMANCE_BUDGET_INCREASE_T2": "성과 미달 뒤 연속 분석사업 T+2 예산 증가",
-    "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT": "성과 양호 뒤 연속 분석사업 T+1 예산 감소 맥락",
-    "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT": "성과 양호 뒤 연속 분석사업 T+2 예산 감소 맥락",
+    "LOW_PERFORMANCE_BUDGET_INCREASE_T1": "성과 미달 뒤 프로그램 전체 T+1 예산 증가",
+    "LOW_PERFORMANCE_BUDGET_INCREASE_T2": "성과 미달 뒤 프로그램 전체 T+2 예산 증가",
+    "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT": "성과 양호 뒤 프로그램 전체 T+1 예산 감소 맥락",
+    "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT": "성과 양호 뒤 프로그램 전체 T+2 예산 감소 맥락",
     "DATA_VALIDATION": "데이터 검증",
     "FINANCIAL_LINKAGE_LIMITED": "재정 연결 제한",
     "PROGRAM_MATCH_REVIEW": "프로그램 매칭 검토",
@@ -212,6 +212,14 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "scenario_ranking_eligible",
             "data_validation_signal",
             "account_original_budget",
+            "program_total_feedback_complete_t1",
+            "program_total_feedback_complete_t2",
+            "program_total_budget_change_rate_t1",
+            "program_total_budget_change_rate_t2",
+            "continuous_project_feedback_complete_t1",
+            "continuous_project_feedback_complete_t2",
+            "continuous_project_budget_change_rate_t1",
+            "continuous_project_budget_change_rate_t2",
         },
         "work_queue": {
             "candidate_id",
@@ -1360,15 +1368,28 @@ def main() -> None:
             execution_rate = pd.to_numeric(row.get("account_execution_rate"), errors="coerce")
 
             def feedback_value(horizon: str) -> tuple[str, str]:
-                complete = bool(row.get(f"feedback_budget_complete_{horizon}", False))
+                complete = bool(row.get(f"program_total_feedback_complete_{horizon}", False))
                 rate = pd.to_numeric(
-                    row.get(f"feedback_budget_change_rate_{horizon}"),
+                    row.get(f"program_total_budget_change_rate_{horizon}"),
                     errors="coerce",
                 )
                 if pd.isna(rate):
-                    return "자료 없음", "연속 사업 예산 코호트가 없습니다."
-                status = "완전 연결" if complete else "부분 연결"
+                    basis = str(row.get(f"budget_feedback_basis_{horizon}", ""))
+                    if basis == "DATA_REVIEW_ACCOUNT_TYPE_MISMATCH":
+                        return (
+                            "데이터 확인",
+                            "후보 회계유형과 프로그램 전체금액 회계유형이 다릅니다.",
+                        )
+                    return "비교 제한", "혼합 회계이거나 프로그램 전체예산의 후속 연도가 없습니다."
+                status = "프로그램 전체예산 연결" if complete else "비교 제한"
                 return f"{float(rate):+.1%}", status
+
+            def continuous_feedback_text(horizon: str) -> str:
+                rate = pd.to_numeric(
+                    row.get(f"continuous_project_budget_change_rate_{horizon}"),
+                    errors="coerce",
+                )
+                return "자료 없음" if pd.isna(rate) else f"{float(rate):+.1%}"
 
             t1_value, t1_help = feedback_value("t1")
             t2_value, t2_help = feedback_value("t2")
@@ -1385,17 +1406,24 @@ def main() -> None:
                     help="회계유형별 확인된 분모를 사용합니다.",
                     border=True,
                 )
-                st.metric("연속 분석사업 T+1", t1_value, help=t1_help, border=True)
-                st.metric("연속 분석사업 T+2", t2_value, help=t2_help, border=True)
+                st.metric("프로그램 전체 T+1", t1_value, help=t1_help, border=True)
+                st.metric("프로그램 전체 T+2", t2_value, help=t2_help, border=True)
                 st.metric(
                     "반복 신호",
                     f"{int(row['repeated_signal_family_count'])}종",
                     border=True,
                 )
             st.caption(
-                "이 값은 프로그램 전체가 아니라 연속 분석사업 소계이며 T+1과 T+2를 합치지 않습니다. "
+                "주 점검 신호는 단일 회계유형 프로그램의 전체 본예산 변화이며 T+1과 T+2를 "
+                "합치지 않습니다. "
                 "성과미달 뒤 예산증가는 점검 신호로, "
                 "성과양호 뒤 예산감소는 사업종료·단계전환 가능성을 확인하는 맥락으로 표시합니다."
+            )
+            st.caption(
+                "보조 대조값 — 같은 세부사업만 연속 관측한 소계: "
+                f"T+1 {continuous_feedback_text('t1')} · "
+                f"T+2 {continuous_feedback_text('t2')}. "
+                "프로그램 전체와 방향이 다르면 전체금액을 우선하고 구성변화를 확인합니다."
             )
             if row["account_type"] == "FUND":
                 st.warning(

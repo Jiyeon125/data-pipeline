@@ -126,6 +126,7 @@ def test_program_total_feedback_keeps_total_and_analysis_subset_separate() -> No
                 "program_total_original_budget": 220,
                 "program_analysis_original_budget": 73,
                 "account_type_count": 1,
+                "account_types": '["GENERAL_ACCOUNT"]',
             },
             {
                 "ministry_code": "162",
@@ -137,6 +138,7 @@ def test_program_total_feedback_keeps_total_and_analysis_subset_separate() -> No
                 "program_total_original_budget": 241,
                 "program_analysis_original_budget": 70,
                 "account_type_count": 1,
+                "account_types": '["GENERAL_ACCOUNT"]',
             },
         ]
     )

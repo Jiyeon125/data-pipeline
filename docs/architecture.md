@@ -52,8 +52,12 @@ OpenAPI 자료와 결합해 분석용 마스터 테이블을 만든 뒤, 검증�
   전체 보고서 본문에서 목표·실적·달성률이 모두 있는 표만 보강 근거로 사용
 - `analysis_ready_performance`: 원본 수기값을 변경하지 않고, 수기 결측이면서
   PDF 원문 검수가 `CONFIRMED`인 실적·공식 달성률만 별도 분석값으로 채택
+- `llm_harness`: 4개 부처 로컬 PDF 대조 424행을 재사용해 규칙·사람 검수로
+  확정된 행은 제외하고, 미해결 증거 묶음만 엄격한 JSON Schema의 OpenAI
+  Responses Batch 요청으로 준비. 파일·페이지·인용 근거를 코드로 검증하고
+  실패·누락 요청만 별도 재시도 파일로 남김
 
-LLM 응답은 최종 정답이 아니라 `data/interim/llm_extractions`의 원시 추출값입니다.
+LLM 응답은 최종 정답이 아니라 `data/interim/llm_harness`의 원시 추출값입니다.
 문서에 없는 값은 추정하지 않고 `null`과 검토 상태로 남깁니다.
 
 중기부 분석용 성과지표 마스터는
@@ -174,14 +178,20 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 - `fiscal-performance reconcile-ministry-performance-pdfs <019|075|162> --overwrite`
 - `fiscal-performance reconcile-mss-performance-pdfs`
 - `fiscal-performance build-mss-analysis-ready`
+- `fiscal-performance prepare-llm-harness --root . --overwrite`
+- `fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --overwrite`
 - `fiscal-analytics analyze-mss-same-year-budget --root . --overwrite`
 - `fiscal-analytics analyze-manual-same-year-budget`
 - `fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite`
 - `fiscal-analytics analyze-priority-scenarios --root . --overwrite`
 
-이 명령들은 OpenAI API 키 없이 로컬 파일만으로 실행합니다. 수기 골드셋 경로는
-보고서 최종 목표가 없으면 계획 목표로 대체하지 않고 결측으로 유지합니다. 향후 LLM 추출
-명령은 사용자가 외부 호출을 명시적으로 허용한 뒤 별도 경계로 추가합니다.
+위 준비·검증 명령은 OpenAI API 키 없이 로컬 파일만으로 실행합니다. 수기 골드셋
+경로는 보고서 최종 목표가 없으면 계획 목표로 대체하지 않고 결측으로 유지합니다.
+실제 외부 호출 명령인 `submit-llm-batch`는 설정의 명시적 허용, API 키, 모델,
+실행별 비용승인이 모두 있어야만 작동합니다. 제출 후
+`fiscal-performance fetch-llm-batch --root .`로 상태를 한 번씩 확인하고 완료된
+응답·오류 파일을 내려받습니다. 기본 제출은 12개 요청 파일럿이며, 통과한 뒤에만
+`--request-set remaining`으로 나머지를 분리 제출합니다.
 예산 기준 중간 테이블은 결산·성과 자료가 결합되기 전에는 최종 마스터로
 간주하지 않습니다.
 

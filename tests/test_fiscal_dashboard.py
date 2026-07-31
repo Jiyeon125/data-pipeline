@@ -42,17 +42,20 @@ def test_dashboard_data_contract_and_filter() -> None:
     assert data["scores"].shape == (940, 28)
     assert data["drilldown"].shape == (110, 40)
     assert not data["drilldown"]["project_performance_attributed"].any()
-    assert data["work_queue"].shape == (412, 132)
+    assert data["work_queue"].shape == (412, 172)
     assert data["work_queue"]["work_lane"].value_counts().to_dict() == {
-        "REPEATED_OR_MULTIPLE": 145,
-        "CONTEXT_REVIEW": 98,
-        "MONITOR": 91,
-        "SINGLE_REVIEW": 48,
+        "REPEATED_OR_MULTIPLE": 132,
+        "MONITOR": 96,
+        "CONTEXT_REVIEW": 93,
+        "SINGLE_REVIEW": 60,
+        "STRONG_SINGLE": 16,
         "DATA_FIRST": 15,
-        "STRONG_SINGLE": 15,
     }
-    assert data["work_queue"]["feedback_budget_complete_t1"].sum() == 108
-    assert data["work_queue"]["feedback_budget_complete_t2"].sum() == 42
+    assert data["work_queue"]["program_total_feedback_complete_t1"].sum() == 107
+    assert data["work_queue"]["program_total_feedback_complete_t2"].sum() == 69
+    assert data["work_queue"]["continuous_project_feedback_complete_t1"].sum() == 108
+    assert data["work_queue"]["continuous_project_feedback_complete_t2"].sum() == 42
+    assert data["work_queue"]["program_total_account_type_mismatch_t1"].sum() == 3
     assert data["work_queue"]["account_type"].eq("FUND").sum() == 131
     assert data["summary"]["review_workbench_method"]["weighted_sum_used"] is False
     assert data["summary"]["review_workbench_method"]["t1_t2_kept_separate"] is True
@@ -103,7 +106,7 @@ def test_dashboard_data_contract_and_filter() -> None:
         account_types=candidates["account_type"].dropna().unique().tolist(),
         tiers=candidates["review_intensity"].dropna().unique().tolist(),
     )
-    assert len(no_trigger) == 91
+    assert len(no_trigger) == 96
     assert no_trigger["safety_conclusion"].eq("NOT_ASSESSED").all()
 
     queue = load_pdf_review_queue(Path("."))
@@ -124,10 +127,10 @@ def test_dashboard_default_render() -> None:
     assert app.segmented_control[0].value == "1. 업무 현황"
     assert [(metric.label, metric.value) for metric in app.metric[:5]] == [
         ("전체 업무행", "412"),
-        ("반복·복수 신호", "145"),
-        ("강한 단일 신호", "15"),
+        ("반복·복수 신호", "132"),
+        ("강한 단일 신호", "16"),
         ("데이터 먼저", "15"),
-        ("신호 미검출", "91"),
+        ("신호 미검출", "96"),
     ]
     assert app.multiselect[0].options == [
         "고용노동부",
@@ -145,7 +148,7 @@ def test_dashboard_default_render() -> None:
     assert app.segmented_control[1].value == "대표 사례"
     assert (
         next(metric for metric in app.metric if metric.label == "성과 미달·전체 T+1 연결").value
-        == "30"
+        == "29"
     )
     assert any(frame.value.shape[0] == 7 for frame in app.dataframe)
 

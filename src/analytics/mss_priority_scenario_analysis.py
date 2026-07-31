@@ -61,6 +61,7 @@ class PriorityScenarioPaths:
     same_year_analysis: Path
     financial_features: Path
     feedback_cohorts: Path
+    program_financial: Path
     config: Path
     output_dir: Path
     figure_dir: Path
@@ -74,6 +75,7 @@ class PriorityScenarioPaths:
             financial_features=root / "data/analytics/m3/financial_signal_features.parquet",
             feedback_cohorts=root
             / "data/analytics/definition_validation/feedback_cohort_t1_t2.csv",
+            program_financial=root / "data/processed/masters/program_year_financial.parquet",
             config=root / "configs/mss_priority_scenarios.yaml",
             output_dir=root / "data/analytics/mss_priority_scenarios",
             figure_dir=root / "artifacts/figures/presentation",
@@ -87,6 +89,7 @@ class PriorityScenarioPaths:
             financial_features=root / "data/analytics/m3/financial_signal_features.parquet",
             feedback_cohorts=root
             / "data/analytics/definition_validation/feedback_cohort_t1_t2.csv",
+            program_financial=root / "data/processed/masters/program_year_financial.parquet",
             config=root / "configs/priority_scenarios.yaml",
             output_dir=root / "data/analytics/multi_ministry_priority_scenarios",
             figure_dir=root / "artifacts/figures/presentation",
@@ -360,6 +363,193 @@ def aggregate_program_feedback(
         "matched_rows": len(source),
         "unmatched_base_project_rows": unmatched_rows,
     }
+    return result
+
+
+def _single_account_type(value: Any) -> str | None:
+    if pd.isna(value):
+        return None
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return None
+    return str(parsed[0]) if isinstance(parsed, list) and len(parsed) == 1 else None
+
+
+def _direction(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    result = pd.Series(pd.NA, index=numeric.index, dtype="Int64")
+    result.loc[numeric.eq(0)] = 0
+    result.loc[numeric.gt(0)] = 1
+    result.loc[numeric.lt(0)] = -1
+    return result
+
+
+def add_program_total_feedback(
+    candidates: pd.DataFrame,
+    program_financial: pd.DataFrame,
+) -> pd.DataFrame:
+    """프로그램 전체 본예산과 연속 관측 세부사업 소계의 T+1·T+2를 분리합니다."""
+    candidate_required = {
+        "ministry_code",
+        "field_name",
+        "sector_name",
+        "program_code",
+        "financial_program_name",
+        "fiscal_year",
+        "account_type",
+    }
+    financial_required = {
+        "ministry_code",
+        "field_name",
+        "sector_name",
+        "program_code",
+        "program_name",
+        "fiscal_year",
+        "program_total_original_budget",
+        "program_analysis_original_budget",
+        "account_type_count",
+        "account_types",
+    }
+    _require_columns(candidates, candidate_required, "점검 후보")
+    _require_columns(program_financial, financial_required, "프로그램 재정")
+
+    result = candidates.copy()
+    generated_prefixes = (
+        "program_total_base_budget_",
+        "program_total_outcome_budget_",
+        "program_analysis_base_budget_",
+        "program_analysis_outcome_budget_",
+        "program_account_type_count_",
+        "program_outcome_account_type_count_",
+        "program_account_types_",
+        "program_outcome_account_types_",
+        "program_total_feedback_complete_",
+        "program_total_budget_change_rate_",
+        "program_total_account_type_mismatch_",
+        "analysis_scope_budget_share_",
+        "budget_feedback_basis_",
+        "budget_direction_reconciled_",
+    )
+    generated = [
+        column
+        for column in result
+        if column == "program_name"
+        or column == "budget_direction_reconciled"
+        or column.startswith(generated_prefixes)
+    ]
+    result = result.drop(columns=generated)
+    result["ministry_code"] = result["ministry_code"].astype("string").str.zfill(3)
+    result["program_code"] = result["program_code"].astype("string")
+    result["fiscal_year"] = pd.to_numeric(result["fiscal_year"], errors="raise").astype(int)
+    result["program_name"] = result["financial_program_name"].astype("string")
+
+    keys = [
+        "ministry_code",
+        "field_name",
+        "sector_name",
+        "program_code",
+        "program_name",
+        "fiscal_year",
+    ]
+    value_columns = [
+        "program_total_original_budget",
+        "program_analysis_original_budget",
+        "account_type_count",
+        "account_types",
+    ]
+    totals = program_financial[[*keys, *value_columns]].copy()
+    totals["ministry_code"] = totals["ministry_code"].astype("string").str.zfill(3)
+    totals["program_code"] = totals["program_code"].astype("string")
+    totals["fiscal_year"] = pd.to_numeric(totals["fiscal_year"], errors="raise").astype(int)
+    if totals.duplicated(keys).any():
+        raise PriorityScenarioError("프로그램 전체금액 키가 중복되었습니다.")
+
+    for horizon, offset in (("t1", 1), ("t2", 2)):
+        base = totals.rename(
+            columns={
+                "program_total_original_budget": f"program_total_base_budget_{horizon}",
+                "program_analysis_original_budget": f"program_analysis_base_budget_{horizon}",
+                "account_type_count": f"program_account_type_count_{horizon}",
+                "account_types": f"program_account_types_{horizon}",
+            }
+        )
+        outcome = totals.copy()
+        outcome["fiscal_year"] = outcome["fiscal_year"] - offset
+        outcome = outcome.rename(
+            columns={
+                "program_total_original_budget": f"program_total_outcome_budget_{horizon}",
+                "program_analysis_original_budget": f"program_analysis_outcome_budget_{horizon}",
+                "account_type_count": f"program_outcome_account_type_count_{horizon}",
+                "account_types": f"program_outcome_account_types_{horizon}",
+            }
+        )
+        result = result.merge(base, on=keys, how="left", validate="many_to_one")
+        result = result.merge(outcome, on=keys, how="left", validate="many_to_one")
+
+        base_budget = pd.to_numeric(result[f"program_total_base_budget_{horizon}"], errors="coerce")
+        outcome_budget = pd.to_numeric(
+            result[f"program_total_outcome_budget_{horizon}"], errors="coerce"
+        )
+        base_type = result[f"program_account_types_{horizon}"].map(_single_account_type)
+        outcome_type = result[f"program_outcome_account_types_{horizon}"].map(_single_account_type)
+        same_account = (
+            base_type.eq(result["account_type"].astype("string"))
+            & outcome_type.eq(result["account_type"].astype("string"))
+            & base_type.eq(outcome_type)
+        )
+        complete = (
+            result[f"program_account_type_count_{horizon}"].eq(1)
+            & result[f"program_outcome_account_type_count_{horizon}"].eq(1)
+            & same_account
+            & base_budget.notna()
+            & outcome_budget.notna()
+            & base_budget.ne(0)
+        )
+        single_account_pair = (
+            result[f"program_account_type_count_{horizon}"].eq(1)
+            & result[f"program_outcome_account_type_count_{horizon}"].eq(1)
+            & base_budget.notna()
+            & outcome_budget.notna()
+        )
+        result[f"program_total_account_type_mismatch_{horizon}"] = (
+            single_account_pair & ~same_account
+        )
+        result[f"program_total_feedback_complete_{horizon}"] = complete
+        result[f"program_total_budget_change_rate_{horizon}"] = (outcome_budget - base_budget).div(
+            base_budget.where(base_budget.ne(0))
+        )
+        result.loc[
+            ~complete,
+            f"program_total_budget_change_rate_{horizon}",
+        ] = pd.NA
+        result[f"analysis_scope_budget_share_{horizon}"] = pd.to_numeric(
+            result[f"program_analysis_base_budget_{horizon}"], errors="coerce"
+        ).div(base_budget.where(base_budget.ne(0)))
+        result[f"budget_feedback_basis_{horizon}"] = "UNAVAILABLE_MIXED_OR_UNLINKED"
+        result.loc[
+            result[f"program_total_account_type_mismatch_{horizon}"],
+            f"budget_feedback_basis_{horizon}",
+        ] = "DATA_REVIEW_ACCOUNT_TYPE_MISMATCH"
+        result.loc[complete, f"budget_feedback_basis_{horizon}"] = "PROGRAM_TOTAL_SINGLE_ACCOUNT"
+
+        subset_change = result.get(
+            f"feedback_budget_change_rate_{horizon}",
+            pd.Series(pd.NA, index=result.index),
+        )
+        subset_complete = result.get(
+            f"feedback_budget_complete_{horizon}",
+            pd.Series(False, index=result.index),
+        )
+        result[f"budget_direction_reconciled_{horizon}"] = (
+            complete
+            & pd.Series(subset_complete, index=result.index).fillna(False).astype(bool)
+            & _direction(subset_change).eq(
+                _direction(result[f"program_total_budget_change_rate_{horizon}"])
+            )
+        )
+
+    result["budget_direction_reconciled"] = result["budget_direction_reconciled_t1"]
     return result
 
 
@@ -1080,6 +1270,7 @@ def build_candidate_population(
     program_signals: pd.DataFrame,
     config: dict[str, Any],
     feedback: pd.DataFrame | None = None,
+    program_financial: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     _require_columns(
         analysis,
@@ -1140,6 +1331,16 @@ def build_candidate_population(
         for column in feedback_columns:
             if column not in merged:
                 merged[column] = pd.NA
+    if program_financial is not None:
+        merged = add_program_total_feedback(merged, program_financial)
+    else:
+        for horizon in ("t1", "t2"):
+            merged[f"program_total_feedback_complete_{horizon}"] = False
+            merged[f"program_total_budget_change_rate_{horizon}"] = pd.NA
+            merged[f"program_total_account_type_mismatch_{horizon}"] = False
+            merged[f"budget_feedback_basis_{horizon}"] = "UNAVAILABLE_MIXED_OR_UNLINKED"
+            merged[f"budget_direction_reconciled_{horizon}"] = False
+        merged["budget_direction_reconciled"] = False
     joint = merged["analysis_status"].eq("JOINT_ANALYSIS")
     signal_joined = merged["financial_signal_join_status"].eq("both")
     merged["financial_signal_budget_difference"] = pd.to_numeric(
@@ -1220,6 +1421,8 @@ def build_candidate_population(
         | ~signal_joined
         | ~merged["financial_signal_budget_reconciled"]
         | merged["type_data_validation_priority_budget_share"].fillna(0).gt(0)
+        | merged["program_total_account_type_mismatch_t1"].fillna(False)
+        | merged["program_total_account_type_mismatch_t2"].fillna(False)
     )
     merged["performance_signal"] = merged["performance_gap"].fillna(0).gt(0)
     merged["execution_signal"] = merged["execution_management"].fillna(0).gt(0)
@@ -1243,19 +1446,42 @@ def build_candidate_population(
         merged[f"feedback_budget_complete_{horizon}"] = base.notna() & base.sub(
             pd.to_numeric(merged["account_original_budget"], errors="coerce")
         ).abs().le(0.5)
+        merged[f"continuous_project_count_{horizon}"] = merged[f"feedback_project_count_{horizon}"]
+        merged[f"continuous_project_base_budget_{horizon}"] = base
+        merged[f"continuous_project_outcome_budget_{horizon}"] = outcome
+        merged[f"continuous_project_budget_change_rate_{horizon}"] = merged[
+            f"feedback_budget_change_rate_{horizon}"
+        ]
+        merged[f"continuous_project_feedback_complete_{horizon}"] = merged[
+            f"feedback_budget_complete_{horizon}"
+        ]
+        if program_financial is not None:
+            merged[f"budget_direction_reconciled_{horizon}"] = (
+                merged[f"program_total_feedback_complete_{horizon}"]
+                & merged[f"continuous_project_feedback_complete_{horizon}"]
+                & _direction(merged[f"program_total_budget_change_rate_{horizon}"]).eq(
+                    _direction(merged[f"continuous_project_budget_change_rate_{horizon}"])
+                )
+            )
+            if horizon == "t1":
+                merged["budget_direction_reconciled"] = merged["budget_direction_reconciled_t1"]
         merged[f"low_performance_budget_increase_{horizon}"] = (
             joint
             & comparable_performance
             & merged["performance_gap"].gt(0)
-            & merged[f"feedback_budget_complete_{horizon}"]
-            & outcome.gt(base)
+            & merged[f"program_total_feedback_complete_{horizon}"]
+            & pd.to_numeric(
+                merged[f"program_total_budget_change_rate_{horizon}"], errors="coerce"
+            ).gt(0)
         )
         merged[f"good_performance_budget_decrease_{horizon}"] = (
             joint
             & comparable_performance
             & merged["performance_gap"].eq(0)
-            & merged[f"feedback_budget_complete_{horizon}"]
-            & outcome.lt(base)
+            & merged[f"program_total_feedback_complete_{horizon}"]
+            & pd.to_numeric(
+                merged[f"program_total_budget_change_rate_{horizon}"], errors="coerce"
+            ).lt(0)
         )
     merged["current_execution_signal"] = merged["current_execution_severity"].fillna(0).gt(0)
     merged["repeated_signal_family_count"] = pd.DataFrame(
@@ -1844,10 +2070,16 @@ def _build_summary(
                 for key, value in candidates["review_intensity"].value_counts().items()
             },
             "feedback_t1_complete_rows": int(
-                candidates["feedback_budget_complete_t1"].fillna(False).sum()
+                candidates["program_total_feedback_complete_t1"].fillna(False).sum()
             ),
             "feedback_t2_complete_rows": int(
-                candidates["feedback_budget_complete_t2"].fillna(False).sum()
+                candidates["program_total_feedback_complete_t2"].fillna(False).sum()
+            ),
+            "continuous_project_feedback_t1_complete_rows": int(
+                candidates["continuous_project_feedback_complete_t1"].fillna(False).sum()
+            ),
+            "continuous_project_feedback_t2_complete_rows": int(
+                candidates["continuous_project_feedback_complete_t2"].fillna(False).sum()
             ),
         },
         "stability": {
@@ -1976,6 +2208,7 @@ def run_priority_scenario_analysis(
         paths.same_year_analysis,
         paths.financial_features,
         paths.feedback_cohorts,
+        paths.program_financial,
         paths.config,
     ):
         if not source.exists():
@@ -1986,6 +2219,7 @@ def run_priority_scenario_analysis(
             paths.same_year_analysis,
             paths.financial_features,
             paths.feedback_cohorts,
+            paths.program_financial,
             paths.config,
         )
     }
@@ -2000,6 +2234,7 @@ def run_priority_scenario_analysis(
         paths.feedback_cohorts,
         dtype={"ministry_code": "string", "program_code": "string"},
     )
+    program_financial = pd.read_parquet(paths.program_financial)
     ministry_codes = scope.get("ministry_codes")
     program_signals = aggregate_program_account_signals(
         features,
@@ -2019,7 +2254,13 @@ def run_priority_scenario_analysis(
         start_year=int(scope["start_year"]),
         end_year=int(scope["end_year"]),
     )
-    candidates = build_candidate_population(analysis, program_signals, config, feedback)
+    candidates = build_candidate_population(
+        analysis,
+        program_signals,
+        config,
+        feedback,
+        program_financial,
+    )
     scenario_scores = score_scenarios(candidates, config)
     scenario_names = list(config["scenarios"])
     stability = build_rank_stability(candidates, scenario_scores, config)
@@ -2074,6 +2315,7 @@ def run_priority_scenario_analysis(
             paths.same_year_analysis,
             paths.financial_features,
             paths.feedback_cohorts,
+            paths.program_financial,
             paths.config,
         )
     } != input_hashes:

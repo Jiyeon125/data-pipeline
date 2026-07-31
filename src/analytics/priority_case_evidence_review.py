@@ -11,6 +11,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from analytics.mss_priority_scenario_analysis import (
+    add_program_total_feedback as _add_program_total_feedback,
+)
+
 T1_DIRECTION_SQL = """
 SELECT
     ministry_code,
@@ -25,7 +29,7 @@ SELECT
     SUM(CASE WHEN evidence_status = 'CONFIRMED' THEN 1 ELSE 0 END) AS confirmed_rows
 FROM candidate_population
 WHERE performance_miss = 1
-  AND feedback_budget_complete_t1 = 1
+  AND program_total_feedback_complete_t1 = 1
 GROUP BY
     ministry_code,
     ministry_name,
@@ -173,88 +177,8 @@ def add_program_total_feedback(
     candidates: pd.DataFrame,
     program_financial: pd.DataFrame,
 ) -> pd.DataFrame:
-    """연속 분석사업 소계와 프로그램 전체 본예산의 T+1 변화를 분리합니다."""
-    frame = _prepare_candidates(candidates)
-    required = {
-        "fiscal_year",
-        "ministry_code",
-        "field_name",
-        "sector_name",
-        "program_code",
-        "program_total_original_budget",
-        "program_analysis_original_budget",
-        "account_type_count",
-    }
-    missing = sorted(required.difference(program_financial.columns))
-    if missing:
-        raise CaseEvidenceReviewError(f"프로그램 재정 입력 필수 열 누락: {missing}")
-
-    keys = [
-        "ministry_code",
-        "field_name",
-        "sector_name",
-        "program_code",
-        "program_name",
-        "fiscal_year",
-    ]
-    totals = program_financial[[*keys, *sorted(required.difference(keys))]].copy()
-    totals["ministry_code"] = totals["ministry_code"].astype("string").str.zfill(3)
-    totals["program_code"] = totals["program_code"].astype("string")
-    totals["fiscal_year"] = pd.to_numeric(totals["fiscal_year"], errors="raise").astype(int)
-    if totals.duplicated(keys).any():
-        raise CaseEvidenceReviewError("프로그램 전체금액 키가 중복됩니다.")
-
-    base = totals.rename(
-        columns={
-            "program_total_original_budget": "program_total_base_budget_t1",
-            "program_analysis_original_budget": "program_analysis_base_budget_t1",
-            "account_type_count": "program_account_type_count_t1",
-        }
-    )
-    outcome = totals.copy()
-    outcome["fiscal_year"] = outcome["fiscal_year"] - 1
-    outcome = outcome.rename(
-        columns={
-            "program_total_original_budget": "program_total_outcome_budget_t1",
-            "program_analysis_original_budget": "program_analysis_outcome_budget_t1",
-            "account_type_count": "program_outcome_account_type_count_t1",
-        }
-    )
-    frame["program_name"] = frame["financial_program_name"].astype("string")
-    result = frame.merge(base, on=keys, how="left", validate="many_to_one")
-    result = result.merge(outcome, on=keys, how="left", validate="many_to_one")
-    single_account = result["program_account_type_count_t1"].eq(1) & result[
-        "program_outcome_account_type_count_t1"
-    ].eq(1)
-    result["program_total_feedback_complete_t1"] = (
-        single_account
-        & result["program_total_base_budget_t1"].notna()
-        & result["program_total_outcome_budget_t1"].notna()
-        & result["program_total_base_budget_t1"].ne(0)
-    )
-    result["program_total_budget_change_rate_t1"] = (
-        result["program_total_outcome_budget_t1"] - result["program_total_base_budget_t1"]
-    ).div(
-        result["program_total_base_budget_t1"].where(result["program_total_base_budget_t1"].ne(0))
-    )
-    result.loc[
-        ~result["program_total_feedback_complete_t1"],
-        "program_total_budget_change_rate_t1",
-    ] = pd.NA
-    result["analysis_scope_budget_share_t1"] = result["program_analysis_base_budget_t1"].div(
-        result["program_total_base_budget_t1"].where(result["program_total_base_budget_t1"].ne(0))
-    )
-    subset_direction = np.sign(
-        pd.to_numeric(result["feedback_budget_change_rate_t1"], errors="coerce")
-    )
-    total_direction = np.sign(
-        pd.to_numeric(result["program_total_budget_change_rate_t1"], errors="coerce")
-    )
-    result["budget_direction_reconciled"] = (
-        result["program_total_feedback_complete_t1"]
-        & _bool(result, "feedback_budget_complete_t1")
-        & subset_direction.eq(total_direction)
-    )
+    """공통 후보 산출기와 동일한 프로그램 전체금액 정의를 사용합니다."""
+    result = _add_program_total_feedback(_prepare_candidates(candidates), program_financial)
     result["low_performance_program_total_budget_increase_t1"] = (
         result["performance_miss"]
         & result["program_total_feedback_complete_t1"]
@@ -398,7 +322,7 @@ def t1_direction_summary(candidates: pd.DataFrame) -> pd.DataFrame:
         ]
     ].copy()
     query_input["performance_miss"] = frame["performance_miss"].astype(int)
-    query_input["feedback_budget_complete_t1"] = _bool(
+    query_input["program_total_feedback_complete_t1"] = _bool(
         frame, "program_total_feedback_complete_t1"
     ).astype(int)
     with sqlite3.connect(":memory:") as connection:

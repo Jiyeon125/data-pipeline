@@ -1,7 +1,7 @@
 # OCR+LLM 성과문서 검수 파이프라인 기획·기능명세
 
 > 작성일: 2026-07-28  
-> 상태: 오프라인 대조·사람 검수 UI 구현, 외부 LLM 호출부 미구현
+> 상태: 오프라인 준비·검증·비용통제 하네스 구현, 외부 LLM 미호출
 > 범위: 성과계획서·성과보고서 PDF의 성과지표 구조화와 원문 검수  
 > 주의: 이 문서를 작성하면서 외부 OCR·LLM API는 호출하지 않았습니다.
 
@@ -17,9 +17,14 @@
 4. 저가 모델이 구조화 추출하고, 불일치·저신뢰 행만 상위 모델이 재검수합니다.
 5. LLM 결과는 `CONFIRMED`가 아닌 원시 후보로 저장하고, 산식·원문·사람 검수를 통과한 값만 분석값으로 채택합니다.
 
-이 방식이면 현재 3개 부처 전체를 사람처럼 두 번 검수하는 보수적 실험도 대략
-`US$5~15` 범위에서 시작할 수 있습니다. 반면 PDF 전체를 행마다 다시 전송하면
-중복 토큰 때문에 비용과 오류가 함께 커집니다.
+2026-07-31 실제 dry-run에서는 미해결 199행을 149개 증거 묶음으로 줄였습니다.
+보수적 문자수 기반 추정에서 OpenAI Batch 1회 비용은 Luna 약 `$0.33`, Terra
+약 `$0.83`, Sol 약 `$1.67`입니다. 실제 파일럿 usage를 확인하기 전까지는
+예산이 아니라 사전 추정치로만 사용합니다.
+
+첫 제출은 전체 149개가 아니라 3개 부처·가용 연도를 순환 표집한 12개 요청
+17행입니다. 파일럿 예상비용은 Luna `$0.03`, Terra `$0.07`, Sol `$0.14`
+수준이며, 통과 뒤에만 나머지 137개 요청을 제출합니다.
 
 ## 2. 목적과 비목적
 
@@ -52,6 +57,14 @@
 | `EXACT_MATCH` | 54행 |
 | `MATCH_AFTER_CHANGE` | 106행 |
 | 그 밖의 검수·추출 대상 | 201행 |
+| 중기부 사람 확정 기준선 | 63행 |
+| 4개 부처 통합 기준선 | 424행 |
+| 로컬·사람 확정 | 223행 |
+| LLM 후보 | 199행 |
+| 원문 부족으로 사람만 검수 | 2행 |
+| 증거 묶음 Batch 요청 | 149개 |
+| 기본 파일럿 | 12개 요청, 17행 |
+| 파일럿 후 잔여 | 137개 요청 |
 
 현재 저장소의 로컬 파이프라인은 이미 문서 인벤토리, 페이지 텍스트·표 추출,
 수기값 대조, 근거 페이지와 상태 저장을 수행합니다. 외부 LLM 단계는 이 결과를
@@ -63,47 +76,35 @@
 
 ## 4. 비용 산정
 
-### 4.1 산정 가정
+### 4.1 2026-07-31 실제 dry-run
 
-문서 전체 토큰 수가 아니라 실제 호출 단위를 다음처럼 고정합니다.
+문서 전체가 아니라 계획서·보고서·변경표의 관련 텍스트만 최대 1,200자씩 넣고,
+같은 근거 묶음의 지표를 한 요청으로 합쳤습니다.
 
 ```text
-호출 단위: 성과지표 1행 + 관련 원문 1~4쪽 + JSON 스키마
-평균 입력: 6,000 tokens/행
-평균 출력: 500 tokens/행
-현재 미해결: 201행
-현재 전체: 361행
-환산 가정: US$1 = 1,480원
+LLM 후보: 199행
+요청: 149개
+요청당 지표: 평균 1.34개, 최대 4개
+입력 추정: 263,774 tokens
+출력 추정: 67,050 tokens
+추정법: 직렬화된 유니코드 문자수 ÷ 2, 올림
 ```
 
-따라서 현재 미해결 201행은 입력 1.206M, 출력 0.1005M tokens이고, 전체
-361행은 입력 2.166M, 출력 0.1805M tokens입니다. 실제 비용은 PDF 이미지
-토큰화, 공급자별 토크나이저, 재시도와 캐시 적중률에 따라 달라집니다.
-
-### 4.2 201행 1회 검수 비용
-
-2026-07-28 공개 단가를 적용한 추정치입니다.
-
-| 모델 | 입력/출력 US$/1M | 일반 호출 | Batch |
+| 모델 | 입력/출력 US$/1M | 일반 호출 추정 | Batch 추정 |
 |---|---:|---:|---:|
-| OpenAI GPT-5.4 nano | 0.20 / 1.25 | $0.37 (약 500원) | $0.18 |
-| OpenAI GPT-5.4 mini | 0.75 / 4.50 | $1.36 (약 2,000원) | $0.68 |
-| OpenAI GPT-5.6 Luna | 1.00 / 6.00 | $1.81 (약 2,700원) | $0.90 |
-| Claude Sonnet 5, 2026-08-31까지 | 2.00 / 10.00 | $3.42 (약 5,100원) | $1.71 |
-| Claude Sonnet 5, 2026-09-01부터 | 3.00 / 15.00 | $5.13 (약 7,600원) | $2.56 |
-| OpenAI GPT-5.6 Terra | 2.50 / 15.00 | $4.52 (약 6,700원) | $2.26 |
-| OpenAI GPT-5.6 Sol | 5.00 / 30.00 | $9.05 (약 13,400원) | $4.52 |
+| OpenAI GPT-5.6 Luna | 1.00 / 6.00 | $0.66 | $0.33 |
+| OpenAI GPT-5.6 Terra | 2.50 / 15.00 | $1.66 | $0.83 |
+| OpenAI GPT-5.6 Sol | 5.00 / 30.00 | $3.33 | $1.67 |
+
+실제 토큰 수는 모델 토크나이저와 출력 길이에 따라 달라집니다. 첫 파일럿 후
+API 응답의 usage로 추정식을 보정하며, 실패·누락 요청만 재시도합니다.
 
 공식 단가 출처:
 
-- [OpenAI GPT-5.4 nano](https://developers.openai.com/api/docs/models/gpt-5.4-nano)
-- [OpenAI GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
-- [OpenAI 모델 가격표](https://developers.openai.com/api/docs/models)
-- [OpenAI GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
-- [OpenAI GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
-- [OpenAI Batch API](https://platform.openai.com/docs/api-reference/batch/object?api-mode=responses)
-- [Claude Sonnet 5 가격 안내](https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5)
-- [Anthropic Batch 가격](https://platform.claude.com/docs/en/about-claude/pricing)
+- [OpenAI 모델 비교·가격](https://developers.openai.com/api/docs/models/compare)
+- [OpenAI Batch API](https://developers.openai.com/api/docs/guides/batch)
+- [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 
 ### 4.3 OCR 비용
 
@@ -127,19 +128,11 @@
 
 ### 4.4 실제 예산안
 
-| 운용안 | 현재 201행 예상 | 용도 |
-|---|---:|---|
-| 최소 | $1~3 | 로컬 OCR + 저가 모델 1회 + 소량 재시도 |
-| 권장 파일럿 | $5~15 | 저가 추출 + 상위 모델 교차검수 + 약 20% 재시도 |
-| 매우 보수적 | $15~30 | 상위 모델 중심 이중 검수, 프롬프트 튜닝 포함 |
-
-5개 부처를 약 2,400쪽·500행으로 가정하면 Sonnet 5 1회는 현재 프로모션 단가로
-약 $8.50, Batch는 약 $4.25입니다. 이중 검수와 20% 재시도를 포함하면 약
-$10~20 수준입니다. 행과 페이지 수가 확정되지 않은 부처가 있으므로 이는 예산
-상한을 잡기 위한 추정치일 뿐입니다.
-
-권장 초기 상한은 `US$25`입니다. 상한의 80%에 도달하면 신규 호출을 중단하고
-사람 검수 큐만 생성합니다.
+프로젝트 전체 제작·QA 상한은 사용자가 승인한 `US$80`으로 설정하되, 한 번의
+Batch는 dry-run 비용을 보고 별도 상한을 승인받습니다. 첫 실행은 대표 문서
+묶음만 골라 모델별 정확도와 실제 usage를 비교하고, 통과한 모델로 나머지를
+확대합니다. 이 방식이면 모델 선택 실패가 전체 149개 요청의 재호출로 이어지지
+않습니다.
 
 ## 5. 처리 구조
 
@@ -371,16 +364,18 @@ data/processed/performance/analysis_ready/ 검수 확정 분석값
 
 ## 12. 필요한 명령과 기능
 
-구현 시 기존 `fiscal-performance` CLI에 다음 두 명령만 추가하면 충분합니다.
+현재 기존 `fiscal-performance` CLI에 다음 세 명령을 구현했습니다.
 
 ```text
-fiscal-performance prepare-llm-review <ministry_code> [--year YEAR] [--overwrite]
-fiscal-performance run-llm-review <ministry_code> [--year YEAR]
-  --provider PROVIDER --model MODEL --budget-cap-usd 25 --batch
+fiscal-performance prepare-llm-harness --root . --overwrite
+fiscal-performance submit-llm-batch --root . --request-set pilot --max-approved-cost-usd <CAP>
+fiscal-performance fetch-llm-batch --root . --request-set pilot
+fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --request-set pilot --overwrite
 ```
 
-`prepare-llm-review`는 외부 호출 없이 evidence bundle과 예상 토큰·비용만 만듭니다.
-`run-llm-review`는 다음 조건을 모두 만족할 때만 호출합니다.
+`prepare-llm-harness`와 `validate-llm-responses`는 외부 호출 없이 증거 묶음,
+예상 토큰·비용, 검증·사람 검수 큐를 만듭니다. `submit-llm-batch`는 다음
+조건을 모두 만족할 때만 호출합니다.
 
 ```text
 사용자의 외부 API 호출 명시 승인
@@ -427,8 +422,8 @@ AND 입력이 Git 비추적 경로
 
 ## 14. 구현 순서
 
-1. **오프라인 준비기**: 기존 대조 결과에서 201개 evidence bundle과 dry-run
-   비용표를 만듭니다.
+1. **오프라인 준비기 — 완료**: 201개 미해결 행을 LLM 후보 199행·사람 전용
+   2행으로 나누고, 149개 evidence bundle과 dry-run 비용표를 만들었습니다.
 2. **중기부 파일럿**: 확정된 수기 골드셋 일부를 가리고 추출·근거 정확도를
    측정합니다.
 3. **라우팅 검증**: 저가 모델 단독, 저가+상위 재검수, 상위 모델 단독을 같은
@@ -436,8 +431,9 @@ AND 입력이 Git 비추적 경로
 4. **3개 부처 확대**: 오류 유형별 검토량과 실제 비용을 확인합니다.
 5. **나머지 부처 확대**: 원본 별첨과 수기 행이 확보된 뒤 같은 명령으로 실행합니다.
 
-현재 바로 구현할 것은 1단계까지입니다. 외부 API 호출과 모델 선정은 사용자의
-명시 승인, API 키, 파일럿 예산 상한이 준비된 다음 진행합니다.
+현재 1단계와 외부 호출 안전장치까지 구현했습니다. 다음은 중기부 소규모 파일럿이며,
+외부 API 호출은 사용자의 명시 승인, API 키, 모델, 실행별 예산 상한이 준비된
+다음 진행합니다.
 
 ## 15. 비에이전트형 LLM 실행 방식
 
@@ -487,7 +483,7 @@ LLM의 자기평가 `confidence`는 최종 신뢰도로 쓰지 않습니다. 신
 
 `src/fiscal_dashboard/app.py`의 `성과 원문 검수` 탭에서 다음 작업을 수행합니다.
 
-1. 부처와 미검수 여부로 361행 검수 큐를 좁힙니다.
+1. 부처와 미검수 여부로 4개 부처 424행 검수 큐를 좁힙니다.
 2. 수기값과 PDF 자동 추출값을 같은 표에서 비교합니다.
 3. 계획서·보고서·변경표의 특정 페이지를 바로 렌더링합니다.
 4. 자동 판정, 검수 사유, 추출 텍스트를 확인합니다.

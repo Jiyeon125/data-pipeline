@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import typer
 
 from .analysis_ready_performance import (
@@ -10,6 +11,13 @@ from .analysis_ready_performance import (
     AnalysisReadyPerformanceError,
     run_analysis_ready_master,
     run_verified_manual_analysis_ready_master,
+)
+from .llm_harness import (
+    LlmHarnessError,
+    fetch_batch_results,
+    prepare_llm_harness,
+    submit_batch,
+    validate_llm_responses,
 )
 from .manual_performance import (
     ManualPerformanceError,
@@ -243,6 +251,95 @@ def build_mss_analysis_ready(
     typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
     for path in result.output_paths:
         typer.echo(f"- {path}")
+
+
+@app.command("prepare-llm-harness")
+def prepare_document_llm_harness(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    model: str | None = typer.Option(
+        None,
+        help="OpenAI 모델. 생략하면 OPENAI_MODEL, 둘 다 없으면 모델선택 대기 상태",
+    ),
+    overwrite: bool = typer.Option(False, help="기존 로컬 하네스 산출물 덮어쓰기"),
+) -> None:
+    """로컬 PDF 대조 결과에서 필요한 행만 묶어 미호출 Batch 요청을 준비합니다."""
+    try:
+        result = prepare_llm_harness(root, model=model, overwrite=overwrite)
+    except (LlmHarnessError, FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"LLM 하네스 준비 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("validate-llm-responses")
+def validate_document_llm_responses(
+    responses_path: Path = typer.Argument(help="Batch 응답 JSONL 또는 로컬 fixture"),
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    request_set: str = typer.Option("pilot", help="pilot, remaining 또는 all"),
+    overwrite: bool = typer.Option(False, help="기존 검증 산출물 덮어쓰기"),
+) -> None:
+    """API 호출 없이 저장된 LLM 응답의 스키마·근거·골드셋 일치를 검증합니다."""
+    try:
+        result = validate_llm_responses(
+            root,
+            responses_path,
+            request_set=request_set,
+            overwrite=overwrite,
+        )
+    except (LlmHarnessError, FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"LLM 응답 검증 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("submit-llm-batch")
+def submit_document_llm_batch(
+    max_approved_cost_usd: float = typer.Option(
+        ...,
+        min=0,
+        help="사용자가 이번 실행에 명시적으로 승인한 최대 예상비용",
+    ),
+    request_set: str = typer.Option(
+        "pilot",
+        help="pilot(기본 12개) 또는 remaining(파일럿 통과 뒤 나머지)",
+    ),
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+) -> None:
+    """설정·API 키·모델·비용승인이 모두 있을 때만 OpenAI Batch를 제출합니다."""
+    try:
+        result = submit_batch(
+            root,
+            max_approved_cost_usd=max_approved_cost_usd,
+            request_set=request_set,
+        )
+    except (LlmHarnessError, httpx.HTTPError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"LLM Batch 제출 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("fetch-llm-batch")
+def fetch_document_llm_batch(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    request_set: str = typer.Option("pilot", help="pilot 또는 remaining"),
+) -> None:
+    """Batch 상태를 한 번 확인하고 완료된 응답·오류 파일을 내려받습니다."""
+    try:
+        result = fetch_batch_results(root, request_set=request_set)
+    except (
+        LlmHarnessError,
+        httpx.HTTPError,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+    ) as exc:
+        typer.echo(f"LLM Batch 확인 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

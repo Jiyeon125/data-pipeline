@@ -458,6 +458,28 @@ python -m streamlit run src/fiscal_dashboard/app.py
   신호 미검출 행을 안전하다고 판정하지 않음
 - 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
 
+## 로컬 우선 LLM 검수 하네스
+
+현재 수기 기준선을 덮어쓰지 않고, 로컬 PDF 대조로 해결되지 않은 행만 외부
+모델에 보낼 요청 파일로 준비합니다. 아래 첫 명령은 API를 호출하지 않습니다.
+
+```powershell
+fiscal-performance prepare-llm-harness --root . --overwrite
+fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --overwrite
+```
+
+- 전체 424행 중 로컬·사람 검수 확정 223행은 재호출하지 않음
+- LLM 후보 199행을 같은 근거 묶음별 149개 요청으로 합침
+- 기본 파일럿은 3개 부처·가용 연도를 순환 표집한 12개 요청 17행이며,
+  나머지 137개 요청은 파일럿 통과 뒤에만 별도 제출
+- PDF 근거가 없는 2행은 LLM에 보내지 않고 사람 검수로 유지
+- 요청 ID·입력 해시·예상 토큰·모델·원본 Parquet 해시 저장
+- 응답의 스키마, 지표 ID, 파일·페이지, 원문 인용을 코드로 검증
+- 누락·실패 요청만 `retry_requests.jsonl`로 분리하며 자동 재제출하지 않음
+- `configs/llm.yaml`의 외부 호출 허용값은 기본 `false`
+- 실제 제출 후 `fiscal-performance fetch-llm-batch --root .`로 상태와 결과를
+  한 번씩 확인하며 자동 폴링하지 않음
+
 ## UNKNOWN 예산 80% 커버리지 사람 검수
 
 M3에서 UNKNOWN 누적 본예산의 80%를 차지하는 우선사업을

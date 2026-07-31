@@ -7,6 +7,7 @@ llm:
   request_timeout_seconds: 120
   prompt_version: performance_extraction_v1
   schema_version: performance_indicator_v1
+  api_execution_allowed: false
 
 extraction:
   batch_pages: 1
@@ -23,3 +24,25 @@ review:
     - CORRECTED
     - REJECTED
     - AMBIGUOUS
+
+harness:
+  max_evidence_chars: 1200
+  max_output_tokens: 1800
+  estimated_output_tokens_per_request: 450
+  pilot_request_limit: 12
+  max_build_qa_cost_usd: 80
+  pricing_checked_on: "2026-07-31"
+  pricing_source: "https://developers.openai.com/api/docs/models/compare"
+  pricing_usd_per_million:
+    gpt-5.6-luna:
+      input: 1.00
+      cached_input: 0.10
+      output: 6.00
+    gpt-5.6-terra:
+      input: 2.50
+      cached_input: 0.25
+      output: 15.00
+    gpt-5.6-sol:
+      input: 5.00
+      cached_input: 0.50
+      output: 30.00

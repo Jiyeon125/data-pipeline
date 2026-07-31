@@ -9,15 +9,18 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "exports" / "final_package"
+DEFAULT_OUTPUT = ROOT / "exports" / "frozen_manual_v1_20260731"
 
 DATA_FILES = (
-    Path("data/analytics/three_ministry_priority_scenarios/candidate_population.csv"),
-    Path("data/analytics/three_ministry_priority_scenarios/scenario_scores.csv"),
-    Path("data/analytics/three_ministry_priority_scenarios/rank_stability.csv"),
-    Path("data/analytics/three_ministry_priority_scenarios/scenario_spearman.csv"),
-    Path("data/analytics/three_ministry_priority_scenarios/top_k_overlap.csv"),
-    Path("data/analytics/three_ministry_priority_scenarios/analysis_summary.json"),
+    Path("data/analytics/multi_ministry_priority_scenarios/candidate_population.csv"),
+    Path("data/analytics/multi_ministry_priority_scenarios/full_population_review_work_queue.csv"),
+    Path("data/analytics/multi_ministry_priority_scenarios/scenario_scores.csv"),
+    Path("data/analytics/multi_ministry_priority_scenarios/rank_stability.csv"),
+    Path("data/analytics/multi_ministry_priority_scenarios/scenario_spearman.csv"),
+    Path("data/analytics/multi_ministry_priority_scenarios/top_k_overlap.csv"),
+    Path("data/analytics/multi_ministry_priority_scenarios/analysis_summary.json"),
+    Path("data/analytics/priority_case_evidence_review/selected_cases.csv"),
+    Path("data/analytics/priority_case_evidence_review/case_validation_summary.json"),
     Path("data/analytics/definition_validation/definition_validation_summary.json"),
     Path("data/analytics/m3_audit/m3_methodology_audit_summary.json"),
     Path("data/analytics/decision_support/decision_support_summary.json"),
@@ -25,6 +28,7 @@ DATA_FILES = (
 
 DOCUMENT_FILES = (
     Path("docs/FINAL_REPORT.md"),
+    Path("docs/MANUAL_V1_BASELINE_FREEZE.md"),
     Path("docs/ANALYSIS_DECISIONS.md"),
     Path("docs/MVP_ANALYSIS_COMPLETION_AUDIT.md"),
     Path("docs/REPRODUCIBILITY.md"),
@@ -76,12 +80,22 @@ def build_package(output_dir: Path = DEFAULT_OUTPUT) -> Path:
                 )
         manifest_files.append(item)
 
-    pd.DataFrame(dictionary_rows).to_csv(
-        output_dir / "DATA_DICTIONARY.csv", index=False, encoding="utf-8-sig"
+    dictionary_path = output_dir / "DATA_DICTIONARY.csv"
+    pd.DataFrame(dictionary_rows).to_csv(dictionary_path, index=False, encoding="utf-8-sig")
+    manifest_files.append(
+        {
+            "source": "generated",
+            "packaged_path": dictionary_path.relative_to(output_dir).as_posix(),
+            "bytes": dictionary_path.stat().st_size,
+            "sha256": _sha256(dictionary_path),
+            "row_count": len(dictionary_rows),
+            "column_count": 4,
+        }
     )
     manifest = {
         "generated_at_utc": datetime.now(UTC).isoformat(),
-        "scope": "3개 부처 2022~2024 탐색적 점검 우선순위 MVP",
+        "baseline_id": "manual-v1-20260731",
+        "scope": "4개 부처 2022~2024 점검 우선순위 기준선",
         "interpretation": "최종 정책 우선순위가 아닌 사람 검토용 탐색 산출물",
         "excluded": [
             "원본 PDF·수기 엑셀·API 원본",
@@ -97,6 +111,17 @@ def build_package(output_dir: Path = DEFAULT_OUTPUT) -> Path:
         packaged = output_dir / str(item["packaged_path"])
         if _sha256(packaged) != item["sha256"]:
             raise RuntimeError(f"패키지 해시 검증 실패: {packaged}")
+    packaged_files = {
+        path.relative_to(output_dir).as_posix()
+        for path in output_dir.rglob("*")
+        if path.is_file() and path != manifest_path
+    }
+    expected_files = {str(item["packaged_path"]) for item in manifest_files}
+    if packaged_files != expected_files:
+        raise RuntimeError(
+            f"패키지 파일 목록 불일치: extra={packaged_files - expected_files}, "
+            f"missing={expected_files - packaged_files}"
+        )
 
     print(
         f"final package: {len(manifest_files)} files, "
