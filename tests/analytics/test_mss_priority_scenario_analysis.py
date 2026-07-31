@@ -10,6 +10,7 @@ from analytics.mss_priority_scenario_analysis import (
     build_full_population_review_work_queue,
     build_project_review_work_queue,
     build_rank_stability,
+    build_review_workbench_queue,
     build_spearman_table,
     build_stable_top5_project_drilldown,
     build_top_k_overlap,
@@ -141,12 +142,20 @@ def test_manual_scenario_rank_stability() -> None:
     assert overlap["comparison_type"].eq("ALL_SCENARIOS").sum() == 1
     assert work_summary["candidate_coverage_rate"] == 1
     assert work_queue["work_lane"].value_counts().to_dict() == {
-        "MODELED_SIGNAL_REVIEW": 2,
-        "DATA_VERIFICATION": 1,
+        "REPEATED_OR_MULTIPLE": 1,
+        "STRONG_SINGLE": 1,
+        "DATA_FIRST": 1,
         "CONTEXT_REVIEW": 1,
-        "NO_TRIGGER_MONITORING": 1,
+        "MONITOR": 1,
     }
     assert work_queue["safety_conclusion"].eq("NOT_ASSESSED").all()
+    assert work_queue.sort_values("work_queue_order")["review_intensity"].tolist() == [
+        "DATA_FIRST",
+        "REPEATED_OR_MULTIPLE",
+        "STRONG_SINGLE",
+        "CONTEXT_REVIEW",
+        "MONITOR",
+    ]
 
 
 def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
@@ -170,6 +179,19 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
                 "data_validation_signal": False,
                 "context_only_candidate": False,
                 "context_signal_family_count": 0,
+                "review_intensity": "SINGLE_REVIEW",
+                "review_intensity_order": 3,
+                "review_item_type": "DETAILED_PROJECT_REVIEW",
+                "next_action": "표시된 독립 신호의 근거를 확인",
+                "evidence_status": "CONFIRMED",
+                "independent_signal_family_count": 1,
+                "repeated_signal_family_count": 0,
+                "performance_signal": True,
+                "execution_review_signal": False,
+                "low_performance_budget_increase_t1": False,
+                "low_performance_budget_increase_t2": False,
+                "good_performance_budget_decrease_t1": False,
+                "good_performance_budget_decrease_t2": False,
             }
         ]
     )
@@ -258,3 +280,7 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     assert queue["review_sequence_overall"].tolist() == [1, 2]
     assert queue_summary["reviewable_candidate_coverage_rate"] == 1
     assert queue_summary["project_performance_attribution_count"] == 0
+    workbench = build_review_workbench_queue(work_queue, queue)
+    assert len(workbench) == 2
+    assert workbench["review_item_type"].eq("DETAILED_PROJECT_REVIEW").all()
+    assert workbench["work_item_id"].is_unique
