@@ -514,7 +514,14 @@ fiscal-performance fetch-llm-batch --root . `
 
 fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . `
   --harness-dir data/interim/llm_harness/mss_masked_pilot --overwrite
+
+fiscal-performance build-llm-cost-benefit --root . `
+  --harness-dir data/interim/llm_harness/mss_masked_pilot
 ```
+
+실제 파일럿의 토큰·비용과 현재 검증 커버리지를 반영한 순편익 민감도는
+`docs/LLM_PILOT_COST_BENEFIT.md`에서 확인합니다. 시간·인건비·환율은 공식값이
+아닌 설정 가정이므로 발표 전 실제 검수시간과 기관 원가로 교체해야 합니다.
 
 ## UNKNOWN 예산 80% 커버리지 사람 검수
 

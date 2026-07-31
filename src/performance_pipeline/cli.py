@@ -12,6 +12,7 @@ from .analysis_ready_performance import (
     run_analysis_ready_master,
     run_verified_manual_analysis_ready_master,
 )
+from .llm_economics import build_llm_cost_benefit
 from .llm_harness import (
     LlmHarnessError,
     fetch_batch_results,
@@ -363,6 +364,27 @@ def fetch_document_llm_batch(
         typer.echo(f"LLM Batch 확인 실패: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("build-llm-cost-benefit")
+def build_document_llm_cost_benefit(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    harness_dir: Path | None = typer.Option(None, help="검증된 파일럿 하네스 디렉터리"),
+    config_path: Path | None = typer.Option(None, help="시간·인건비 민감도 설정 YAML"),
+) -> None:
+    """실측 LLM 사용량과 명시적 가정으로 순편익 민감도를 계산합니다."""
+    try:
+        summary, output_paths = build_llm_cost_benefit(
+            root,
+            harness_dir=harness_dir,
+            config_path=config_path,
+        )
+    except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
+        typer.echo(f"LLM 비용·순편익 산정 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    for path in output_paths:
+        typer.echo(f"- {path}")
 
 
 if __name__ == "__main__":

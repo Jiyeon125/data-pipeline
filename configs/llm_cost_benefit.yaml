@@ -1,0 +1,23 @@
+scope:
+  observed_indicator_count: 424
+  observed_years: 3
+  exchange_rate_krw_per_usd: 1400
+  one_time_implementation_hours: 40
+
+# 아래 시간·인건비는 공식값이 아니라 발표 전 실측값으로 교체할 민감도 가정입니다.
+scenarios:
+  - name: conservative
+    manual_minutes_per_indicator: 3
+    assisted_minutes_per_indicator: 2
+    hourly_labor_cost_krw: 30000
+    annual_maintenance_hours: 4
+  - name: base
+    manual_minutes_per_indicator: 5
+    assisted_minutes_per_indicator: 1.5
+    hourly_labor_cost_krw: 50000
+    annual_maintenance_hours: 4
+  - name: upside
+    manual_minutes_per_indicator: 10
+    assisted_minutes_per_indicator: 1
+    hourly_labor_cost_krw: 70000
+    annual_maintenance_hours: 4

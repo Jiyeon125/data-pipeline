@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from performance_pipeline import llm_harness as lh
+from performance_pipeline.llm_economics import build_llm_cost_benefit
 
 
 def _candidate_rows() -> pd.DataFrame:
@@ -96,6 +97,48 @@ def test_request_builder_keeps_strict_schema_for_future_llm_rows() -> None:
     assert requests[0]["body"]["text"]["format"]["strict"] is True
     user_payload = json.loads(requests[0]["body"]["input"][1]["content"])
     assert user_payload["request_id"] == requests[0]["custom_id"]
+
+
+def test_request_builder_scales_output_limit_with_record_count() -> None:
+    rows = pd.concat([_candidate_rows().iloc[[0]]] * 6, ignore_index=True)
+    rows["source_indicator_id"] = [f"019-2023-{number}" for number in range(6)]
+    rows["automation_route"] = "LLM_CANDIDATE"
+
+    requests, _ = lh.build_request_entries(
+        rows,
+        model="gpt-test",
+        prompt_version="p1",
+        schema_version="s1",
+        max_evidence_chars=1200,
+        max_output_tokens=1800,
+        minimum_output_tokens_per_record=400,
+    )
+
+    assert requests[0]["body"]["max_output_tokens"] == 2400
+
+
+def test_request_builder_can_isolate_each_indicator() -> None:
+    rows = pd.concat([_candidate_rows().iloc[[0]]] * 2, ignore_index=True)
+    rows["source_indicator_id"] = ["019-2023-1", "019-2023-2"]
+    rows["automation_route"] = "LLM_CANDIDATE"
+
+    requests, index = lh.build_request_entries(
+        rows,
+        model="gpt-test",
+        prompt_version="p2",
+        schema_version="s1",
+        max_evidence_chars=1200,
+        max_output_tokens=1800,
+        max_records_per_request=1,
+        reasoning_effort="medium",
+    )
+
+    assert len(requests) == len(index) == 2
+    assert all(
+        len(json.loads(request["body"]["input"][1]["content"])["records"]) == 1
+        for request in requests
+    )
+    assert all(request["body"]["reasoning"] == {"effort": "medium"} for request in requests)
 
 
 def test_masked_request_keeps_evidence_but_hides_local_value_candidates() -> None:
@@ -233,6 +276,221 @@ def test_response_contract_requires_grounded_quotes_and_string_values() -> None:
         )
 
 
+def test_local_recovery_keeps_complete_records_and_nulls_unsupported_fields() -> None:
+    record = {
+        "source_indicator_id": "019-2023-1",
+        "indicator_name": "추정한 지표명",
+        "unit": "%",
+        "plan_target_raw": "10",
+        "report_target_raw": "10",
+        "actual_value_raw": "9",
+        "official_achievement_rate_raw": "90%",
+        "extraction_status": "EXTRACTED",
+        "review_reasons": [],
+        "evidence": [
+            {
+                "document_type": "PLAN",
+                "source_file": "plan.pdf",
+                "source_page": 1,
+                "quote": "지표 ... 목표 10",
+            },
+            {
+                "document_type": "REPORT",
+                "source_file": "report.pdf",
+                "source_page": 2,
+                "quote": "목표 10 실적 9 달성률 90%",
+            },
+        ],
+    }
+
+    recovered = lh._recover_grounded_record(
+        record,
+        request_id="perf-test",
+        allowed_sources={"plan.pdf": {1}, "report.pdf": {2}},
+        grounding_text="실제 지표명 % 목표 10 실적 9 달성률 90%",
+        recovery_reason="TRUNCATED_RESPONSE_RECORD_RECOVERED",
+    )
+
+    assert recovered["indicator_name"] is None
+    assert len(recovered["evidence"]) == 1
+    assert "UNSUPPORTED_FIELDS_SET_NULL:indicator_name" in recovered["review_reasons"]
+
+    no_exact_quote = json.loads(json.dumps(record))
+    no_exact_quote["evidence"][1]["quote"] = None
+    with pytest.raises(lh.LlmHarnessError, match="복구 가능한 원문 근거"):
+        lh._recover_grounded_record(
+            no_exact_quote,
+            request_id="perf-test",
+            allowed_sources={"plan.pdf": {1}, "report.pdf": {2}},
+            grounding_text="실제 지표명 % 목표 10 실적 9 달성률 90%",
+            recovery_reason="TRUNCATED_RESPONSE_RECORD_RECOVERED",
+        )
+
+
+def test_completed_record_prefix_ignores_truncated_tail() -> None:
+    text = '{"records":[{"source_indicator_id":"one"},{"source_indicator_id":"two"'
+
+    assert lh._completed_record_prefix(text) == [{"source_indicator_id": "one"}]
+
+
+def test_field_accuracy_separates_gold_accuracy_from_grounded_enrichment() -> None:
+    review = pd.DataFrame(
+        {
+            "request_id": ["r1", "r2", "r3", pd.NA],
+            "actual_value_raw": ["9", "11", pd.NA, pd.NA],
+            "manual_actual_value_raw": ["9", pd.NA, "10", "12"],
+        }
+    )
+
+    result = lh._field_accuracy_summary(
+        review,
+        {"actual_value_raw": "manual_actual_value_raw"},
+    )["actual_value_raw"]
+
+    assert result["selected_gold_count"] == 3
+    assert result["compared"] == 2
+    assert result["correct"] == 1
+    assert result["accuracy"] == 0.5
+    assert result["end_to_end_correct_rate"] == 1 / 3
+    assert result["manual_missing_grounded_extraction_count"] == 1
+    assert result["manual_present_llm_null_count"] == 1
+    assert result["no_valid_response_with_gold_count"] == 1
+
+
+def test_duplicate_evidence_is_flagged_without_using_manual_gold() -> None:
+    rows = pd.DataFrame(
+        {
+            "source_indicator_id": ["one", "two", "three"],
+            "plan_source_file": ["plan.pdf"] * 3,
+            "plan_split_pdf_page": [1, 1, 2],
+            "plan_source_text": ["same plan", "same plan", "other plan"],
+            "report_source_file": ["report.pdf"] * 3,
+            "report_split_pdf_page": [2, 2, 3],
+            "report_source_text": ["same report", "same report", "other report"],
+        }
+    )
+
+    assert lh._evidence_collision_ids(rows) == {"one", "two"}
+
+
+def test_manual_gold_changes_only_offline_evaluation(tmp_path) -> None:
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    candidates = _candidate_rows().iloc[[0]].copy()
+    candidates["automation_route"] = "LLM_CANDIDATE"
+    candidates["pdf_report_indicator_name"] = "성과지표 A"
+    candidates["pdf_report_program_name"] = "프로그램 A"
+    manual_columns = {
+        "manual_indicator_name_report": "성과지표 A",
+        "manual_indicator_unit": "%",
+        "manual_planned_target_raw": "10",
+        "manual_actual_value_raw": "9",
+        "manual_official_achievement_rate_raw": "90%",
+    }
+    for column, value in manual_columns.items():
+        candidates[column] = value
+    requests, _ = lh.build_request_entries(
+        candidates,
+        model="gpt-5.6-luna",
+        prompt_version="p1",
+        schema_version="s1",
+        max_evidence_chars=1200,
+        max_output_tokens=500,
+        expose_local_candidates=False,
+    )
+    request_id = requests[0]["custom_id"]
+    payload = {
+        "request_id": request_id,
+        "records": [
+            {
+                "source_indicator_id": "019-2023-1",
+                "indicator_name": "성과지표 A",
+                "unit": "%",
+                "plan_target_raw": None,
+                "report_target_raw": "10",
+                "actual_value_raw": "9",
+                "official_achievement_rate_raw": "90%",
+                "extraction_status": "EXTRACTED",
+                "review_reasons": [],
+                "evidence": [
+                    {
+                        "document_type": "REPORT",
+                        "source_file": "report.pdf",
+                        "source_page": 7,
+                        "quote": "성과지표 A 목표 10 실적 9 달성률 90%",
+                    }
+                ],
+            }
+        ],
+    }
+    (harness / "pilot_requests.jsonl").write_text(
+        json.dumps(requests[0], ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    candidates.to_csv(harness / "candidate_rows.csv", index=False)
+    (harness / "harness_summary.json").write_text(
+        json.dumps({"model": "gpt-5.6-luna"}),
+        encoding="utf-8",
+    )
+    responses = harness / "responses.jsonl"
+    responses.write_text(
+        json.dumps({"custom_id": request_id, "output": payload}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    first = lh.validate_llm_responses(
+        Path("."),
+        responses,
+        harness_dir=harness,
+        output_dir=harness / "first",
+    )
+    first_runtime_files = [first.output_paths[index].read_bytes() for index in (0, 1, 3)]
+    first_gold = json.loads(first.output_paths[5].read_text(encoding="utf-8"))
+
+    for column in manual_columns:
+        candidates[column] = "일부러 바꾼 정답"
+    candidates.to_csv(harness / "candidate_rows.csv", index=False)
+    second = lh.validate_llm_responses(
+        Path("."),
+        responses,
+        harness_dir=harness,
+        output_dir=harness / "second",
+    )
+    second_runtime_files = [second.output_paths[index].read_bytes() for index in (0, 1, 3)]
+    second_gold = json.loads(second.output_paths[5].read_text(encoding="utf-8"))
+
+    candidates.drop(columns=list(manual_columns)).to_csv(
+        harness / "candidate_rows.csv", index=False
+    )
+    no_gold = lh.validate_llm_responses(
+        Path("."),
+        responses,
+        harness_dir=harness,
+        output_dir=harness / "no_gold",
+    )
+    no_gold_runtime_files = [no_gold.output_paths[index].read_bytes() for index in (0, 1, 3)]
+    no_gold_evaluation = json.loads(no_gold.output_paths[5].read_text(encoding="utf-8"))
+
+    runtime_keys = {
+        "valid_request_count",
+        "valid_record_count",
+        "strict_valid_record_count",
+        "recovered_record_count",
+        "failure_count",
+        "retry_request_count",
+        "retry_record_count",
+    }
+    assert first_runtime_files == second_runtime_files
+    assert first_runtime_files == no_gold_runtime_files
+    assert {key: first.summary[key] for key in runtime_keys} == {
+        key: second.summary[key] for key in runtime_keys
+    }
+    assert first.summary["runtime_acceptance_uses_manual_gold"] is False
+    assert first_gold["field_accuracy"] != second_gold["field_accuracy"]
+    assert no_gold.summary["goldset_evaluation_available"] is False
+    assert no_gold_evaluation["field_accuracy"] == {}
+
+
 def test_batch_submission_is_disabled_by_default(tmp_path) -> None:
     config_dir = tmp_path / "configs"
     config_dir.mkdir()
@@ -261,7 +519,7 @@ def test_mss_masked_pilot_is_stratified_and_upload_file_has_no_gold_keys(tmp_pat
 
     assert summary["source_rows"] == 63
     assert summary["eligible_rows"] == 59
-    assert summary["request_count"] == len(requests) == 12
+    assert summary["request_count"] == len(requests) == 34
     assert summary["request_row_count"] == len(candidates) == 34
     assert set(summary["year_counts"]) == {"2022", "2023", "2024"}
     assert summary["api_called"] is False
@@ -369,3 +627,55 @@ harness: {}
 
     assert result["status"] == "completed"
     assert (harness_dir / "pilot_batch_responses.jsonl").read_bytes().startswith(b"{")
+
+
+def test_cost_benefit_uses_observed_coverage_and_separates_implementation(tmp_path) -> None:
+    harness = tmp_path / "harness"
+    validated = harness / "validated_pilot"
+    validated.mkdir(parents=True)
+    (validated / "validation_summary.json").write_text(
+        json.dumps(
+            {
+                "expected_request_count": 2,
+                "expected_record_count": 10,
+                "valid_request_rate": 0.5,
+                "valid_record_coverage": 0.5,
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 200,
+                    "conservative_batch_cost_usd": 0.01,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = tmp_path / "economics.yaml"
+    config.write_text(
+        """scope:
+  observed_indicator_count: 10
+  observed_years: 1
+  exchange_rate_krw_per_usd: 1000
+  one_time_implementation_hours: 2
+scenarios:
+  - name: test
+    manual_minutes_per_indicator: 10
+    assisted_minutes_per_indicator: 2
+    hourly_labor_cost_krw: 60000
+    annual_maintenance_hours: 1
+""",
+        encoding="utf-8",
+    )
+
+    summary, paths = build_llm_cost_benefit(
+        tmp_path,
+        harness_dir=harness,
+        config_path=config,
+    )
+    rows = pd.read_csv(paths[0])
+    pilot = rows[(rows["scope"] == "pilot") & (rows["scenario"] == "test")].iloc[0]
+
+    assert summary["measurement"]["retry_multiplier_from_observed_valid_request_rate"] == 2
+    assert pilot["api_cost_usd_with_retry"] == pytest.approx(0.02)
+    assert pilot["gross_labor_benefit_krw"] == pytest.approx(40000)
+    assert pilot["net_recurring_benefit_krw"] == pytest.approx(-20020)
+    assert pilot["first_cycle_net_benefit_krw"] == pytest.approx(-140020)

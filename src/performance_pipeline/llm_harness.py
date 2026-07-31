@@ -33,13 +33,12 @@ HUMAN_REVIEW_REQUIRED_STATUSES = {
 }
 MODEL_PLACEHOLDER = "MODEL_SELECTION_REQUIRED"
 
-SYSTEM_PROMPT = """정부 성과계획서·성과보고서의 성과지표 값을 검수합니다.
-SOURCE_EVIDENCE에 직접 존재하는 값만 추출하세요.
-확인되지 않는 값은 null로 반환하고 추정·계산·보간하지 마세요.
-원문 인용은 입력에 실제로 있는 짧은 구절만 그대로 사용하세요.
-source_indicator_id를 바꾸거나 새 지표를 만들지 마세요.
-계획 목표, 보고 목표, 실적, 공식 달성률은 서로 다른 필드입니다.
-공식 달성률을 직접 계산한 값으로 대체하지 마세요."""
+SYSTEM_PROMPT = """정부 성과계획서·성과보고서에서 성과지표 값을 구조화합니다.
+SOURCE_EVIDENCE에 직접 존재하는 값만 원문 표기 그대로 복사하세요.
+계획목표는 PLAN 또는 CHANGE_TABLE에서, 보고목표·실적·공식달성률은 REPORT에서 구분하세요.
+계산·보간·연도 추정·다른 지표 값 재사용을 금지하며 확인되지 않는 필드는 null로 반환하세요.
+원문 인용은 실제로 존재하는 짧은 구절을 생략 부호 없이 그대로 복사하세요.
+source_indicator_id와 request_id를 바꾸거나 새 지표를 만들지 마세요."""
 
 OUTPUT_FIELDS = (
     "indicator_name",
@@ -315,14 +314,22 @@ def build_request_entries(
     schema_version: str,
     max_evidence_chars: int,
     max_output_tokens: int,
+    minimum_output_tokens_per_record: int = 0,
+    max_records_per_request: int | None = None,
     reasoning_effort: str = "low",
     expose_local_candidates: bool = True,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame]:
     rows = candidates.loc[candidates["automation_route"].eq("LLM_CANDIDATE")].copy()
     rows["bundle_key"] = rows.apply(_bundle_key, axis=1)
+    rows = rows.sort_values(["bundle_key", "source_indicator_id"])
+    if max_records_per_request is not None and max_records_per_request < 1:
+        raise ValueError("max_records_per_request는 1 이상이어야 합니다.")
+    rows["request_chunk"] = rows.groupby("bundle_key", sort=False, dropna=False).cumcount() // (
+        max_records_per_request or max(len(rows), 1)
+    )
     requests: list[dict[str, Any]] = []
     index_rows: list[dict[str, Any]] = []
-    for _, group in rows.groupby("bundle_key", sort=True, dropna=False):
+    for _, group in rows.groupby(["bundle_key", "request_chunk"], sort=True, dropna=False):
         local_status_by_id = {
             str(row["source_indicator_id"]): str(row["overall_reconciliation_status"])
             for _, row in group.iterrows()
@@ -353,7 +360,10 @@ def build_request_entries(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": content_text},
             ],
-            "max_output_tokens": max_output_tokens,
+            "max_output_tokens": max(
+                max_output_tokens,
+                len(records) * minimum_output_tokens_per_record,
+            ),
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -507,6 +517,8 @@ def prepare_llm_harness(
         schema_version=str(config["llm"]["schema_version"]),
         max_evidence_chars=int(harness["max_evidence_chars"]),
         max_output_tokens=int(harness["max_output_tokens"]),
+        minimum_output_tokens_per_record=int(harness.get("minimum_output_tokens_per_record", 0)),
+        max_records_per_request=harness.get("max_records_per_request"),
         reasoning_effort=str(config["llm"].get("reasoning_effort", "low")),
     )
     pilot_ids = _pilot_request_ids(
@@ -694,6 +706,8 @@ def prepare_mss_masked_goldset_pilot(
         schema_version=str(config["llm"]["schema_version"]),
         max_evidence_chars=int(harness["max_evidence_chars"]),
         max_output_tokens=int(harness["max_output_tokens"]),
+        minimum_output_tokens_per_record=int(harness.get("minimum_output_tokens_per_record", 0)),
+        max_records_per_request=harness.get("max_records_per_request"),
         reasoning_effort=str(config["llm"].get("reasoning_effort", "low")),
         expose_local_candidates=False,
     )
@@ -826,18 +840,194 @@ def _usage_summary(
 
 
 def _request_context(entry: dict[str, Any]) -> tuple[set[str], dict[str, set[Any]], str]:
-    body = entry["body"]
-    user_content = json.loads(body["input"][1]["content"])
-    indicator_ids = {str(record["source_indicator_id"]) for record in user_content["records"]}
+    contexts = _record_contexts(entry)
     allowed: dict[str, set[Any]] = {}
     grounding: list[str] = []
+    for record_allowed, record_grounding in contexts.values():
+        for source_file, pages in record_allowed.items():
+            allowed.setdefault(source_file, set()).update(pages)
+        grounding.append(record_grounding)
+    return set(contexts), allowed, _normalize_grounding_text(" ".join(grounding))
+
+
+def _record_contexts(entry: dict[str, Any]) -> dict[str, tuple[dict[str, set[Any]], str]]:
+    body = entry["body"]
+    user_content = json.loads(body["input"][1]["content"])
+    contexts: dict[str, tuple[dict[str, set[Any]], str]] = {}
     for record in user_content["records"]:
+        allowed: dict[str, set[Any]] = {}
+        grounding: list[str] = []
         for evidence in record["source_evidence"]:
             source_file = evidence.get("source_file")
             if source_file:
                 allowed.setdefault(str(source_file), set()).add(evidence.get("source_page"))
             grounding.append(str(evidence.get("text") or ""))
-    return indicator_ids, allowed, _normalize_grounding_text(" ".join(grounding))
+        contexts[str(record["source_indicator_id"])] = (
+            allowed,
+            _normalize_grounding_text(" ".join(grounding)),
+        )
+    return contexts
+
+
+def _completed_record_prefix(text: str) -> list[dict[str, Any]]:
+    marker = '"records":['
+    marker_start = text.find(marker)
+    if marker_start < 0:
+        return []
+    position = marker_start + len(marker)
+    decoder = json.JSONDecoder()
+    records: list[dict[str, Any]] = []
+    while position < len(text):
+        while position < len(text) and text[position] in " \r\n\t,":
+            position += 1
+        if position >= len(text) or text[position] == "]":
+            break
+        try:
+            record, position = decoder.raw_decode(text, position)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(record, dict):
+            break
+        records.append(record)
+    return records
+
+
+def _recover_grounded_record(
+    record: dict[str, Any],
+    *,
+    request_id: str,
+    allowed_sources: dict[str, set[Any]],
+    grounding_text: str,
+    recovery_reason: str,
+) -> dict[str, Any]:
+    recovered = json.loads(json.dumps(record, ensure_ascii=False))
+    retained_evidence = []
+    dropped_evidence = 0
+    exact_quote_count = 0
+    for evidence in recovered.get("evidence", []):
+        source_file = evidence.get("source_file")
+        source_page = evidence.get("source_page")
+        if source_file is not None and (
+            source_file not in allowed_sources or source_page not in allowed_sources[source_file]
+        ):
+            raise LlmHarnessError("응답 근거 파일·페이지가 요청 허용목록 밖입니다.")
+        quote = _normalize_grounding_text(evidence.get("quote"))
+        if quote and quote not in grounding_text:
+            dropped_evidence += 1
+            continue
+        if quote:
+            exact_quote_count += 1
+        retained_evidence.append(evidence)
+    if not retained_evidence or exact_quote_count == 0:
+        raise LlmHarnessError("복구 가능한 원문 근거 인용이 없습니다.")
+    recovered["evidence"] = retained_evidence
+
+    unsupported_fields = []
+    for field in OUTPUT_FIELDS:
+        value = _normalize_grounding_text(recovered.get(field))
+        if value and value not in grounding_text:
+            recovered[field] = None
+            unsupported_fields.append(field)
+    reasons = list(recovered.get("review_reasons") or [])
+    reasons.append(recovery_reason)
+    if dropped_evidence:
+        reasons.append(f"NON_VERBATIM_EVIDENCE_DROPPED:{dropped_evidence}")
+    if unsupported_fields:
+        reasons.append("UNSUPPORTED_FIELDS_SET_NULL:" + ",".join(unsupported_fields))
+    recovered["review_reasons"] = list(dict.fromkeys(reasons))
+    if recovered.get("extraction_status") == "EXTRACTED" and all(
+        recovered.get(field) is None for field in OUTPUT_FIELDS
+    ):
+        recovered["extraction_status"] = "AMBIGUOUS"
+    return validate_extraction_payload(
+        {"request_id": request_id, "records": [recovered]},
+        request_id=request_id,
+        expected_ids={str(recovered.get("source_indicator_id"))},
+        allowed_sources=allowed_sources,
+        grounding_text=grounding_text,
+    )[0]
+
+
+def _recover_response_records(
+    line: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    request_id: str,
+    strict_error: Exception,
+) -> tuple[list[dict[str, Any]], str]:
+    text = _response_text(line)
+    body = (line.get("response") or {}).get("body") or {}
+    truncated = (
+        body.get("status") == "incomplete"
+        and (body.get("incomplete_details") or {}).get("reason") == "max_output_tokens"
+    )
+    if isinstance(strict_error, json.JSONDecodeError) and truncated:
+        records = _completed_record_prefix(text)
+        recovery_reason = "TRUNCATED_RESPONSE_RECORD_RECOVERED"
+    elif str(strict_error) == "응답 근거 인용이 입력 원문에 없습니다.":
+        payload = json.loads(text)
+        if payload.get("request_id") != request_id:
+            return [], ""
+        records = payload.get("records", [])
+        recovery_reason = "NON_VERBATIM_EVIDENCE_RECOVERED"
+    else:
+        return [], ""
+
+    contexts = _record_contexts(entry)
+    recovered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in records:
+        source_id = str(record.get("source_indicator_id", ""))
+        if source_id in seen or source_id not in contexts:
+            continue
+        seen.add(source_id)
+        allowed_sources, grounding_text = contexts[source_id]
+        try:
+            recovered.append(
+                _recover_grounded_record(
+                    record,
+                    request_id=request_id,
+                    allowed_sources=allowed_sources,
+                    grounding_text=grounding_text,
+                    recovery_reason=recovery_reason,
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return recovered, recovery_reason
+
+
+def _retry_entries(
+    requests: dict[str, dict[str, Any]],
+    missing_source_ids: set[str],
+    *,
+    minimum_output_tokens_per_record: int,
+) -> list[dict[str, Any]]:
+    retry_entries: list[dict[str, Any]] = []
+    for original_id, entry in sorted(requests.items()):
+        cloned = json.loads(json.dumps(entry, ensure_ascii=False))
+        content = json.loads(cloned["body"]["input"][1]["content"])
+        content["records"] = [
+            record
+            for record in content["records"]
+            if str(record["source_indicator_id"]) in missing_source_ids
+        ]
+        if not content["records"]:
+            continue
+        retry_id = (
+            "retry-"
+            + _sha256_bytes((original_id + _json_text(content["records"])).encode("utf-8"))[:24]
+        )
+        content["request_id"] = retry_id
+        cloned["custom_id"] = retry_id
+        cloned["body"]["input"][0]["content"] = SYSTEM_PROMPT
+        cloned["body"]["input"][1]["content"] = _json_text(content)
+        cloned["body"]["max_output_tokens"] = max(
+            int(cloned["body"]["max_output_tokens"]),
+            len(content["records"]) * minimum_output_tokens_per_record,
+        )
+        retry_entries.append(cloned)
+    return retry_entries
 
 
 def validate_extraction_payload(
@@ -930,6 +1120,67 @@ def _comparison_equal(actual: Any, expected: Any) -> bool:
         return left.casefold() == right.casefold()
 
 
+def _field_accuracy_summary(
+    review: pd.DataFrame,
+    expected_columns: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    """수기 결측 보완을 오답으로 세지 않고 조건부·종단 성능을 분리합니다."""
+    valid_response = review["request_id"].notna()
+    result: dict[str, dict[str, Any]] = {}
+    for field, expected_column in expected_columns.items():
+        gold_present = review[expected_column].notna()
+        extracted = review[field].notna()
+        equal = review.apply(
+            lambda row, field=field, expected_column=expected_column: _comparison_equal(
+                row.get(field), row.get(expected_column)
+            ),
+            axis=1,
+        )
+        compared = valid_response & gold_present
+        correct = compared & equal
+        selected_gold_count = int(gold_present.sum())
+        compared_count = int(compared.sum())
+        correct_count = int(correct.sum())
+        result[field] = {
+            "selected_gold_count": selected_gold_count,
+            "valid_response_gold_count": compared_count,
+            "compared": compared_count,
+            "correct": correct_count,
+            "accuracy": correct_count / compared_count if compared_count else None,
+            "end_to_end_correct_rate": (
+                correct_count / selected_gold_count if selected_gold_count else None
+            ),
+            "manual_missing_grounded_extraction_count": int(
+                ((~gold_present) & valid_response & extracted).sum()
+            ),
+            "manual_present_llm_null_count": int(
+                (gold_present & valid_response & (~extracted)).sum()
+            ),
+            "manual_present_conflict_count": int(
+                (gold_present & valid_response & extracted & (~equal)).sum()
+            ),
+            "no_valid_response_with_gold_count": int((gold_present & (~valid_response)).sum()),
+        }
+    return result
+
+
+def _evidence_collision_ids(candidates: pd.DataFrame) -> set[str]:
+    evidence_columns = [
+        "plan_source_file",
+        "plan_split_pdf_page",
+        "plan_source_text",
+        "report_source_file",
+        "report_split_pdf_page",
+        "report_source_text",
+    ]
+    if not set(evidence_columns).issubset(candidates.columns):
+        return set()
+    fingerprints = candidates[evidence_columns].fillna("").astype(str).agg("\x1f".join, axis=1)
+    nonempty = candidates[["plan_source_text", "report_source_text"]].notna().any(axis=1)
+    collision = nonempty & fingerprints.duplicated(keep=False)
+    return set(candidates.loc[collision, "source_indicator_id"].astype(str))
+
+
 def validate_llm_responses(
     root: Path,
     responses_path: Path,
@@ -958,6 +1209,7 @@ def validate_llm_responses(
         output_dir / "human_review_queue.csv",
         output_dir / "retry_requests.jsonl",
         output_dir / "validation_summary.json",
+        output_dir / "goldset_evaluation.json",
     )
     existing = [path for path in targets if path.exists()]
     if existing and not overwrite:
@@ -982,6 +1234,7 @@ def validate_llm_responses(
     }
     validated: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
+    recovery_counts: dict[str, int] = {}
     for line in response_lines:
         request_id = str(line.get("custom_id", ""))
         if request_id in duplicate_response_ids:
@@ -1001,13 +1254,42 @@ def validate_llm_responses(
                 allowed_sources=allowed_sources,
                 grounding_text=grounding_text,
             )
-            validated.extend({"request_id": request_id, **record} for record in records)
+            validated.extend(
+                {"request_id": request_id, "validation_route": "STRICT", **record}
+                for record in records
+            )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            recovered, recovery_reason = _recover_response_records(
+                line,
+                entry,
+                request_id=request_id,
+                strict_error=exc,
+            )
+            if recovered:
+                recovery_counts[recovery_reason] = recovery_counts.get(recovery_reason, 0) + len(
+                    recovered
+                )
+                validated.extend(
+                    {
+                        "request_id": request_id,
+                        "validation_route": recovery_reason,
+                        **record,
+                    }
+                    for record in recovered
+                )
+                missing_in_request = expected_ids - {
+                    str(record["source_indicator_id"]) for record in recovered
+                }
+                if not missing_in_request:
+                    continue
+                detail = f"{exc}; recovered={len(recovered)}; missing={len(missing_in_request)}"
+            else:
+                detail = str(exc)
             failures.append(
                 {
                     "request_id": request_id,
                     "error": exc.__class__.__name__,
-                    "detail": str(exc),
+                    "detail": detail,
                 }
             )
 
@@ -1018,6 +1300,7 @@ def validate_llm_responses(
         dtype={"ministry_code": "string", "source_program_code": "string"},
         low_memory=False,
     )
+    evidence_collision_ids = _evidence_collision_ids(candidates)
     expected_source_ids = set()
     for entry in requests.values():
         expected_source_ids.update(_request_context(entry)[0])
@@ -1026,6 +1309,8 @@ def validate_llm_responses(
             candidates["automation_route"].isin(["LLM_CANDIDATE", "HUMAN_ONLY"])
         ].copy()
         field_accuracy: dict[str, Any] = {}
+        field_accuracy_without_collisions: dict[str, Any] = {}
+        goldset_evaluation_available = False
     else:
         review = candidates.loc[
             candidates["automation_route"].isin(["LLM_CANDIDATE", "HUMAN_ONLY"])
@@ -1036,6 +1321,11 @@ def validate_llm_responses(
             validate="one_to_one",
             suffixes=("_local", "_llm"),
         )
+        review["evidence_collision_status"] = "NO_COLLISION"
+        review.loc[
+            review["source_indicator_id"].astype(str).isin(evidence_collision_ids),
+            "evidence_collision_status",
+        ] = "DUPLICATE_EVIDENCE_COLLISION"
         expected_columns = {
             "indicator_name": "manual_indicator_name_report",
             "unit": "manual_indicator_unit",
@@ -1043,25 +1333,15 @@ def validate_llm_responses(
             "actual_value_raw": "manual_actual_value_raw",
             "official_achievement_rate_raw": "manual_official_achievement_rate_raw",
         }
-        field_accuracy = {}
-        for field, expected_column in expected_columns.items():
-            comparison = review.apply(
-                lambda row, field=field, expected_column=expected_column: _comparison_equal(
-                    row.get(field), row.get(expected_column)
-                ),
-                axis=1,
-            )
-            returned = review["request_id"].notna()
-            available = returned & (review[field].notna() | review[expected_column].notna())
-            field_accuracy[field] = {
-                "compared": int(available.sum()),
-                "correct": int((comparison & available).sum()),
-                "accuracy": (
-                    float((comparison & available).sum() / available.sum())
-                    if available.any()
-                    else None
-                ),
-            }
+        expected_columns = {
+            field: column for field, column in expected_columns.items() if column in review.columns
+        }
+        goldset_evaluation_available = bool(expected_columns)
+        field_accuracy = _field_accuracy_summary(review, expected_columns)
+        field_accuracy_without_collisions = _field_accuracy_summary(
+            review.loc[review["evidence_collision_status"].eq("NO_COLLISION")],
+            expected_columns,
+        )
         review["human_review_status"] = "PENDING"
         review["llm_validation_status"] = "NOT_IN_THIS_REQUEST_SET"
         review.loc[
@@ -1072,6 +1352,10 @@ def validate_llm_responses(
             review["request_id"].notna(),
             "llm_validation_status",
         ] = "SCHEMA_AND_GROUNDING_PASS"
+        review.loc[
+            review["evidence_collision_status"].eq("DUPLICATE_EVIDENCE_COLLISION"),
+            "llm_validation_status",
+        ] = "EVIDENCE_COLLISION_REVIEW"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     records.to_csv(targets[0], index=False, encoding="utf-8-sig")
@@ -1079,14 +1363,22 @@ def validate_llm_responses(
     review.to_csv(targets[2], index=False, encoding="utf-8-sig")
     expected_request_ids = set(requests)
     returned_request_ids = set(response_ids)
-    failed_request_ids = set(failures_df.get("request_id", pd.Series(dtype="string")))
-    retry_request_ids = (expected_request_ids - returned_request_ids) | (
-        failed_request_ids & expected_request_ids
+    valid_source_ids = set(
+        records.get("source_indicator_id", pd.Series(dtype="string")).astype(str)
     )
-    targets[3].write_text(
-        "".join(
-            _json_text(requests[request_id]) + "\n" for request_id in sorted(retry_request_ids)
+    retry_source_ids = expected_source_ids - valid_source_ids
+    retry_entries = _retry_entries(
+        requests,
+        retry_source_ids,
+        minimum_output_tokens_per_record=int(
+            load_llm_config(root / "configs/llm.yaml")["harness"].get(
+                "minimum_output_tokens_per_record", 0
+            )
         ),
+    )
+    retry_request_ids = {entry["custom_id"] for entry in retry_entries}
+    targets[3].write_text(
+        "".join(_json_text(entry) + "\n" for entry in retry_entries),
         encoding="utf-8",
     )
     summary = {
@@ -1097,9 +1389,58 @@ def validate_llm_responses(
         "returned_request_count": len(returned_request_ids),
         "missing_request_count": len(expected_request_ids - returned_request_ids),
         "unknown_request_count": len(returned_request_ids - expected_request_ids),
+        "valid_request_count": len(expected_request_ids)
+        - len(
+            {
+                request_id
+                for request_id, entry in requests.items()
+                if _request_context(entry)[0] & retry_source_ids
+            }
+        ),
+        "valid_request_rate": (
+            (
+                len(expected_request_ids)
+                - len(
+                    {
+                        request_id
+                        for request_id, entry in requests.items()
+                        if _request_context(entry)[0] & retry_source_ids
+                    }
+                )
+            )
+            / len(expected_request_ids)
+            if expected_request_ids
+            else None
+        ),
+        "expected_record_count": len(expected_source_ids),
         "valid_record_count": len(records),
+        "valid_record_coverage": (
+            len(records) / len(expected_source_ids) if expected_source_ids else None
+        ),
+        "evidence_collision_record_count": len(evidence_collision_ids & expected_source_ids),
+        "usable_record_count_excluding_evidence_collisions": len(
+            valid_source_ids - evidence_collision_ids
+        ),
+        "usable_record_coverage_excluding_evidence_collisions": (
+            len(valid_source_ids - evidence_collision_ids) / len(expected_source_ids)
+            if expected_source_ids
+            else None
+        ),
         "failure_count": len(failures_df),
+        "failure_types": (
+            failures_df["error"].value_counts().sort_index().astype(int).to_dict()
+            if not failures_df.empty
+            else {}
+        ),
+        "strict_valid_record_count": int(
+            records.get("validation_route", pd.Series(dtype="string")).eq("STRICT").sum()
+        ),
+        "recovered_record_count": int(
+            records.get("validation_route", pd.Series(dtype="string")).ne("STRICT").sum()
+        ),
+        "recovery_types": recovery_counts,
         "retry_request_count": len(retry_request_ids),
+        "retry_record_count": len(retry_source_ids),
         "retry_submission_allowed": False,
         "usage": _usage_summary(
             response_lines,
@@ -1110,12 +1451,30 @@ def validate_llm_responses(
             ),
             config=load_llm_config(root / "configs/llm.yaml"),
         ),
-        "field_accuracy": field_accuracy,
+        "runtime_acceptance_uses_manual_gold": False,
+        "goldset_role": "OFFLINE_EVALUATION_ONLY",
+        "goldset_evaluation_available": goldset_evaluation_available,
+        "offline_goldset_evaluation_path": str(targets[5]),
         "promotion_allowed": False,
         "promotion_rule": "사람 검수 승인 전에는 수기 기준선을 덮어쓰지 않음",
     }
     targets[4].write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    targets[5].write_text(
+        json.dumps(
+            {
+                "generated_at": summary["generated_at"],
+                "goldset_role": "OFFLINE_EVALUATION_ONLY",
+                "goldset_evaluation_available": goldset_evaluation_available,
+                "affects_runtime_acceptance_recovery_or_retry": False,
+                "field_accuracy": field_accuracy,
+                "field_accuracy_excluding_evidence_collisions": (field_accuracy_without_collisions),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     return LlmHarnessResult(summary=summary, output_paths=targets)
