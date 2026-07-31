@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import httpx
 import pandas as pd
@@ -95,6 +96,27 @@ def test_request_builder_keeps_strict_schema_for_future_llm_rows() -> None:
     assert requests[0]["body"]["text"]["format"]["strict"] is True
     user_payload = json.loads(requests[0]["body"]["input"][1]["content"])
     assert user_payload["request_id"] == requests[0]["custom_id"]
+
+
+def test_masked_request_keeps_evidence_but_hides_local_value_candidates() -> None:
+    rows = _candidate_rows().iloc[[0]].copy()
+    rows["automation_route"] = "LLM_CANDIDATE"
+    rows["pdf_report_indicator_name"] = "성과지표 A"
+    rows["pdf_report_program_name"] = "프로그램 A"
+    requests, _ = lh.build_request_entries(
+        rows,
+        model="gpt-test",
+        prompt_version="p1",
+        schema_version="s1",
+        max_evidence_chars=1200,
+        max_output_tokens=500,
+        expose_local_candidates=False,
+    )
+    record = json.loads(requests[0]["body"]["input"][1]["content"])["records"][0]
+
+    assert record["indicator_hint"] == "성과지표 A"
+    assert record["source_evidence"][1]["text"] == "성과지표 A 목표 10 실적 9 달성률 90%"
+    assert not {"local_pdf_candidates", "local_status", "local_review_reason"} & set(record)
 
 
 def test_cost_gate_uses_maximum_output_budget() -> None:
@@ -220,6 +242,89 @@ def test_batch_submission_is_disabled_by_default(tmp_path) -> None:
     )
     with pytest.raises(lh.LlmHarnessError, match="false"):
         lh.submit_batch(tmp_path, max_approved_cost_usd=1)
+
+
+def test_mss_masked_pilot_is_stratified_and_upload_file_has_no_gold_keys(tmp_path) -> None:
+    result = lh.prepare_mss_masked_goldset_pilot(
+        Path("."),
+        output_dir=tmp_path / "mss_masked_pilot",
+        overwrite=True,
+    )
+    summary = result.summary
+    requests = [
+        json.loads(line)
+        for line in (tmp_path / "mss_masked_pilot/pilot_requests.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    candidates = pd.read_csv(tmp_path / "mss_masked_pilot/candidate_rows.csv")
+
+    assert summary["source_rows"] == 63
+    assert summary["eligible_rows"] == 59
+    assert summary["request_count"] == len(requests) == 12
+    assert summary["request_row_count"] == len(candidates) == 34
+    assert set(summary["year_counts"]) == {"2022", "2023", "2024"}
+    assert summary["api_called"] is False
+    assert summary["api_execution_allowed"] is False
+    assert summary["masked_input_contract"]["full_row_discovery_tested"] is False
+    assert "manual_actual_value_raw" in candidates
+    for request in requests:
+        records = json.loads(request["body"]["input"][1]["content"])["records"]
+        assert all(
+            not {"local_pdf_candidates", "local_status", "local_review_reason"} & set(record)
+            for record in records
+        )
+
+
+def test_batch_submission_accepts_explicit_masked_pilot_directory(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "configs"
+    harness_dir = tmp_path / "masked"
+    config_dir.mkdir()
+    harness_dir.mkdir()
+    (config_dir / "llm.yaml").write_text(
+        """llm:
+  api_execution_allowed: true
+  api_key_env: OPENAI_API_KEY
+  request_timeout_seconds: 30
+harness:
+  max_build_qa_cost_usd: 80
+""",
+        encoding="utf-8",
+    )
+    (harness_dir / "harness_summary.json").write_text(
+        json.dumps(
+            {
+                "api_ready": True,
+                "model": "gpt-test",
+                "pilot_cost": {"models": {"gpt-test": {"batch_usd_estimate": 0.01}}},
+                "cost": {"models": {"gpt-test": {"batch_usd_estimate": 0.01}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (harness_dir / "pilot_requests.jsonl").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/files":
+            return httpx.Response(200, json={"id": "file_test"})
+        if request.url.path == "/v1/batches":
+            return httpx.Response(200, json={"id": "batch_test", "status": "validating"})
+        return httpx.Response(404)
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.openai.com",
+    ) as client:
+        result = lh.submit_batch(
+            tmp_path,
+            max_approved_cost_usd=1,
+            harness_dir=harness_dir,
+            client=client,
+        )
+
+    assert result["input_file_id"] == "file_test"
+    assert (harness_dir / "batch_state_pilot.json").is_file()
 
 
 def test_fetch_batch_downloads_completed_output_once(tmp_path, monkeypatch) -> None:

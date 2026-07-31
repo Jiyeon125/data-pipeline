@@ -473,6 +473,22 @@ fiscal-performance prepare-llm-harness --root . --overwrite
 fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --overwrite
 ```
 
+중기부 가린 골드셋 파일럿도 로컬에서 먼저 준비합니다.
+
+```powershell
+fiscal-performance prepare-mss-llm-pilot --root . --overwrite
+```
+
+이 명령은 `data/interim/llm_harness/mss_masked_pilot/`에 다음을 만듭니다.
+
+- `candidate_rows.csv`: 비교용 수기 정답. 로컬 전용이며 API 요청에 포함하지 않음
+- `pilot_requests.jsonl`: 원문 파일·페이지·근거문장과 지표 위치만 포함한 12개 요청
+- `request_index.csv`, `harness_summary.json`: 요청 추적과 비용 승인 근거
+
+현재 파일럿은 **이미 찾은 지표의 값 구조화**를 검증합니다. PDF에서 지표 행을
+처음부터 발견하는 능력은 검증하지 않으므로, 이 결과만으로 전체 자동 파싱 성능을
+주장하지 않습니다.
+
 - 전체 424행 중 출처·페이지·원문 근거 승인 346행, 기존 사람 검수 확정 49행
 - 출처나 지표 대응을 사람이 봐야 하는 29행은 `human_review_queue.xlsx`로 분리
 - 현재 수기 기준선은 LLM 요청 0건이며 외부 API 호출 비용도 0달러
@@ -485,6 +501,20 @@ fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . --overwrite
 - `configs/llm.yaml`의 외부 호출 허용값은 기본 `false`
 - 실제 제출 후 `fiscal-performance fetch-llm-batch --root .`로 상태와 결과를
   한 번씩 확인하며 자동 폴링하지 않음
+
+사용자가 실행별 비용 상한을 승인한 뒤에만 잠금을 풀고 다음처럼 제출합니다.
+
+```powershell
+fiscal-performance submit-llm-batch --root . `
+  --harness-dir data/interim/llm_harness/mss_masked_pilot `
+  --request-set pilot --max-approved-cost-usd 0.02
+
+fiscal-performance fetch-llm-batch --root . `
+  --harness-dir data/interim/llm_harness/mss_masked_pilot
+
+fiscal-performance validate-llm-responses <RESPONSES_JSONL> --root . `
+  --harness-dir data/interim/llm_harness/mss_masked_pilot --overwrite
+```
 
 ## UNKNOWN 예산 80% 커버리지 사람 검수
 

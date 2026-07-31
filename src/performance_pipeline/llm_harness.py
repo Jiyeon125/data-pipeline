@@ -231,29 +231,31 @@ def _bundle_key(row: pd.Series) -> tuple[Any, ...]:
     )
 
 
-def _record_input(row: pd.Series, max_evidence_chars: int) -> dict[str, Any]:
+def _record_input(
+    row: pd.Series,
+    max_evidence_chars: int,
+    *,
+    expose_local_candidates: bool = True,
+) -> dict[str, Any]:
     plan_text = _normalize_grounding_text(row.get("plan_source_text"))[:max_evidence_chars]
     report_text = _normalize_grounding_text(row.get("report_source_text"))[:max_evidence_chars]
-    return {
+    record = {
         "source_indicator_id": str(row["source_indicator_id"]),
         "ministry_code": str(row["ministry_code"]).zfill(3),
         "fiscal_year": int(row["fiscal_year"]),
-        "program_hint": _clean(row.get("performance_program_name")),
-        "indicator_hint": _clean(row.get("manual_indicator_name_report"))
-        or _clean(row.get("manual_indicator_name_plan")),
-        "local_pdf_candidates": {
-            "indicator_name": _clean(row.get("pdf_report_indicator_name"))
-            or _clean(row.get("pdf_plan_indicator_name")),
-            "unit": _clean(row.get("pdf_report_unit")) or _clean(row.get("pdf_plan_unit")),
-            "plan_target_raw": _clean(row.get("pdf_plan_target_raw")),
-            "change_target_before_raw": _clean(row.get("documented_change_target_before_raw")),
-            "change_target_after_raw": _clean(row.get("documented_change_target_after_raw")),
-            "report_target_raw": _clean(row.get("pdf_report_target_raw")),
-            "actual_value_raw": _clean(row.get("pdf_report_actual_raw")),
-            "official_achievement_rate_raw": _clean(
-                row.get("pdf_report_official_achievement_rate_raw")
-            ),
-        },
+        "program_hint": (
+            _clean(row.get("performance_program_name"))
+            if expose_local_candidates
+            else _clean(row.get("pdf_report_program_name"))
+            or _clean(row.get("pdf_plan_program_name"))
+        ),
+        "indicator_hint": (
+            _clean(row.get("manual_indicator_name_report"))
+            or _clean(row.get("manual_indicator_name_plan"))
+            if expose_local_candidates
+            else _clean(row.get("pdf_report_indicator_name"))
+            or _clean(row.get("pdf_plan_indicator_name"))
+        ),
         "source_evidence": [
             {
                 "document_type": "PLAN",
@@ -285,9 +287,24 @@ def _record_input(row: pd.Series, max_evidence_chars: int) -> dict[str, Any]:
                 or None,
             },
         ],
-        "local_status": str(row["overall_reconciliation_status"]),
-        "local_review_reason": _clean(row.get("review_reason")),
     }
+    if expose_local_candidates:
+        record["local_pdf_candidates"] = {
+            "indicator_name": _clean(row.get("pdf_report_indicator_name"))
+            or _clean(row.get("pdf_plan_indicator_name")),
+            "unit": _clean(row.get("pdf_report_unit")) or _clean(row.get("pdf_plan_unit")),
+            "plan_target_raw": _clean(row.get("pdf_plan_target_raw")),
+            "change_target_before_raw": _clean(row.get("documented_change_target_before_raw")),
+            "change_target_after_raw": _clean(row.get("documented_change_target_after_raw")),
+            "report_target_raw": _clean(row.get("pdf_report_target_raw")),
+            "actual_value_raw": _clean(row.get("pdf_report_actual_raw")),
+            "official_achievement_rate_raw": _clean(
+                row.get("pdf_report_official_achievement_rate_raw")
+            ),
+        }
+        record["local_status"] = str(row["overall_reconciliation_status"])
+        record["local_review_reason"] = _clean(row.get("review_reason"))
+    return record
 
 
 def build_request_entries(
@@ -299,14 +316,23 @@ def build_request_entries(
     max_evidence_chars: int,
     max_output_tokens: int,
     reasoning_effort: str = "low",
+    expose_local_candidates: bool = True,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame]:
     rows = candidates.loc[candidates["automation_route"].eq("LLM_CANDIDATE")].copy()
     rows["bundle_key"] = rows.apply(_bundle_key, axis=1)
     requests: list[dict[str, Any]] = []
     index_rows: list[dict[str, Any]] = []
     for _, group in rows.groupby("bundle_key", sort=True, dropna=False):
+        local_status_by_id = {
+            str(row["source_indicator_id"]): str(row["overall_reconciliation_status"])
+            for _, row in group.iterrows()
+        }
         records = [
-            _record_input(row, max_evidence_chars)
+            _record_input(
+                row,
+                max_evidence_chars,
+                expose_local_candidates=expose_local_candidates,
+            )
             for _, row in group.sort_values("source_indicator_id").iterrows()
         ]
         content = {
@@ -352,7 +378,7 @@ def build_request_entries(
                     "source_indicator_id": record["source_indicator_id"],
                     "ministry_code": record["ministry_code"],
                     "fiscal_year": record["fiscal_year"],
-                    "local_status": record["local_status"],
+                    "local_status": local_status_by_id[record["source_indicator_id"]],
                     "input_token_estimate": estimate_tokens(serialized),
                     "cache_key": _sha256_bytes(request_seed),
                     "model": model,
@@ -591,6 +617,159 @@ def prepare_llm_harness(
         "source_sha256": {str(path.relative_to(root)): _sha256_file(path) for path in source_paths},
     }
     targets[8].write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return LlmHarnessResult(summary=summary, output_paths=targets)
+
+
+def prepare_mss_masked_goldset_pilot(
+    root: Path,
+    *,
+    model: str | None = None,
+    output_dir: Path | None = None,
+    overwrite: bool = False,
+) -> LlmHarnessResult:
+    """중기부 수기 정답값을 요청에서 가린 1차 필드 추출 파일럿을 준비합니다."""
+    root = root.resolve()
+    _load_project_environment(root)
+    config = load_llm_config(root / "configs/llm.yaml")
+    selected_model = (
+        model
+        or os.getenv(str(config["llm"]["model_env"]))
+        or str(config["llm"].get("default_model") or MODEL_PLACEHOLDER)
+    )
+    output_dir = output_dir or root / "data/interim/llm_harness/mss_masked_pilot"
+    targets = (
+        output_dir / "candidate_rows.csv",
+        output_dir / "request_index.csv",
+        output_dir / "batch_requests.jsonl",
+        output_dir / "pilot_requests.jsonl",
+        output_dir / "remaining_requests.jsonl",
+        output_dir / "performance_indicator_schema.json",
+        output_dir / "harness_summary.json",
+    )
+    existing = [path for path in targets if path.exists()]
+    if existing and not overwrite:
+        raise FileExistsError(", ".join(str(path) for path in existing))
+
+    source_path = (
+        root
+        / "data/processed/performance/pdf_reconciliation/mss_performance_pdf_reconciliation.parquet"
+    )
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    source_rows = pd.read_parquet(source_path)
+    source_rows["ministry_code"] = source_rows["ministry_code"].astype("string").str.zfill(3)
+    if source_rows["source_indicator_id"].duplicated().any():
+        raise LlmHarnessError("중기부 PDF 대조표의 source_indicator_id가 중복됩니다.")
+
+    local_hint = source_rows["pdf_report_indicator_name"].fillna(
+        source_rows["pdf_plan_indicator_name"]
+    )
+    evidence_ready = source_rows["plan_source_text"].astype("string").str.strip().ne("").fillna(
+        False
+    ) & source_rows["report_source_text"].astype("string").str.strip().ne("").fillna(False)
+    label_ready = (
+        source_rows[
+            [
+                "manual_planned_target_raw",
+                "manual_actual_value_raw",
+                "manual_official_achievement_rate_raw",
+            ]
+        ]
+        .notna()
+        .any(axis=1)
+    )
+    eligible = source_rows.loc[
+        local_hint.astype("string").str.strip().ne("").fillna(False) & evidence_ready & label_ready
+    ].copy()
+    eligible["automation_route"] = "LLM_CANDIDATE"
+
+    harness = config["harness"]
+    requests, request_index = build_request_entries(
+        eligible,
+        model=selected_model,
+        prompt_version=str(config["llm"]["prompt_version"]),
+        schema_version=str(config["llm"]["schema_version"]),
+        max_evidence_chars=int(harness["max_evidence_chars"]),
+        max_output_tokens=int(harness["max_output_tokens"]),
+        reasoning_effort=str(config["llm"].get("reasoning_effort", "low")),
+        expose_local_candidates=False,
+    )
+    pilot_ids = _pilot_request_ids(request_index, int(harness["pilot_request_limit"]))
+    pilot_requests = [request for request in requests if request["custom_id"] in pilot_ids]
+    pilot_index = request_index.loc[request_index["request_id"].isin(pilot_ids)].copy()
+    pilot_source_ids = set(pilot_index["source_indicator_id"].astype(str))
+    pilot_candidates = eligible.loc[
+        eligible["source_indicator_id"].astype(str).isin(pilot_source_ids)
+    ].copy()
+    forbidden_request_keys = {
+        "local_pdf_candidates",
+        "local_status",
+        "local_review_reason",
+    }
+    for request in pilot_requests:
+        content = json.loads(request["body"]["input"][1]["content"])
+        if any(forbidden_request_keys & set(record) for record in content["records"]):
+            raise LlmHarnessError("가린 골드셋 요청에 로컬 정답 후보가 포함됐습니다.")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pilot_candidates.to_csv(targets[0], index=False, encoding="utf-8-sig")
+    pilot_index.to_csv(targets[1], index=False, encoding="utf-8-sig")
+    request_text = "".join(_json_text(request) + "\n" for request in pilot_requests)
+    targets[2].write_text(request_text, encoding="utf-8")
+    targets[3].write_text(request_text, encoding="utf-8")
+    targets[4].write_text("", encoding="utf-8")
+    targets[5].write_text(
+        json.dumps(OUTPUT_SCHEMA, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    cost = _cost_scenarios(pilot_requests, config)
+    summary = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "status": "READY_FOR_API_APPROVAL",
+        "pilot_type": "KNOWN_INDICATOR_MASKED_VALUE_EXTRACTION",
+        "api_called": False,
+        "api_ready": bool(pilot_requests) and selected_model != MODEL_PLACEHOLDER,
+        "api_execution_allowed": bool(config["llm"].get("api_execution_allowed", False)),
+        "model": selected_model,
+        "reasoning_effort": str(config["llm"].get("reasoning_effort", "low")),
+        "source_rows": len(source_rows),
+        "eligible_rows": len(eligible),
+        "eligible_request_count": len(requests),
+        "request_count": len(pilot_requests),
+        "request_row_count": len(pilot_index),
+        "year_counts": {
+            str(key): int(value)
+            for key, value in pilot_candidates["fiscal_year"].value_counts().sort_index().items()
+        },
+        "local_status_counts": {
+            str(key): int(value)
+            for key, value in pilot_candidates["overall_reconciliation_status"]
+            .value_counts()
+            .items()
+        },
+        "masked_input_contract": {
+            "manual_label_keys_in_request": False,
+            "local_value_candidates_in_request": False,
+            "local_pdf_indicator_locator_exposed": True,
+            "source_evidence_exposed": True,
+            "full_row_discovery_tested": False,
+        },
+        "cost": cost,
+        "pilot_cost": cost,
+        "validation_contract": {
+            "strict_json_schema": True,
+            "source_indicator_id_exact": True,
+            "evidence_file_page_allowlist": True,
+            "evidence_quote_grounding": True,
+            "field_accuracy_against_local_goldset": True,
+            "promotion_allowed_before_human_review": False,
+        },
+        "source_sha256": {str(source_path.relative_to(root)): _sha256_file(source_path)},
+    }
+    targets[6].write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -947,6 +1126,7 @@ def submit_batch(
     *,
     max_approved_cost_usd: float,
     request_set: str = "pilot",
+    harness_dir: Path | None = None,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     """명시적 설정·키·비용승인이 모두 있을 때만 Batch를 제출합니다."""
@@ -958,7 +1138,9 @@ def submit_batch(
     key = os.getenv(str(config["llm"]["api_key_env"]))
     if not key:
         raise LlmHarnessError("OpenAI API 키 환경변수가 없습니다.")
-    harness_dir = root / "data/interim/llm_harness"
+    harness_dir = harness_dir or root / "data/interim/llm_harness"
+    if not harness_dir.is_absolute():
+        harness_dir = root / harness_dir
     summary = json.loads((harness_dir / "harness_summary.json").read_text(encoding="utf-8"))
     if not summary["api_ready"]:
         raise LlmHarnessError("모델 선택 후 하네스를 다시 생성해야 합니다.")
@@ -1034,6 +1216,7 @@ def fetch_batch_results(
     root: Path,
     *,
     request_set: str = "pilot",
+    harness_dir: Path | None = None,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
     """한 번 상태를 확인하고 완료된 결과·오류 파일만 로컬에 저장합니다."""
@@ -1043,7 +1226,9 @@ def fetch_batch_results(
     key = os.getenv(str(config["llm"]["api_key_env"]))
     if not key:
         raise LlmHarnessError("OpenAI API 키 환경변수가 없습니다.")
-    harness_dir = root / "data/interim/llm_harness"
+    harness_dir = harness_dir or root / "data/interim/llm_harness"
+    if not harness_dir.is_absolute():
+        harness_dir = root / harness_dir
     if request_set not in {"pilot", "remaining"}:
         raise LlmHarnessError("request_set은 pilot 또는 remaining이어야 합니다.")
     state_path = harness_dir / f"batch_state_{request_set}.json"

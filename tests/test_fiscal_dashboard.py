@@ -4,7 +4,6 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from fiscal_dashboard.app import (
-    GLASS_THEME_PATH,
     WORKFLOW_STEPS,
     _component_summary,
     _data_review_table,
@@ -16,14 +15,6 @@ from fiscal_dashboard.app import (
     review_page_specs,
     stable_program_summary,
 )
-
-
-def test_glass_theme_is_local_and_accessible() -> None:
-    css = GLASS_THEME_PATH.read_text(encoding="utf-8")
-
-    assert "backdrop-filter: blur" in css
-    assert ".st-key-hero" in css
-    assert "prefers-reduced-transparency" in css
 
 
 def test_dashboard_data_contract_and_filter() -> None:

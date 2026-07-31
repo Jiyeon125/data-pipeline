@@ -16,6 +16,7 @@ from .llm_harness import (
     LlmHarnessError,
     fetch_batch_results,
     prepare_llm_harness,
+    prepare_mss_masked_goldset_pilot,
     submit_batch,
     validate_llm_responses,
 )
@@ -278,6 +279,7 @@ def validate_document_llm_responses(
     responses_path: Path = typer.Argument(help="Batch 응답 JSONL 또는 로컬 fixture"),
     root: Path = typer.Option(Path("."), help="프로젝트 루트"),
     request_set: str = typer.Option("pilot", help="pilot, remaining 또는 all"),
+    harness_dir: Path | None = typer.Option(None, help="기본값 외 별도 하네스 디렉터리"),
     overwrite: bool = typer.Option(False, help="기존 검증 산출물 덮어쓰기"),
 ) -> None:
     """API 호출 없이 저장된 LLM 응답의 스키마·근거·골드셋 일치를 검증합니다."""
@@ -286,10 +288,28 @@ def validate_document_llm_responses(
             root,
             responses_path,
             request_set=request_set,
+            harness_dir=harness_dir,
             overwrite=overwrite,
         )
     except (LlmHarnessError, FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
         typer.echo(f"LLM 응답 검증 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("prepare-mss-llm-pilot")
+def prepare_mss_llm_pilot(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    model: str | None = typer.Option(None, help="생략하면 환경변수 또는 Luna 기본값"),
+    overwrite: bool = typer.Option(False, help="기존 파일럿 산출물 덮어쓰기"),
+) -> None:
+    """중기부 원문 근거만 보내는 가린 골드셋 파일럿을 준비합니다."""
+    try:
+        result = prepare_mss_masked_goldset_pilot(root, model=model, overwrite=overwrite)
+    except (LlmHarnessError, FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"중기부 LLM 파일럿 준비 실패: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
     for path in result.output_paths:
@@ -308,6 +328,7 @@ def submit_document_llm_batch(
         help="pilot(기본 12개) 또는 remaining(파일럿 통과 뒤 나머지)",
     ),
     root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    harness_dir: Path | None = typer.Option(None, help="기본값 외 별도 하네스 디렉터리"),
 ) -> None:
     """설정·API 키·모델·비용승인이 모두 있을 때만 OpenAI Batch를 제출합니다."""
     try:
@@ -315,6 +336,7 @@ def submit_document_llm_batch(
             root,
             max_approved_cost_usd=max_approved_cost_usd,
             request_set=request_set,
+            harness_dir=harness_dir,
         )
     except (LlmHarnessError, httpx.HTTPError, FileNotFoundError, OSError, ValueError) as exc:
         typer.echo(f"LLM Batch 제출 실패: {exc}", err=True)
@@ -326,10 +348,11 @@ def submit_document_llm_batch(
 def fetch_document_llm_batch(
     root: Path = typer.Option(Path("."), help="프로젝트 루트"),
     request_set: str = typer.Option("pilot", help="pilot 또는 remaining"),
+    harness_dir: Path | None = typer.Option(None, help="기본값 외 별도 하네스 디렉터리"),
 ) -> None:
     """Batch 상태를 한 번 확인하고 완료된 응답·오류 파일을 내려받습니다."""
     try:
-        result = fetch_batch_results(root, request_set=request_set)
+        result = fetch_batch_results(root, request_set=request_set, harness_dir=harness_dir)
     except (
         LlmHarnessError,
         httpx.HTTPError,
