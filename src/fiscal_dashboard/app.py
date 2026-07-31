@@ -87,6 +87,28 @@ REVIEW_STATUS_LABELS = {
     "CORRECTED": "수정 필요",
     "NOT_RESOLVABLE": "현재 문서로 확인 불가",
 }
+MANUAL_REVIEW_REQUIRED_STATUSES = {
+    "VALUE_MISMATCH",
+    "AMBIGUOUS",
+    "PDF_MISSING_MANUAL_PRESENT",
+    "OCR_REQUIRED",
+}
+REVIEW_PRIORITY_ORDER = {
+    "VALUE_MISMATCH": 1,
+    "AMBIGUOUS": 2,
+    "PDF_MISSING_MANUAL_PRESENT": 3,
+    "OCR_REQUIRED": 4,
+    "MATCH_AFTER_CHANGE": 5,
+    "EXACT_MATCH": 6,
+}
+REVIEW_STATUS_GUIDANCE = {
+    "VALUE_MISMATCH": "수기값과 PDF값이 다릅니다. 계획·보고·변경표를 모두 보고 맞는 값을 메모에 적으세요.",
+    "AMBIGUOUS": "같은 지표명이 여러 프로그램에 있습니다. 프로그램명과 표 위치가 같은 행인지 확인하세요.",
+    "PDF_MISSING_MANUAL_PRESENT": "수기값은 있지만 자동 추출 근거가 없습니다. 원문에서 직접 찾고, 없으면 확인 불가로 남기세요.",
+    "OCR_REQUIRED": "텍스트 추출을 믿지 말고 렌더링된 페이지의 인쇄값을 직접 읽으세요.",
+    "MATCH_AFTER_CHANGE": "별첨6의 변경 전·후 값과 사유가 보고서 값에 이어지는지 표본 확인하세요.",
+    "EXACT_MATCH": "자동 대조는 일치했습니다. 필수 검수 대상은 아니며 발표 사례일 때만 표본 확인하세요.",
+}
 
 
 class DashboardDataError(ValueError):
@@ -215,7 +237,14 @@ def load_pdf_review_queue(root: Path = PROJECT_ROOT) -> pd.DataFrame:
     relevant = confirmations.loc[
         confirmations["source_indicator_id"].isin(queue["source_indicator_id"])
     ]
-    return apply_manual_review_confirmations(queue, relevant)
+    queue = apply_manual_review_confirmations(queue, relevant)
+    queue["manual_review_required"] = queue["overall_reconciliation_status"].isin(
+        MANUAL_REVIEW_REQUIRED_STATUSES
+    )
+    queue["review_priority_order"] = (
+        queue["overall_reconciliation_status"].map(REVIEW_PRIORITY_ORDER).fillna(99)
+    )
+    return queue
 
 
 @st.cache_data
@@ -1325,11 +1354,21 @@ def main() -> None:
                     )
 
     elif workflow_step == WORKFLOW_STEPS[4]:
-        st.subheader("발표에 쓸 성과지표만 PDF 원문으로 확인합니다")
+        st.subheader("사람 확인이 필요한 성과지표부터 PDF 원문으로 검수합니다")
         st.caption(
-            "수기값과 PDF값을 나란히 보고 검수 결과를 별도 감사 CSV에 저장합니다. "
-            "원본 PDF와 자동 추출값은 덮어쓰지 않습니다."
+            "기본 화면은 자동 강근거 160행을 제외한 필수 검수 201행입니다. "
+            "수기값과 PDF값을 나란히 보고 결과를 별도 감사 CSV에 저장합니다."
         )
+        with st.expander("검수 전에 30초만 읽어주세요", icon=":material/help:"):
+            st.markdown(
+                """
+                1. **불일치·모호·PDF 근거 누락 27행**을 먼저 확인합니다.
+                2. **OCR 필요 174행**은 추출 텍스트가 아니라 페이지 이미지를 직접 읽습니다.
+                3. `CORRECTED`를 고르면 메모에 **파일명·쪽·정확한 값**을 반드시 적습니다.
+                4. `CORRECTED`는 원본값을 자동 수정하지 않습니다. 수정 오버레이 반영 전에는 순위 근거로 확정하지 않습니다.
+                5. 전체 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
+                """
+            )
         try:
             queue = load_pdf_review_queue()
         except (FileNotFoundError, OSError, ValueError) as exc:
@@ -1355,10 +1394,18 @@ def main() -> None:
                     icon=":material/filter_alt_off:",
                     on_click=_clear_review_focus,
                 )
+            else:
+                show_auto_strong = st.toggle(
+                    "자동 강근거 160행도 표본 검수 대상으로 보기",
+                    value=False,
+                    help="EXACT_MATCH와 MATCH_AFTER_CHANGE까지 포함합니다.",
+                )
+                if not show_auto_strong:
+                    review_base = review_base.loc[review_base["manual_review_required"]].copy()
 
             completed = int(review_base["review_status"].isin(["CONFIRMED", "CORRECTED"]).sum())
             with st.container(horizontal=True):
-                st.metric("검수 대상", f"{len(review_base):,}", border=True)
+                st.metric("현재 검수 대상", f"{len(review_base):,}", border=True)
                 st.metric("사람 검수 완료", f"{completed:,}", border=True)
                 st.metric(
                     "OCR 확인 필요",
@@ -1385,7 +1432,7 @@ def main() -> None:
                     )
                 ]
             review_queue = review_queue.sort_values(
-                ["overall_reconciliation_status", "ministry_code", "fiscal_year"]
+                ["review_priority_order", "ministry_code", "fiscal_year"]
             )
             if review_queue.empty:
                 st.success("현재 필터에서 남은 검수행이 없습니다.")
@@ -1411,6 +1458,14 @@ def main() -> None:
                     str(review_row.get("review_instruction") or "근거 페이지 안내 없음"),
                     icon=":material/find_in_page:",
                 )
+                guidance = REVIEW_STATUS_GUIDANCE.get(
+                    str(review_row["overall_reconciliation_status"]),
+                    "자동 판정과 원문 근거를 함께 확인하세요.",
+                )
+                if bool(review_row["manual_review_required"]):
+                    st.warning(guidance, icon=":material/priority_high:")
+                else:
+                    st.info(guidance, icon=":material/info:")
                 comparison = pd.DataFrame(
                     {
                         "확인할 값": ["지표명", "계획 목표", "보고 목표", "실적", "공식 달성률"],
@@ -1465,7 +1520,10 @@ def main() -> None:
                     )
                     review_note = st.text_area(
                         "검수 메모",
-                        placeholder="확인한 파일·쪽·값과 수정 이유를 적어 주세요.",
+                        placeholder=(
+                            "[파일·쪽] ... / [확인값] 계획목표=, 보고목표=, 실적=, "
+                            "달성률= / [판정근거] ..."
+                        ),
                     )
                     submitted = st.form_submit_button(
                         "저장하고 다음 지표 보기",

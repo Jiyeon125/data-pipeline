@@ -444,6 +444,9 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 필터: 부처, 후보 분석 범위, 회계연도, 회계유형, 점검단계
 - 후보 연결: 선택 프로그램에서 해당 성과지표 PDF 검수 화면으로 바로 이동
 - 원문 검수: 수기값·PDF값·근거 페이지 이미지와 사람 검수 상태 연속 저장
+- 원문 검수 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
+- 우선순위 정책 초안: `docs/PRIORITY_POLICY_DECISION_DRAFT.md`
+- 기본 원문 검수 큐: 자동 강근거 160행을 제외한 필수 201행
 - 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
 - 다운로드: 현재 필터의 후보표 CSV
 - 입력: `data/analytics/three_ministry_priority_scenarios/`의 검증 완료 산출물
