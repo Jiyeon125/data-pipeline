@@ -81,8 +81,13 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env
 ```
 
-`.env`에 발급받은 `OPEN_FISCAL_API_KEY`를 입력합니다. 인증키는 저장소에
-커밋하지 않습니다.
+`.env`에 필요한 인증키를 입력합니다. OpenAI 파일럿은 `OPENAI_API_KEY`,
+열린재정 수집은 `OPEN_FISCAL_API_KEY`를 사용합니다. 인증키는 저장소에
+커밋하지 않습니다. `OPENAI_MODEL`을 생략하면 `configs/llm.yaml`의
+`gpt-5.6-luna`가 사용됩니다.
+
+OpenAI 키를 넣는 것만으로 외부 호출되지는 않습니다. 파일럿 요청을 확인한 뒤
+`configs/llm.yaml`의 `api_execution_allowed`를 명시적으로 승인해야 합니다.
 
 ## 월별 지출운용상황 일괄 수집
 

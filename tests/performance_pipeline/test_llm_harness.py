@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import httpx
 import pandas as pd
@@ -112,6 +113,20 @@ def test_cost_gate_uses_maximum_output_budget() -> None:
     assert luna["maximum_output_tokens"] == 1800
     assert luna["batch_usd_estimate"] > luna["expected_batch_usd_estimate"]
     assert result["cost_gate_basis"] == "maximum_output_tokens"
+
+
+def test_project_env_loads_openai_key_without_overriding_shell(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=from-dotenv\nOPENAI_MODEL=from-dotenv-model\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_MODEL", "from-shell")
+
+    lh._load_project_environment(tmp_path)
+
+    assert os.environ["OPENAI_API_KEY"] == "from-dotenv"
+    assert os.environ["OPENAI_MODEL"] == "from-shell"
 
 
 def test_pilot_selection_round_robins_ministries() -> None:

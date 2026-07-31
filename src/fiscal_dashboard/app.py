@@ -21,6 +21,7 @@ from performance_pipeline.pdf_reconciliation import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+GLASS_THEME_PATH = Path(__file__).with_name("glass.css")
 DATA_DIR = Path("data/analytics/multi_ministry_priority_scenarios")
 CASE_REVIEW_DIR = Path("data/analytics/priority_case_evidence_review")
 MINISTRY_LABELS = {
@@ -996,11 +997,13 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    st.title("재정사업 점검 작업대")
-    st.caption(
-        "고용노동부·보건복지부·중소벤처기업부·과학기술정보통신부 2022–2024 파일럿 · "
-        "업무 현황 → 점검대기열 → 사업 상세 → 비교·원문 검수 순서로 진행합니다."
-    )
+    st.html(GLASS_THEME_PATH)
+    with st.container(key="hero", border=True):
+        st.title("재정사업 점검 작업대")
+        st.caption(
+            "고용노동부·보건복지부·중소벤처기업부·과학기술정보통신부 2022–2024 파일럿 · "
+            "업무 현황 → 점검대기열 → 사업 상세 → 비교·원문 검수 순서로 진행합니다."
+        )
 
     try:
         data = load_dashboard_data()
@@ -1081,26 +1084,27 @@ def main() -> None:
         filtered_workbench = filtered_workbench.loc[
             filtered_workbench["review_intensity"].eq(WORK_SCOPE_TO_LANE[scope])
         ]
-    workflow_step = st.segmented_control(
-        "작업 단계",
-        WORKFLOW_STEPS,
-        default=WORKFLOW_STEPS[0],
-        key="workflow_step",
-        width="stretch",
-    )
-    comparison_mode = None
-    if workflow_step == WORKFLOW_STEPS[3]:
-        comparison_mode = st.segmented_control(
-            "검수 방식",
-            ["대표 사례", "원문 검수", "고급 민감도"],
-            default="대표 사례",
-            key="comparison_mode",
+    with st.container(key="workflow-nav"):
+        workflow_step = st.segmented_control(
+            "작업 단계",
+            WORKFLOW_STEPS,
+            default=WORKFLOW_STEPS[0],
+            key="workflow_step",
+            width="stretch",
         )
+        comparison_mode = None
+        if workflow_step == WORKFLOW_STEPS[3]:
+            comparison_mode = st.segmented_control(
+                "검수 방식",
+                ["대표 사례", "원문 검수", "고급 민감도"],
+                default="대표 사례",
+                key="comparison_mode",
+            )
     if st.session_state.pop("review_saved", False):
         st.toast("검수 결과를 저장했습니다.", icon=":material/check_circle:")
 
     st.caption(f"현재 필터: {len(filtered_all):,}행 · {_program_count(filtered_all):,}개 프로그램")
-    with st.container(horizontal=True):
+    with st.container(horizontal=True, key="kpi-strip"):
         st.metric("전체 업무행", f"{len(filtered_all):,}", border=True)
         st.metric(
             "반복·복수 신호",

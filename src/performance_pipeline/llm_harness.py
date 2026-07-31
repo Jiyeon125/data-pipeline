@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pandas as pd
 import yaml
+from dotenv import load_dotenv
 
 LOCAL_CONFIRMED_STATUSES = {"EXACT_MATCH", "MATCH_AFTER_CHANGE"}
 LLM_CANDIDATE_STATUSES = {
@@ -160,6 +161,11 @@ def load_llm_config(path: Path) -> dict[str, Any]:
     if not isinstance(payload.get("llm"), dict) or not isinstance(payload.get("harness"), dict):
         raise LlmHarnessError("configs/llm.yaml에 llm과 harness 설정이 필요합니다.")
     return payload
+
+
+def _load_project_environment(root: Path) -> None:
+    """저장소 `.env`를 읽되 이미 설정된 셸 환경변수는 덮어쓰지 않습니다."""
+    load_dotenv(root / ".env", override=False)
 
 
 def reconciliation_paths(root: Path) -> tuple[Path, ...]:
@@ -440,6 +446,7 @@ def prepare_llm_harness(
     overwrite: bool = False,
 ) -> LlmHarnessResult:
     root = root.resolve()
+    _load_project_environment(root)
     config_path = root / "configs/llm.yaml"
     config = load_llm_config(config_path)
     model_env = str(config["llm"]["model_env"])
@@ -944,6 +951,7 @@ def submit_batch(
 ) -> dict[str, Any]:
     """명시적 설정·키·비용승인이 모두 있을 때만 Batch를 제출합니다."""
     root = root.resolve()
+    _load_project_environment(root)
     config = load_llm_config(root / "configs/llm.yaml")
     if not bool(config["llm"].get("api_execution_allowed", False)):
         raise LlmHarnessError("configs/llm.yaml의 api_execution_allowed가 false입니다.")
@@ -1030,6 +1038,7 @@ def fetch_batch_results(
 ) -> dict[str, Any]:
     """한 번 상태를 확인하고 완료된 결과·오류 파일만 로컬에 저장합니다."""
     root = root.resolve()
+    _load_project_environment(root)
     config = load_llm_config(root / "configs/llm.yaml")
     key = os.getenv(str(config["llm"]["api_key_env"]))
     if not key:
