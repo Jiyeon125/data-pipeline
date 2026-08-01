@@ -32,6 +32,7 @@ from .pdf_reconciliation import (
     run_ministry_pdf_reconciliation,
     run_pdf_reconciliation,
 )
+from .unattended_pdf import UnattendedPdfError, run_unattended_pdf_pilot
 
 app = typer.Typer(help="수기 검수 성과자료 정규화와 재정 프로그램 매칭")
 
@@ -208,6 +209,30 @@ def reconcile_mss_performance_pdfs(
     typer.echo(json.dumps(result["summary"], ensure_ascii=False, indent=2))
     for name, path in result["output_paths"].items():
         typer.echo(f"- {name}: {path}")
+
+
+@app.command("discover-performance-pdfs")
+def discover_performance_pdfs(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    ministry_codes: str = typer.Option("019,075,102,162", help="쉼표로 구분한 3자리 부처코드"),
+    output_dir: Path | None = typer.Option(None, help="로컬 발견·사후평가 산출물 경로"),
+    overwrite: bool = typer.Option(False, help="기존 산출물 덮어쓰기"),
+) -> None:
+    """수기 지표 목록 없이 전체 성과 PDF를 로컬 탐색하고 사후 골드 평가합니다."""
+    codes = tuple(code.strip().zfill(3) for code in ministry_codes.split(",") if code.strip())
+    try:
+        result = run_unattended_pdf_pilot(
+            root,
+            ministry_codes=codes,
+            output_dir=output_dir,
+            overwrite=overwrite,
+        )
+    except (UnattendedPdfError, FileExistsError, OSError, ValueError) as exc:
+        typer.echo(f"무인 PDF 로컬 탐색 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
 
 
 @app.command("build-mss-analysis-ready")

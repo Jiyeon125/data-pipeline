@@ -68,6 +68,8 @@ data/**
 !data/**/.gitkeep
 !data/README.md
 logs/*
+/.pilot_envs/
+/.pilot_cache/
 
 # Generated artifacts stay local. Only placeholders, documentation, and
 # deliberately curated presentation figures are tracked.

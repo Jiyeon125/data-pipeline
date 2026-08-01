@@ -33,7 +33,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -323,6 +323,55 @@ def normalize_indicator_name(raw: Any) -> str:
     return text
 
 
+PROGRAM_GOAL_RE = re.compile(r"\b([IVX]+)\s*-\s*(\d+)\b", re.IGNORECASE)
+YEAR_HEADER_RE = re.compile(r"['’‘`]\s*(\d{2})\s*년")
+
+
+def normalize_program_goal(raw: Any) -> str | None:
+    text = unicodedata.normalize("NFKC", str(raw or ""))
+    match = PROGRAM_GOAL_RE.search(text)
+    return f"{match.group(1).upper()}-{match.group(2)}" if match else None
+
+
+def _page_program_context(lines: list[str], indicator_line: int) -> tuple[str | None, str | None]:
+    """지표보다 앞선 마지막 프로그램목표 번호와 표의 프로그램명을 읽습니다."""
+    goal_line = None
+    goal_number = None
+    for index in range(indicator_line, -1, -1):
+        candidate = normalize_program_goal(lines[index])
+        if candidate is not None:
+            goal_line = index
+            goal_number = candidate
+            break
+    if goal_line is None:
+        return None, None
+
+    program_parts: list[str] = []
+    for line in lines[goal_line + 1 : indicator_line + 1]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if CIRCLED_DIGIT_RE.search(stripped):
+            prefix = CIRCLED_DIGIT_RE.split(stripped, maxsplit=1)[0].strip()
+            if prefix:
+                program_parts.append(prefix)
+            break
+        program_parts.append(stripped)
+    program_name = re.sub(r"\s+", "", "".join(program_parts)) or None
+    return goal_number, program_name
+
+
+def _contextual_evidence_key(indicator_name: str, program_goal_number: Any) -> str:
+    goal = normalize_program_goal(program_goal_number) or ""
+    return f"{indicator_name}\x1f{goal}" if goal else indicator_name
+
+
+def _value_for_year(values: list[str], years: list[int], fiscal_year: int) -> str | None:
+    if fiscal_year not in years or len(values) != len(years):
+        return None
+    return values[years.index(fiscal_year)]
+
+
 def normalize_numeric_raw(raw: Any) -> str | None:
     if raw is None:
         return None
@@ -496,6 +545,9 @@ class AchievementEvidence:
     rate_values_raw: list[str]
     extraction_method: str = "TEXT"
     source_file: str | None = None
+    program_goal_number: str | None = None
+    program_name: str | None = None
+    value_years: list[int] = field(default_factory=list)
 
     @property
     def target_raw(self) -> str | None:
@@ -508,6 +560,15 @@ class AchievementEvidence:
     @property
     def rate_raw(self) -> str | None:
         return self.rate_values_raw[-1] if self.rate_values_raw else None
+
+    def target_for_year(self, fiscal_year: int) -> str | None:
+        return _value_for_year(self.target_values_raw, self.value_years, fiscal_year)
+
+    def actual_for_year(self, fiscal_year: int) -> str | None:
+        return _value_for_year(self.actual_values_raw, self.value_years, fiscal_year)
+
+    def rate_for_year(self, fiscal_year: int) -> str | None:
+        return _value_for_year(self.rate_values_raw, self.value_years, fiscal_year)
 
 
 def _collect_values_after_label(
@@ -581,6 +642,7 @@ def _extract_text_achievement_evidence(
     source_page: Callable[[int], int],
     require_complete_values: bool,
     extraction_method: str,
+    candidate_program_goals: Mapping[str, set[str]] | None = None,
 ) -> dict[str, AchievementEvidence]:
     norm_lookup = {normalize_indicator_name(name): name for name in candidate_names}
     results: dict[str, AchievementEvidence] = {}
@@ -590,7 +652,7 @@ def _extract_text_achievement_evidence(
         flat_norm, line_map = _normalize_with_line_map(lines)
         matches: list[tuple[int, int, str]] = []
         for norm_name, original_name in norm_lookup.items():
-            if not norm_name or original_name in results:
+            if not norm_name:
                 continue
             cursor = 0
             while (start := flat_norm.find(norm_name, cursor)) != -1:
@@ -600,8 +662,23 @@ def _extract_text_achievement_evidence(
 
         for start, end, original_name in matches:
             line_end = line_map[end - 1] if end > 0 else 0
-            year_count = len(set(re.findall(r"['’]?(\d{2})년", raw_text)))
-            max_values = min(4, max(3, year_count))
+            program_goal_number, program_name = _page_program_context(lines, line_end)
+            expected_goals = {
+                goal
+                for raw_goal in (candidate_program_goals or {}).get(original_name, set())
+                if (goal := normalize_program_goal(raw_goal)) is not None
+            }
+            if len(expected_goals) > 1:
+                if program_goal_number not in expected_goals:
+                    continue
+                result_key = _contextual_evidence_key(original_name, program_goal_number)
+            else:
+                result_key = original_name
+            if result_key in results:
+                continue
+
+            value_years = sorted({2000 + int(year) for year in YEAR_HEADER_RE.findall(raw_text)})
+            max_values = min(4, max(3, len(value_years)))
             target_values, cursor = _collect_values_after_label(
                 lines, line_end, "목표", max_values=max_values
             )
@@ -616,7 +693,7 @@ def _extract_text_achievement_evidence(
             source_text = "\n".join(
                 line for line in lines[max(line_end - 1, 0) : cursor] if line.strip()
             )[:600]
-            results[original_name] = AchievementEvidence(
+            results[result_key] = AchievementEvidence(
                 matched_name=original_name,
                 split_pdf_page=page_offset + 1,
                 source_pdf_page=source_page(page_offset + 1),
@@ -627,12 +704,18 @@ def _extract_text_achievement_evidence(
                 rate_values_raw=rate_values,
                 extraction_method=extraction_method,
                 source_file=source_file,
+                program_goal_number=program_goal_number,
+                program_name=program_name,
+                value_years=value_years,
             )
     return results
 
 
 def extract_report_achievement_evidence(
-    report_spec: PdfDocSpec, indicator_names: list[str]
+    report_spec: PdfDocSpec,
+    indicator_names: list[str],
+    *,
+    candidate_program_goals: Mapping[str, set[str]] | None = None,
 ) -> dict[str, AchievementEvidence]:
     """별첨3 "3. 세부현황"에서 지표명별 목표·실적·달성률(최근 3개년)을 찾습니다.
 
@@ -659,6 +742,7 @@ def extract_report_achievement_evidence(
         source_page=report_spec.source_pdf_page,
         require_complete_values=False,
         extraction_method="TEXT",
+        candidate_program_goals=candidate_program_goals,
     )
 
     # 별첨3은 부처에 따라 지표명만 싣고 목표·실적·달성률 상세표는 본문 앞부분에
@@ -668,23 +752,34 @@ def extract_report_achievement_evidence(
     if full_path is not None:
         full_pages = load_page_texts(full_path)
         detail_end = min(len(full_pages), report_spec.source_page_start - 1)
-        results.update(
-            _extract_text_achievement_evidence(
-                full_pages,
-                range(detail_end),
-                candidate_names,
-                source_file=full_path.name,
-                source_page=lambda page: page,
-                require_complete_values=True,
-                extraction_method="FULL_TEXT",
-            )
+        full_results = _extract_text_achievement_evidence(
+            full_pages,
+            range(detail_end),
+            candidate_names,
+            source_file=full_path.name,
+            source_page=lambda page: page,
+            require_complete_values=True,
+            extraction_method="FULL_TEXT",
+            candidate_program_goals=candidate_program_goals,
         )
+        for key, full_evidence in full_results.items():
+            appendix_evidence = results.get(key)
+            if appendix_evidence is None or not (
+                appendix_evidence.target_values_raw
+                and appendix_evidence.actual_values_raw
+                and appendix_evidence.rate_values_raw
+            ):
+                results[key] = full_evidence
 
     # 텍스트 검색으로 찾지 못한 지표는, 해당 구간에 PUA(개인용 영역) 글자가
     # 있는 페이지에서만 OCR로 재시도합니다. 표 구조가 OCR에서 깨지므로
     # 목표·실적·달성률 3분류 라벨 앵커 없이 원문 창만 확보하고, 호출부에서
     # `ocr_status`를 `OCR_REQUIRED`로 표시해 사람 검토를 요구해야 합니다.
-    still_missing = {name for name in candidate_names if name not in results}
+    still_missing = {
+        name
+        for name in candidate_names
+        if name not in results and not any(key.startswith(f"{name}\x1f") for key in results)
+    }
     if still_missing:
         for page_offset in range(start_idx, end_idx + 1):
             if not still_missing:
@@ -798,7 +893,12 @@ def _extract_free_text_reason(lines: list[str], start_line: int, max_lines: int 
     return " ".join(collected).strip() or None
 
 
-def find_change_evidence(report_spec: PdfDocSpec, indicator_name: str) -> ChangeEvidence | None:
+def find_change_evidence(
+    report_spec: PdfDocSpec,
+    indicator_name: str,
+    *,
+    program_goal_number: Any = None,
+) -> ChangeEvidence | None:
     """별첨6에서 `indicator_name`(변경 전 또는 후 명칭 모두 허용)을 찾습니다."""
     norm_name = normalize_indicator_name(indicator_name)
     if not norm_name:
@@ -813,8 +913,22 @@ def find_change_evidence(report_spec: PdfDocSpec, indicator_name: str) -> Change
         raw_text = pages[page_offset]
         lines = raw_text.split("\n")
         flat_norm, line_map = _normalize_with_line_map(lines)
-        pos = flat_norm.find(norm_name)
-        if pos == -1:
+        positions: list[int] = []
+        cursor = 0
+        while (found := flat_norm.find(norm_name, cursor)) != -1:
+            positions.append(found)
+            cursor = found + len(norm_name)
+        expected_goal = normalize_program_goal(program_goal_number)
+        pos = next(
+            (
+                found
+                for found in positions
+                if expected_goal is None
+                or _page_program_context(lines, line_map[found])[0] == expected_goal
+            ),
+            None,
+        )
+        if pos is None:
             continue
         end_pos = pos + len(norm_name)
         line_start = line_map[pos]
@@ -1113,18 +1227,32 @@ def reconcile_row(
 
     # --- 계획서 별첨1 (필요 시 별첨6 확정값으로 보강) --------------------
     plan_name = row.get("indicator_name_plan")
+    program_goal_number = row.get("program_goal_number")
     plan_ev_map = plan_evidence_by_year.get(year, {})
     plan_ev = plan_ev_map.get(plan_name)
 
-    plan_change_ev = find_change_evidence(report_spec, plan_name) if plan_name else None
+    plan_change_ev = (
+        find_change_evidence(
+            report_spec,
+            plan_name,
+            program_goal_number=program_goal_number,
+        )
+        if plan_name
+        else None
+    )
     if plan_change_ev is None and row.get("indicator_name_report"):
-        plan_change_ev = find_change_evidence(report_spec, row["indicator_name_report"])
+        plan_change_ev = find_change_evidence(
+            report_spec,
+            row["indicator_name_report"],
+            program_goal_number=program_goal_number,
+        )
 
     is_plan_image_only = (plan_image_only_by_year or PLAN_TABLE_IS_IMAGE_ONLY).get(year, True)
     plan_target_source = "NONE"
     pdf_plan_target_raw: str | None = None
     pdf_plan_indicator_name: str | None = None
     plan_source_text: str | None = None
+    plan_source_file = plan_spec.filename
     plan_split_page: int | None = None
     plan_source_page: int | None = None
     plan_printed_page: int | None = None
@@ -1148,6 +1276,12 @@ def reconcile_row(
         pdf_plan_target_raw = plan_change_ev.target_after_raw
         plan_extraction_method = plan_extraction_method if plan_ev is not None else "TEXT"
         plan_target_source = "별첨1+별첨6" if plan_ev is not None else "별첨6만"
+        if plan_ev is None:
+            plan_source_file = report_spec.filename
+            plan_source_text = plan_change_ev.source_text
+            plan_split_page = plan_change_ev.split_pdf_page
+            plan_source_page = plan_change_ev.source_pdf_page
+            plan_printed_page = plan_change_ev.printed_page
         review_reasons.append(
             "PLAN_TARGET_FROM_CHANGE_TABLE_ONLY"
             if plan_ev is None
@@ -1213,7 +1347,9 @@ def reconcile_row(
     # --- 보고서 별첨3 "3.세부현황" ---------------------------------------
     report_name = row.get("indicator_name_report")
     report_ev_map = report_evidence_by_year.get(year, {})
-    report_ev = report_ev_map.get(report_name)
+    report_ev = report_ev_map.get(_contextual_evidence_key(report_name, program_goal_number))
+    if report_ev is None:
+        report_ev = report_ev_map.get(report_name)
 
     pdf_report_target_raw: str | None = None
     pdf_report_actual_raw: str | None = None
@@ -1228,9 +1364,14 @@ def reconcile_row(
 
     if report_ev is not None:
         pdf_report_indicator_name = report_ev.matched_name
-        pdf_report_target_raw = report_ev.target_raw
-        pdf_report_actual_raw = report_ev.actual_raw
-        pdf_report_rate_raw = report_ev.rate_raw
+        if report_ev.value_years:
+            pdf_report_target_raw = report_ev.target_for_year(year)
+            pdf_report_actual_raw = report_ev.actual_for_year(year)
+            pdf_report_rate_raw = report_ev.rate_for_year(year)
+        else:
+            pdf_report_target_raw = report_ev.target_raw
+            pdf_report_actual_raw = report_ev.actual_raw
+            pdf_report_rate_raw = report_ev.rate_raw
         report_source_text = report_ev.source_text
         report_split_page = report_ev.split_pdf_page
         report_source_page = report_ev.source_pdf_page
@@ -1423,7 +1564,15 @@ def reconcile_row(
         "documented_change_printed_page": documented_change_printed_page,
         "documented_change_ocr_conflict": documented_change_ocr_conflict,
         "documented_change_report_conflict": documented_change_report_conflict,
-        "pdf_report_program_name": None,
+        "pdf_report_program_goal_number": (
+            report_ev.program_goal_number if report_ev is not None else None
+        ),
+        "pdf_report_program_name": report_ev.program_name if report_ev is not None else None,
+        "pdf_report_value_years_raw": (
+            "|".join(map(str, report_ev.value_years))
+            if report_ev is not None and report_ev.value_years
+            else None
+        ),
         "pdf_report_indicator_name": pdf_report_indicator_name,
         "pdf_report_unit": None,
         "pdf_report_target_raw": pdf_report_target_raw,
@@ -1464,7 +1613,7 @@ def reconcile_row(
         "review_status": None,
         "review_note": None,
         "review_confirmed_at": None,
-        "plan_source_file": plan_spec.filename,
+        "plan_source_file": plan_source_file,
         "plan_split_pdf_page": plan_split_page,
         "plan_source_pdf_page": plan_source_page,
         "plan_printed_page": plan_printed_page,
@@ -1499,6 +1648,16 @@ def _flag_indicator_name_collisions(
     건드리지 않습니다.
     """
     result_df = result_df.copy()
+
+    def unresolved_indices(indices: list[int], columns: list[str]) -> set[int]:
+        if not set(columns).issubset(result_df.columns):
+            return set(indices)
+        fingerprints = (
+            result_df.loc[indices, columns].fillna("").astype(str).agg("\x1f".join, axis=1)
+        )
+        empty = fingerprints.str.replace("\x1f", "", regex=False).eq("")
+        return set(fingerprints.index[(empty | fingerprints.duplicated(keep=False))])
+
     for year, sub in manual_df.groupby("fiscal_year"):
         plan_counts = sub["indicator_name_plan"].dropna().map(normalize_indicator_name)
         plan_counts = plan_counts[plan_counts != ""].value_counts()
@@ -1515,8 +1674,31 @@ def _flag_indicator_name_collisions(
             report_norm = normalize_indicator_name(
                 result_df.at[idx, "manual_indicator_name_report"]
             )
-            plan_dup = plan_norm in dup_plan_names
-            report_dup = report_norm in dup_report_names
+            same_plan_indices = [
+                other
+                for other in year_idx
+                if normalize_indicator_name(result_df.at[other, "manual_indicator_name_plan"])
+                == plan_norm
+            ]
+            same_report_indices = [
+                other
+                for other in year_idx
+                if normalize_indicator_name(result_df.at[other, "manual_indicator_name_report"])
+                == report_norm
+            ]
+            plan_dup = plan_norm in dup_plan_names and idx in unresolved_indices(
+                same_plan_indices,
+                ["plan_source_file", "plan_split_pdf_page", "plan_source_text"],
+            )
+            report_dup = report_norm in dup_report_names and idx in unresolved_indices(
+                same_report_indices,
+                [
+                    "report_source_file",
+                    "report_split_pdf_page",
+                    "report_source_text",
+                    "pdf_report_program_goal_number",
+                ],
+            )
             if not plan_dup and not report_dup:
                 continue
 
@@ -1750,8 +1932,16 @@ def build_reconciliation_table(
             image_only=(plan_image_only_by_year or PLAN_TABLE_IS_IMAGE_ONLY).get(year, True),
             max_page_count=(plan_max_page_count_by_year or {}).get(year),
         )
+        report_program_goals: dict[str, set[str]] = {}
+        for row in sub[["indicator_name_report", "program_goal_number"]].to_dict("records"):
+            name = row["indicator_name_report"]
+            goal = normalize_program_goal(row["program_goal_number"])
+            if pd.notna(name) and goal is not None:
+                report_program_goals.setdefault(str(name), set()).add(goal)
         report_evidence_by_year[year] = extract_report_achievement_evidence(
-            report_spec, sub["indicator_name_report"].dropna().tolist()
+            report_spec,
+            sub["indicator_name_report"].dropna().tolist(),
+            candidate_program_goals=report_program_goals,
         )
         report_names = sub["indicator_name_report"].dropna().tolist()
         full_report_text = normalize_indicator_name("".join(load_page_texts(report_spec.path)))
@@ -1829,7 +2019,9 @@ FINAL_SCHEMA_COLUMNS: tuple[str, ...] = (
     "documented_change_printed_page",
     "documented_change_ocr_conflict",
     "documented_change_report_conflict",
+    "pdf_report_program_goal_number",
     "pdf_report_program_name",
+    "pdf_report_value_years_raw",
     "pdf_report_indicator_name",
     "pdf_report_unit",
     "pdf_report_target_raw",

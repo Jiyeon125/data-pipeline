@@ -7,7 +7,7 @@ llm:
   temperature: 0
   max_retries: 2
   request_timeout_seconds: 120
-  prompt_version: performance_extraction_v2
+  prompt_version: performance_extraction_v3
   schema_version: performance_indicator_v1
   api_execution_allowed: false
 
@@ -36,8 +36,8 @@ harness:
   pilot_request_limit: 34
   max_build_qa_cost_usd: 80
   batch_discount: 0.5
-  pricing_checked_on: "2026-07-31"
-  pricing_source: "https://developers.openai.com/api/docs/pricing"
+  pricing_checked_on: "2026-08-01"
+  pricing_source: "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
   pricing_usd_per_million:
     gpt-5.6-luna:
       input: 0.20

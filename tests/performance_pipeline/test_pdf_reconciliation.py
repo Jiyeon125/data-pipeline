@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import fitz  # PyMuPDF
 import pandas as pd
 import pytest
@@ -151,6 +153,7 @@ def test_extract_report_achievement_evidence_splits_merged_value_line(tmp_path) 
 def test_full_report_table_skips_formula_label_and_reads_four_years() -> None:
     page_text = (
         "ICT융합 기반산업 시장 매출액\n"
+        "'24년 성과 설명\n"
         "사물인터넷\n목표\n매출액(21.7조원)\n+ 블록체인 목표 매출액(0.35조원)\n"
         "'21년\n'22년\n'23년\n'24년\n"
         "목표\n16.07\n15.31\n21.6\n22\n"
@@ -174,6 +177,76 @@ def test_full_report_table_skips_formula_label_and_reads_four_years() -> None:
         "28.3",
         "128.6",
     )
+    assert evidence.value_years == [2021, 2022, 2023, 2024]
+    assert evidence.actual_for_year(2023) == "25.5"
+
+
+def test_report_evidence_uses_pdf_program_goal_to_split_duplicate_names() -> None:
+    pages = [
+        "프로그램목표 : II-1 성장 지원\n프로그램A①공통지표\n'22년\n'23년\n'24년\n목표\n1\n2\n3\n실적\n4\n5\n6\n달성률\n400%\n250%\n200%",
+        "프로그램목표 : III-1 창업 지원\n프로그램B\n①공통지표\n'22년\n'23년\n'24년\n목표\n10\n20\n30\n실적\n40\n50\n60\n달성률\n400%\n250%\n200%",
+    ]
+
+    result = pr._extract_text_achievement_evidence(
+        pages,
+        range(2),
+        ["공통지표"],
+        source_file="report.pdf",
+        source_page=lambda page: page,
+        require_complete_values=True,
+        extraction_method="TEXT",
+        candidate_program_goals={"공통지표": {"II-1", "III-1"}},
+    )
+
+    first = result[pr._contextual_evidence_key("공통지표", "II-1")]
+    second = result[pr._contextual_evidence_key("공통지표", "III-1")]
+    assert (first.program_name, first.actual_for_year(2024)) == ("프로그램A", "6")
+    assert (second.program_name, second.actual_for_year(2024)) == ("프로그램B", "60")
+
+
+def test_report_extraction_keeps_complete_appendix_context(monkeypatch) -> None:
+    appendix = pr.AchievementEvidence(
+        matched_name="지표",
+        split_pdf_page=6,
+        source_pdf_page=164,
+        printed_page=None,
+        source_text="별첨 근거",
+        target_values_raw=["1"],
+        actual_values_raw=["2"],
+        rate_values_raw=["200"],
+        source_file="split.pdf",
+        program_goal_number="III-1",
+        program_name="창업환경조성",
+        value_years=[2024],
+    )
+    full = pr.AchievementEvidence(
+        matched_name="지표",
+        split_pdf_page=78,
+        source_pdf_page=78,
+        printed_page=None,
+        source_text="전체본 근거",
+        target_values_raw=["1"],
+        actual_values_raw=["2"],
+        rate_values_raw=["200"],
+        extraction_method="FULL_TEXT",
+        source_file="full.pdf",
+        value_years=[2024],
+    )
+    monkeypatch.setattr(pr, "load_page_texts", lambda _path: ["별첨3"])
+    monkeypatch.setattr(pr, "full_document_path", lambda _spec: Path("full.pdf"))
+    monkeypatch.setattr(
+        pr,
+        "_extract_text_achievement_evidence",
+        lambda *_args, extraction_method, **_kwargs: {
+            "지표": full if extraction_method == "FULL_TEXT" else appendix
+        },
+    )
+
+    result = pr.extract_report_achievement_evidence(
+        pr.PdfDocSpec(2024, "report", "split.pdf", 159, 208), ["지표"]
+    )
+
+    assert result["지표"] is appendix
 
 
 def test_discover_pdf_doc_specs_preserves_leading_zero_code(tmp_path, monkeypatch) -> None:
@@ -405,7 +478,7 @@ def test_find_change_evidence_stops_at_split_informatization_category(tmp_path) 
 def test_reconcile_row_name_change_documented_in_change_table(monkeypatch) -> None:
     """시나리오 2: 계획서-보고서 지표명이 바뀌었지만 별첨6 변경사항표로 확인됨."""
 
-    def fake_find_change_evidence(report_spec, indicator_name):
+    def fake_find_change_evidence(report_spec, indicator_name, **kwargs):
         return pr.ChangeEvidence(
             matched_name=indicator_name,
             window_text="변경 전후 근거",
@@ -431,7 +504,8 @@ def test_reconcile_row_name_change_documented_in_change_table(monkeypatch) -> No
     )
     assert result["plan_name_match_status"] == "MATCH_AFTER_CHANGE"
     assert result["planned_target_numeric_pdf"] == pytest.approx(10.0)
-    assert result["plan_source_pdf_page"] is None
+    assert result["plan_source_pdf_page"] == 193
+    assert "성과보고서" in result["plan_source_file"]
     assert result["documented_change_source_file"] == pr.doc_spec(2024, "report").filename
     assert result["page_evidence_status"] != "MANUAL_REVIEW"
     assert "PAGE_OUT_OF_RANGE" not in (result["review_reason"] or "")
@@ -512,7 +586,7 @@ def test_reconcile_row_target_value_mismatch_reclassified_when_change_table_conf
     문서화하고 있으면, 이는 추출 오류가 아니라 목표치 사후 개정입니다.
     VALUE_MISMATCH가 아니라 MATCH_AFTER_CHANGE로 재분류되어야 합니다."""
 
-    def fake_find_change_evidence(report_spec, indicator_name):
+    def fake_find_change_evidence(report_spec, indicator_name, **kwargs):
         return pr.ChangeEvidence(
             matched_name=indicator_name,
             window_text="변경 전후 근거",
@@ -580,7 +654,7 @@ def test_reconcile_row_target_value_mismatch_kept_when_change_table_does_not_mat
     VALUE_MISMATCH를 유지해야 합니다. 명칭·존재 여부만으로 자동 확정하지
     않는다는 원칙을 검증합니다."""
 
-    def fake_find_change_evidence(report_spec, indicator_name):
+    def fake_find_change_evidence(report_spec, indicator_name, **kwargs):
         return pr.ChangeEvidence(
             matched_name=indicator_name,
             window_text="변경 전후 근거",
@@ -729,6 +803,70 @@ def test_flag_indicator_name_collisions_marks_duplicate_names_ambiguous() -> Non
     assert flagged.loc["중기부-2022-I1-01", "plan_name_match_status"] == "EXACT_MATCH"
     assert flagged.loc["중기부-2022-I1-01", "overall_reconciliation_status"] == "OCR_REQUIRED"
     assert flagged.loc["중기부-2022-I1-01", "review_reason"] is None
+
+
+def test_distinct_pdf_program_evidence_resolves_duplicate_indicator_names() -> None:
+    manual_df = pd.DataFrame(
+        [
+            {
+                "source_indicator_id": "one",
+                "fiscal_year": 2022,
+                "indicator_name_plan": "공통지표",
+                "indicator_name_report": "공통지표",
+            },
+            {
+                "source_indicator_id": "two",
+                "fiscal_year": 2022,
+                "indicator_name_plan": "공통지표",
+                "indicator_name_report": "공통지표",
+            },
+        ]
+    )
+    common = {
+        "fiscal_year": 2022,
+        "manual_indicator_name_plan": "공통지표",
+        "manual_indicator_name_report": "공통지표",
+        "plan_name_match_status": "EXACT_MATCH",
+        "plan_target_match_status": "EXACT_MATCH",
+        "report_name_match_status": "EXACT_MATCH",
+        "report_target_match_status": "EXACT_MATCH",
+        "report_actual_match_status": "EXACT_MATCH",
+        "report_achievement_rate_match_status": "EXACT_MATCH",
+        "ocr_status": "NOT_APPLICABLE",
+        "overall_reconciliation_status": "EXACT_MATCH",
+        "review_reason": None,
+    }
+    result_df = pd.DataFrame(
+        [
+            {
+                **common,
+                "source_indicator_id": "one",
+                "plan_source_file": "report.pdf",
+                "plan_split_pdf_page": 6,
+                "plan_source_text": "II-1 공통지표",
+                "report_source_file": "report.pdf",
+                "report_split_pdf_page": 6,
+                "report_source_text": "II-1 공통지표",
+                "pdf_report_program_goal_number": "II-1",
+            },
+            {
+                **common,
+                "source_indicator_id": "two",
+                "plan_source_file": "report.pdf",
+                "plan_split_pdf_page": 7,
+                "plan_source_text": "III-1 공통지표",
+                "report_source_file": "report.pdf",
+                "report_split_pdf_page": 7,
+                "report_source_text": "III-1 공통지표",
+                "pdf_report_program_goal_number": "III-1",
+            },
+        ]
+    )
+
+    resolved = pr._flag_indicator_name_collisions(manual_df, result_df)
+
+    assert resolved["overall_reconciliation_status"].tolist() == ["EXACT_MATCH", "EXACT_MATCH"]
+    assert resolved["review_reason"].isna().all()
 
 
 def test_build_reconciliation_summary_counts_match_row_count() -> None:

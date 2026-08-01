@@ -146,6 +146,9 @@ def test_masked_request_keeps_evidence_but_hides_local_value_candidates() -> Non
     rows["automation_route"] = "LLM_CANDIDATE"
     rows["pdf_report_indicator_name"] = "성과지표 A"
     rows["pdf_report_program_name"] = "프로그램 A"
+    rows["documented_change_target_before_raw"] = "10"
+    rows["documented_change_target_after_raw"] = "12"
+    rows["documented_change_reason_raw"] = "목표 상향"
     requests, _ = lh.build_request_entries(
         rows,
         model="gpt-test",
@@ -159,6 +162,11 @@ def test_masked_request_keeps_evidence_but_hides_local_value_candidates() -> Non
 
     assert record["indicator_hint"] == "성과지표 A"
     assert record["source_evidence"][1]["text"] == "성과지표 A 목표 10 실적 9 달성률 90%"
+    assert record["change_context"]["target_before_raw"] == "10"
+    assert record["source_evidence"][2]["text"] == (
+        "변경 전 목표: 10 | 변경 후 목표: 12 | 변경 사유: 목표 상향"
+    )
+    assert record["source_context_status"] == "PASS"
     assert not {"local_pdf_candidates", "local_status", "local_review_reason"} & set(record)
 
 
@@ -199,6 +207,7 @@ def test_pilot_selection_round_robins_ministries() -> None:
         [
             {
                 "request_id": f"{ministry}-{year}-{number}",
+                "source_indicator_id": f"source-{ministry}-{year}-{number}",
                 "ministry_code": ministry,
                 "fiscal_year": year,
                 "local_status": "OCR_REQUIRED",
@@ -216,6 +225,29 @@ def test_pilot_selection_round_robins_ministries() -> None:
         "162",
     }
     assert {int(request_id.split("-")[1]) for request_id in selected} == {2022, 2023}
+
+
+def test_pilot_cohort_does_not_change_when_request_hash_changes() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "request_id": f"old-{number}",
+                "source_indicator_id": f"source-{number:02d}",
+                "ministry_code": "102",
+                "fiscal_year": 2023 + number % 2,
+                "local_status": "EXACT_MATCH",
+            }
+            for number in range(8)
+        ]
+    )
+    changed = rows.assign(request_id=lambda frame: "new-" + frame["request_id"])
+
+    old_requests = lh._pilot_request_ids(rows, 4)
+    new_requests = lh._pilot_request_ids(changed, 4)
+    old_sources = set(rows.loc[rows.request_id.isin(old_requests), "source_indicator_id"])
+    new_sources = set(changed.loc[changed.request_id.isin(new_requests), "source_indicator_id"])
+
+    assert old_sources == new_sources
 
 
 def test_response_contract_requires_grounded_quotes_and_string_values() -> None:
@@ -357,6 +389,29 @@ def test_field_accuracy_separates_gold_accuracy_from_grounded_enrichment() -> No
     assert result["no_valid_response_with_gold_count"] == 1
 
 
+def test_gold_evaluation_treats_numeric_units_as_semantically_equal() -> None:
+    review = pd.DataFrame(
+        {
+            "request_id": ["r1", "r2", "r3"],
+            "unit": ["(%)", "(점)", "%"],
+            "manual_indicator_unit": ["%", "점", "%"],
+            "plan_target_raw": ["50.4(%)", "28.7( 조 원 )", "3,342"],
+            "manual_planned_target_raw": ["50.4", "28.7", "2900.0"],
+        }
+    )
+
+    result = lh._field_accuracy_summary(
+        review,
+        {
+            "unit": "manual_indicator_unit",
+            "plan_target_raw": "manual_planned_target_raw",
+        },
+    )
+
+    assert result["unit"]["correct"] == 3
+    assert result["plan_target_raw"]["correct"] == 2
+
+
 def test_duplicate_evidence_is_flagged_without_using_manual_gold() -> None:
     rows = pd.DataFrame(
         {
@@ -373,6 +428,53 @@ def test_duplicate_evidence_is_flagged_without_using_manual_gold() -> None:
     assert lh._evidence_collision_ids(rows) == {"one", "two"}
 
 
+def test_source_rules_preserve_llm_values_and_apply_only_grounded_corrections() -> None:
+    record = {
+        "source_indicator_id": "one",
+        "indicator_name": "지표",
+        "unit": "%",
+        "plan_target_raw": "12%",
+        "report_target_raw": "12",
+        "actual_value_raw": "11",
+        "official_achievement_rate_raw": "91.7%",
+    }
+    input_record = {
+        "source_context_status": "PASS",
+        "change_context": {"target_before_raw": "10", "target_after_raw": "12"},
+    }
+
+    corrected = lh._apply_source_rules(record, input_record)
+
+    assert corrected["plan_target_raw"] == "12%"
+    assert corrected["resolved_plan_target_raw"] == "10"
+    assert corrected["automatic_correction_status"] == "CORRECTED_FROM_CHANGE_TABLE"
+    assert corrected["automatic_correction_rules"] == ["PLAN_TARGET_USE_CHANGE_BEFORE"]
+
+    blocked = lh._apply_source_rules(
+        record,
+        {"source_context_status": "SOURCE_EVIDENCE_COLLISION"},
+    )
+    assert blocked["plan_target_raw"] == "12%"
+    assert all(blocked[f"resolved_{field}"] is None for field in lh.OUTPUT_FIELDS)
+    assert blocked["automatic_correction_status"] == "BLOCKED_SOURCE_EVIDENCE_COLLISION"
+
+    missing_actual = {**corrected, "resolved_actual_value_raw": None}
+    filled = lh._apply_local_source_fallbacks(
+        missing_actual,
+        {"source_evidence": [{"text": "목표 233,033 실적 229,416 221,436 214,917"}]},
+        {"pdf_report_actual_raw": "214,917", "manual_actual_value_raw": "정답지 값"},
+    )
+    assert filled["resolved_actual_value_raw"] == "214,917"
+    assert "RESOLVED_ACTUAL_VALUE_RAW_FROM_LOCAL_SOURCE" in filled["automatic_correction_rules"]
+
+    ungrounded = lh._apply_local_source_fallbacks(
+        missing_actual,
+        {"source_evidence": [{"text": "실적 214,917"}]},
+        {"pdf_report_actual_raw": "999", "manual_actual_value_raw": "214,917"},
+    )
+    assert ungrounded["resolved_actual_value_raw"] is None
+
+
 def test_manual_gold_changes_only_offline_evaluation(tmp_path) -> None:
     harness = tmp_path / "harness"
     harness.mkdir()
@@ -380,6 +482,7 @@ def test_manual_gold_changes_only_offline_evaluation(tmp_path) -> None:
     candidates["automation_route"] = "LLM_CANDIDATE"
     candidates["pdf_report_indicator_name"] = "성과지표 A"
     candidates["pdf_report_program_name"] = "프로그램 A"
+    candidates["pdf_report_actual_raw"] = "9"
     manual_columns = {
         "manual_indicator_name_report": "성과지표 A",
         "manual_indicator_unit": "%",
@@ -408,7 +511,7 @@ def test_manual_gold_changes_only_offline_evaluation(tmp_path) -> None:
                 "unit": "%",
                 "plan_target_raw": None,
                 "report_target_raw": "10",
-                "actual_value_raw": "9",
+                "actual_value_raw": None,
                 "official_achievement_rate_raw": "90%",
                 "extraction_status": "EXTRACTED",
                 "review_reasons": [],
@@ -446,6 +549,10 @@ def test_manual_gold_changes_only_offline_evaluation(tmp_path) -> None:
     )
     first_runtime_files = [first.output_paths[index].read_bytes() for index in (0, 1, 3)]
     first_gold = json.loads(first.output_paths[5].read_text(encoding="utf-8"))
+    first_records = pd.read_csv(first.output_paths[0])
+    assert pd.isna(first_records.loc[0, "actual_value_raw"])
+    assert str(first_records.loc[0, "resolved_actual_value_raw"]) == "9"
+    assert first_records.loc[0, "automatic_correction_status"] == "FILLED_FROM_LOCAL_SOURCE"
 
     for column in manual_columns:
         candidates[column] = "일부러 바꾼 정답"

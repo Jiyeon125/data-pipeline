@@ -35,7 +35,10 @@ MODEL_PLACEHOLDER = "MODEL_SELECTION_REQUIRED"
 
 SYSTEM_PROMPT = """정부 성과계획서·성과보고서에서 성과지표 값을 구조화합니다.
 SOURCE_EVIDENCE에 직접 존재하는 값만 원문 표기 그대로 복사하세요.
-계획목표는 PLAN 또는 CHANGE_TABLE에서, 보고목표·실적·공식달성률은 REPORT에서 구분하세요.
+plan_target_raw은 PLAN의 계획목표이며, CHANGE_TABLE만 있으면 변경 전 목표를 사용하세요.
+변경 후 목표를 plan_target_raw로 대체하지 말고 보고목표·실적·공식달성률은 REPORT에서 구분하세요.
+source_context_status가 SOURCE_EVIDENCE_COLLISION이면 값을 추정하지 말고 모두 null과 AMBIGUOUS를 반환하세요.
+REPORT의 프로그램목표와 연도별 값은 report_context의 PDF 추출값을 따라 해당 회계연도 열만 선택하세요.
 계산·보간·연도 추정·다른 지표 값 재사용을 금지하며 확인되지 않는 필드는 null로 반환하세요.
 원문 인용은 실제로 존재하는 짧은 구절을 생략 부호 없이 그대로 복사하세요.
 source_indicator_id와 request_id를 바꾸거나 새 지표를 만들지 마세요."""
@@ -238,6 +241,20 @@ def _record_input(
 ) -> dict[str, Any]:
     plan_text = _normalize_grounding_text(row.get("plan_source_text"))[:max_evidence_chars]
     report_text = _normalize_grounding_text(row.get("report_source_text"))[:max_evidence_chars]
+    change_before = _clean(row.get("documented_change_target_before_raw"))
+    change_after = _clean(row.get("documented_change_target_after_raw"))
+    change_reason = _clean(row.get("documented_change_reason_raw"))
+    change_text = _normalize_grounding_text(
+        " | ".join(
+            part
+            for part in (
+                f"변경 전 목표: {change_before}" if change_before is not None else None,
+                f"변경 후 목표: {change_after}" if change_after is not None else None,
+                f"변경 사유: {change_reason}" if change_reason is not None else None,
+            )
+            if part is not None
+        )
+    )
     record = {
         "source_indicator_id": str(row["source_indicator_id"]),
         "ministry_code": str(row["ministry_code"]).zfill(3),
@@ -255,6 +272,16 @@ def _record_input(
             else _clean(row.get("pdf_report_indicator_name"))
             or _clean(row.get("pdf_plan_indicator_name"))
         ),
+        "change_context": {
+            "target_before_raw": change_before,
+            "target_after_raw": change_after,
+            "reason_raw": change_reason,
+        },
+        "report_context": {
+            "program_goal_number": _clean(row.get("pdf_report_program_goal_number")),
+            "program_name": _clean(row.get("pdf_report_program_name")),
+            "value_years_raw": _clean(row.get("pdf_report_value_years_raw")),
+        },
         "source_evidence": [
             {
                 "document_type": "PLAN",
@@ -272,18 +299,7 @@ def _record_input(
                 "document_type": "CHANGE_TABLE",
                 "source_file": _clean(row.get("documented_change_source_file")),
                 "source_page": _page(row.get("documented_change_split_pdf_page")),
-                "text": _normalize_grounding_text(
-                    " | ".join(
-                        str(value)
-                        for value in (
-                            _clean(row.get("documented_change_target_before_raw")),
-                            _clean(row.get("documented_change_target_after_raw")),
-                            _clean(row.get("documented_change_reason_raw")),
-                        )
-                        if value is not None
-                    )
-                )
-                or None,
+                "text": change_text or None,
             },
         ],
     }
@@ -320,6 +336,7 @@ def build_request_entries(
     expose_local_candidates: bool = True,
 ) -> tuple[list[dict[str, Any]], pd.DataFrame]:
     rows = candidates.loc[candidates["automation_route"].eq("LLM_CANDIDATE")].copy()
+    evidence_collision_ids = _evidence_collision_ids(rows)
     rows["bundle_key"] = rows.apply(_bundle_key, axis=1)
     rows = rows.sort_values(["bundle_key", "source_indicator_id"])
     if max_records_per_request is not None and max_records_per_request < 1:
@@ -342,6 +359,12 @@ def build_request_entries(
             )
             for _, row in group.sort_values("source_indicator_id").iterrows()
         ]
+        for record in records:
+            record["source_context_status"] = (
+                "SOURCE_EVIDENCE_COLLISION"
+                if record["source_indicator_id"] in evidence_collision_ids
+                else "PASS"
+            )
         content = {
             "task": "validate_performance_indicator_extraction",
             "records": records,
@@ -413,23 +436,36 @@ def _pilot_request_ids(request_index: pd.DataFrame, limit: int) -> set[str]:
     if request_index.empty:
         return set()
     unique = (
-        request_index[["request_id", "ministry_code", "fiscal_year", "local_status"]]
-        .drop_duplicates("request_id")
+        request_index[
+            [
+                "request_id",
+                "source_indicator_id",
+                "ministry_code",
+                "fiscal_year",
+                "local_status",
+            ]
+        ]
+        .drop_duplicates("source_indicator_id")
         .sort_values(
-            ["ministry_code", "fiscal_year", "local_status", "request_id"],
+            ["ministry_code", "fiscal_year", "local_status", "source_indicator_id"],
             kind="stable",
         )
     )
     strata = [
-        group["request_id"].astype(str).tolist()
+        group["source_indicator_id"].astype(str).tolist()
         for _, group in unique.groupby(["ministry_code", "fiscal_year"], sort=True)
     ]
-    selected: list[str] = []
-    while len(selected) < limit and any(strata):
+    selected_source_ids: list[str] = []
+    while len(selected_source_ids) < limit and any(strata):
         for group in strata:
-            if group and len(selected) < limit:
-                selected.append(group.pop(0))
-    return set(selected)
+            if group and len(selected_source_ids) < limit:
+                selected_source_ids.append(group.pop(0))
+    return set(
+        request_index.loc[
+            request_index["source_indicator_id"].astype(str).isin(selected_source_ids),
+            "request_id",
+        ].astype(str)
+    )
 
 
 def _cost_scenarios(
@@ -850,11 +886,15 @@ def _request_context(entry: dict[str, Any]) -> tuple[set[str], dict[str, set[Any
     return set(contexts), allowed, _normalize_grounding_text(" ".join(grounding))
 
 
-def _record_contexts(entry: dict[str, Any]) -> dict[str, tuple[dict[str, set[Any]], str]]:
+def _request_records(entry: dict[str, Any]) -> dict[str, dict[str, Any]]:
     body = entry["body"]
     user_content = json.loads(body["input"][1]["content"])
+    return {str(record["source_indicator_id"]): record for record in user_content["records"]}
+
+
+def _record_contexts(entry: dict[str, Any]) -> dict[str, tuple[dict[str, set[Any]], str]]:
     contexts: dict[str, tuple[dict[str, set[Any]], str]] = {}
-    for record in user_content["records"]:
+    for record in _request_records(entry).values():
         allowed: dict[str, set[Any]] = {}
         grounding: list[str] = []
         for evidence in record["source_evidence"]:
@@ -867,6 +907,93 @@ def _record_contexts(entry: dict[str, Any]) -> dict[str, tuple[dict[str, set[Any
             _normalize_grounding_text(" ".join(grounding)),
         )
     return contexts
+
+
+def _apply_source_rules(record: dict[str, Any], input_record: dict[str, Any]) -> dict[str, Any]:
+    result = dict(record)
+    for field in OUTPUT_FIELDS:
+        result[f"resolved_{field}"] = record.get(field)
+    rules: list[str] = []
+    status = "UNCHANGED"
+
+    if input_record.get("source_context_status") == "SOURCE_EVIDENCE_COLLISION":
+        for field in OUTPUT_FIELDS:
+            result[f"resolved_{field}"] = None
+        status = "BLOCKED_SOURCE_EVIDENCE_COLLISION"
+        rules.append("SOURCE_EVIDENCE_COLLISION_BLOCK")
+    else:
+        change = input_record.get("change_context") or {}
+        before = change.get("target_before_raw")
+        after = change.get("target_after_raw")
+        plan_value = record.get("plan_target_raw")
+        if before is not None and (
+            plan_value is None
+            or (
+                after is not None
+                and _numeric_comparison_equal(plan_value, after)
+                and not _numeric_comparison_equal(before, after)
+            )
+        ):
+            result["resolved_plan_target_raw"] = before
+            status = "CORRECTED_FROM_CHANGE_TABLE"
+            rules.append("PLAN_TARGET_USE_CHANGE_BEFORE")
+        elif (
+            before is not None
+            and plan_value is not None
+            and not _numeric_comparison_equal(plan_value, before)
+        ):
+            status = "REVIEW_SOURCE_CONFLICT"
+            rules.append("PLAN_TARGET_NOT_CHANGE_BEFORE")
+
+    result["automatic_correction_status"] = status
+    result["automatic_correction_rules"] = rules
+    return result
+
+
+def _apply_local_source_fallbacks(
+    record: dict[str, Any], input_record: dict[str, Any], candidate: dict[str, Any]
+) -> dict[str, Any]:
+    result = dict(record)
+    if result.get("automatic_correction_status") == "BLOCKED_SOURCE_EVIDENCE_COLLISION":
+        return result
+    grounding = _normalize_grounding_text(
+        " ".join(str(item.get("text") or "") for item in input_record.get("source_evidence", []))
+    )
+    source_fields = {
+        "resolved_indicator_name": ("pdf_report_indicator_name", "pdf_plan_indicator_name"),
+        "resolved_unit": ("pdf_report_unit", "pdf_plan_unit"),
+        "resolved_plan_target_raw": (
+            "pdf_plan_target_raw",
+            "documented_change_target_before_raw",
+        ),
+        "resolved_report_target_raw": ("pdf_report_target_raw",),
+        "resolved_actual_value_raw": ("pdf_report_actual_raw",),
+        "resolved_official_achievement_rate_raw": ("pdf_report_official_achievement_rate_raw",),
+    }
+    original_rules = list(result.get("automatic_correction_rules") or [])
+    rules = list(original_rules)
+    for output_field, candidate_fields in source_fields.items():
+        if result.get(output_field) is not None and not pd.isna(result.get(output_field)):
+            continue
+        value = next(
+            (
+                cleaned
+                for field in candidate_fields
+                if (cleaned := _clean(candidate.get(field))) is not None
+                and _normalize_grounding_text(cleaned) in grounding
+            ),
+            None,
+        )
+        if value is not None:
+            result[output_field] = value
+            rules.append(f"{output_field.upper()}_FROM_LOCAL_SOURCE")
+    if rules != original_rules:
+        prior = result.get("automatic_correction_status")
+        result["automatic_correction_status"] = (
+            "FILLED_FROM_LOCAL_SOURCE" if prior == "UNCHANGED" else "MULTIPLE_SOURCE_RULES_APPLIED"
+        )
+    result["automatic_correction_rules"] = rules
+    return result
 
 
 def _completed_record_prefix(text: str) -> list[dict[str, Any]]:
@@ -1120,6 +1247,27 @@ def _comparison_equal(actual: Any, expected: Any) -> bool:
         return left.casefold() == right.casefold()
 
 
+def _numeric_comparison_equal(actual: Any, expected: Any) -> bool:
+    if _comparison_equal(actual, expected):
+        return True
+    if actual is None or pd.isna(actual) or expected is None or pd.isna(expected):
+        return False
+    left = re.findall(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", str(actual).replace(",", ""))
+    right = re.findall(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", str(expected).replace(",", ""))
+    return len(left) == len(right) == 1 and math.isclose(
+        float(left[0]), float(right[0]), rel_tol=1e-9, abs_tol=1e-9
+    )
+
+
+def _unit_comparison_equal(actual: Any, expected: Any) -> bool:
+    if actual is None or pd.isna(actual) or expected is None or pd.isna(expected):
+        return _comparison_equal(actual, expected)
+    return (
+        re.sub(r"[\s()]", "", str(actual)).casefold()
+        == re.sub(r"[\s()]", "", str(expected)).casefold()
+    )
+
+
 def _field_accuracy_summary(
     review: pd.DataFrame,
     expected_columns: dict[str, str],
@@ -1128,11 +1276,25 @@ def _field_accuracy_summary(
     valid_response = review["request_id"].notna()
     result: dict[str, dict[str, Any]] = {}
     for field, expected_column in expected_columns.items():
+        base_field = field.removeprefix("resolved_")
+        comparator = (
+            _numeric_comparison_equal
+            if base_field
+            in {
+                "plan_target_raw",
+                "report_target_raw",
+                "actual_value_raw",
+                "official_achievement_rate_raw",
+            }
+            else _unit_comparison_equal
+            if base_field == "unit"
+            else _comparison_equal
+        )
         gold_present = review[expected_column].notna()
         extracted = review[field].notna()
         equal = review.apply(
-            lambda row, field=field, expected_column=expected_column: _comparison_equal(
-                row.get(field), row.get(expected_column)
+            lambda row, field=field, expected_column=expected_column, comparator=comparator: (
+                comparator(row.get(field), row.get(expected_column))
             ),
             axis=1,
         )
@@ -1254,6 +1416,11 @@ def validate_llm_responses(
                 allowed_sources=allowed_sources,
                 grounding_text=grounding_text,
             )
+            input_records = _request_records(entry)
+            records = [
+                _apply_source_rules(record, input_records[str(record["source_indicator_id"])])
+                for record in records
+            ]
             validated.extend(
                 {"request_id": request_id, "validation_route": "STRICT", **record}
                 for record in records
@@ -1266,6 +1433,11 @@ def validate_llm_responses(
                 strict_error=exc,
             )
             if recovered:
+                input_records = _request_records(entry)
+                recovered = [
+                    _apply_source_rules(record, input_records[str(record["source_indicator_id"])])
+                    for record in recovered
+                ]
                 recovery_counts[recovery_reason] = recovery_counts.get(recovery_reason, 0) + len(
                     recovered
                 )
@@ -1300,6 +1472,25 @@ def validate_llm_responses(
         dtype={"ministry_code": "string", "source_program_code": "string"},
         low_memory=False,
     )
+    if not records.empty:
+        request_inputs = {
+            source_id: input_record
+            for entry in requests.values()
+            for source_id, input_record in _request_records(entry).items()
+        }
+        candidate_by_id = {
+            str(row["source_indicator_id"]): row.to_dict() for _, row in candidates.iterrows()
+        }
+        records = pd.DataFrame(
+            [
+                _apply_local_source_fallbacks(
+                    row.to_dict(),
+                    request_inputs[str(row["source_indicator_id"])],
+                    candidate_by_id[str(row["source_indicator_id"])],
+                )
+                for _, row in records.iterrows()
+            ]
+        )
     evidence_collision_ids = _evidence_collision_ids(candidates)
     expected_source_ids = set()
     for entry in requests.values():
@@ -1310,6 +1501,7 @@ def validate_llm_responses(
         ].copy()
         field_accuracy: dict[str, Any] = {}
         field_accuracy_without_collisions: dict[str, Any] = {}
+        resolved_field_accuracy: dict[str, Any] = {}
         goldset_evaluation_available = False
     else:
         review = candidates.loc[
@@ -1342,6 +1534,10 @@ def validate_llm_responses(
             review.loc[review["evidence_collision_status"].eq("NO_COLLISION")],
             expected_columns,
         )
+        resolved_field_accuracy = _field_accuracy_summary(
+            review,
+            {f"resolved_{field}": column for field, column in expected_columns.items()},
+        )
         review["human_review_status"] = "PENDING"
         review["llm_validation_status"] = "NOT_IN_THIS_REQUEST_SET"
         review.loc[
@@ -1352,6 +1548,22 @@ def validate_llm_responses(
             review["request_id"].notna(),
             "llm_validation_status",
         ] = "SCHEMA_AND_GROUNDING_PASS"
+        review.loc[
+            review["automatic_correction_status"].eq("CORRECTED_FROM_CHANGE_TABLE"),
+            "llm_validation_status",
+        ] = "SCHEMA_GROUNDING_PASS_AUTO_CORRECTED"
+        review.loc[
+            review["automatic_correction_status"].eq("FILLED_FROM_LOCAL_SOURCE"),
+            "llm_validation_status",
+        ] = "SCHEMA_GROUNDING_PASS_LOCAL_FILLED"
+        review.loc[
+            review["automatic_correction_status"].eq("MULTIPLE_SOURCE_RULES_APPLIED"),
+            "llm_validation_status",
+        ] = "SCHEMA_GROUNDING_PASS_MULTI_RULE"
+        review.loc[
+            review["automatic_correction_status"].eq("REVIEW_SOURCE_CONFLICT"),
+            "llm_validation_status",
+        ] = "POSTPROCESS_SOURCE_CONFLICT_REVIEW"
         review.loc[
             review["evidence_collision_status"].eq("DUPLICATE_EVIDENCE_COLLISION"),
             "llm_validation_status",
@@ -1471,6 +1683,7 @@ def validate_llm_responses(
                 "affects_runtime_acceptance_recovery_or_retry": False,
                 "field_accuracy": field_accuracy,
                 "field_accuracy_excluding_evidence_collisions": (field_accuracy_without_collisions),
+                "resolved_field_accuracy": resolved_field_accuracy,
             },
             ensure_ascii=False,
             indent=2,
