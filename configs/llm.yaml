@@ -34,6 +34,10 @@ harness:
   max_records_per_request: 1
   estimated_output_tokens_per_request: 450
   pilot_request_limit: 34
+  expansion_gate:
+    indicator_recovery_rate: 0.95
+    target_year_record_link_rate: 0.95
+    target_year_structured_field_accuracy: 0.95
   max_build_qa_cost_usd: 80
   batch_discount: 0.5
   pricing_checked_on: "2026-08-01"
