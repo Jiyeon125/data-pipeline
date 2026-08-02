@@ -18,6 +18,10 @@
 | [M3 재정 신호](M3_FINANCIAL_INSIGHTS.md) | 집행·연말집중·반복·환류 탐색 |
 | [M3 방법론 감사](M3_METHODOLOGY_AUDIT.md) | 동률·신호 단위·군집 검증 |
 | [분석정책 의사결정 지원](ANALYSIS_POLICY_DECISION_SUPPORT.md) | 임계값과 순위 기준을 정하기 위한 근거 |
+| [전면 구조개선 Gate A 감사](REFACTOR_GATE_A_AUDIT.md) | 현재 저장소·데이터·실행 기준선과 P0 구조 위험 |
+| [전면 구조개선 Gate B 미니 PT](REFACTOR_GATE_B_MINI_PT.md) | 저장구조 3안 실측 비교와 목표 grain·ID 권장안 |
+| [전면 구조개선 Gate D P0 영향도](REFACTOR_GATE_D_P0_IMPACT_MINI_PT.md) | 운영 변경 전 P0 오류별 후보·순위 영향과 권장 수정안 |
+| [core_v2 shadow 계약](CORE_V2_SHADOW_CONTRACT.md) | 승인된 Parquet Core의 grain·ID·금액·lineage와 실제 검증 결과 |
 
 ## 참고·이력 문서
 

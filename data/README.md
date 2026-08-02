@@ -12,6 +12,11 @@
 - `analytics/`: 피처, 통계 결과, 순위, 검증 결과 테이블입니다.
 - `exports/`: 대시보드 또는 제출 시스템에 전달하는 계약 기반 산출물입니다.
 
+`processed/core_v2_shadow/`는 기존 마스터를 바꾸지 않고 entity·year version·
+account/fund·금액 fact·evidence·legacy crosswalk를 병행 검증하는 재생성 가능
+shadow입니다. 현재 대시보드 입력이 아니며, `manifest.json`의 모든 계약 검사가
+통과한 경우에만 다음 migration 단계의 입력으로 사용합니다.
+
 ## 사업별결산세출지출현황 CSV
 
 OpenAPI에서 시트 형태로 제공되지 않아 별도로 확보한 CSV는 다음처럼 둡니다.

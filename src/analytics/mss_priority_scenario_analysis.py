@@ -1265,6 +1265,35 @@ def _build_priority_reason(row: pd.Series) -> str:
     return ";".join(reasons) or "NO_REVIEW_SIGNAL"
 
 
+def apply_feedback_cutoff(frame: pd.DataFrame, cutoff_year: int) -> pd.DataFrame:
+    """분석 종료연도 뒤의 예산 결과를 환류 신호에서 차단합니다."""
+    result = frame.copy()
+    fiscal_year = pd.to_numeric(result["fiscal_year"], errors="coerce")
+    for horizon, lag in (("t1", 1), ("t2", 2)):
+        outside = fiscal_year.add(lag).gt(cutoff_year)
+        for column in (
+            f"low_performance_budget_increase_{horizon}",
+            f"good_performance_budget_decrease_{horizon}",
+            f"program_total_feedback_complete_{horizon}",
+            f"feedback_budget_complete_{horizon}",
+            f"continuous_project_feedback_complete_{horizon}",
+            f"budget_direction_reconciled_{horizon}",
+        ):
+            if column in result:
+                result.loc[outside, column] = False
+        for column in (
+            f"program_total_outcome_budget_{horizon}",
+            f"program_total_budget_change_rate_{horizon}",
+            f"feedback_outcome_budget_{horizon}",
+            f"feedback_budget_change_rate_{horizon}",
+            f"continuous_project_outcome_budget_{horizon}",
+            f"continuous_project_budget_change_rate_{horizon}",
+        ):
+            if column in result:
+                result.loc[outside, column] = pd.NA
+    return result
+
+
 def build_candidate_population(
     analysis: pd.DataFrame,
     program_signals: pd.DataFrame,
@@ -1483,6 +1512,7 @@ def build_candidate_population(
                 merged[f"program_total_budget_change_rate_{horizon}"], errors="coerce"
             ).lt(0)
         )
+    merged = apply_feedback_cutoff(merged, int(config["scope"]["end_year"]))
     merged["current_execution_signal"] = merged["current_execution_severity"].fillna(0).gt(0)
     merged["repeated_signal_family_count"] = pd.DataFrame(
         {

@@ -5,6 +5,7 @@ import pandas as pd
 from analytics.m3_financial_signals import (
     SIGNAL_COLUMNS,
     TYPE_COLUMNS,
+    apply_official_support_form_peer_groups,
     attach_signal_types,
     build_repeated_signals,
     build_signal_features,
@@ -12,6 +13,47 @@ from analytics.m3_financial_signals import (
     program_year_signal_summary,
     unknown_manual_review_priority,
 )
+
+
+def test_official_single_support_form_is_the_only_peer_group() -> None:
+    ranking = pd.DataFrame(
+        {
+            "fiscal_year": [2024, 2024, 2024],
+            "ministry_code": ["019"] * 3,
+            "account_code": ["110"] * 3,
+            "program_code": ["1000"] * 3,
+            "activity_code": ["1001"] * 3,
+            "subactivity_code": ["001", "002", "003"],
+            "account_type_classified": ["GENERAL_ACCOUNT"] * 3,
+            "project_category": ["PROGRAM_EXPENDITURE"] * 3,
+            "classification_project_id": ["a", "b", "c"],
+            "comparison_group": ["legacy"] * 3,
+        }
+    )
+    official = ranking[
+        [
+            "fiscal_year",
+            "ministry_code",
+            "account_code",
+            "program_code",
+            "activity_code",
+            "subactivity_code",
+        ]
+    ].copy()
+    official["support_forms"] = ["SUBSIDY", "DIRECT;SUBSIDY", ""]
+    official["support_form_status"] = [
+        "OFFICIAL_EXPLICIT_SINGLE",
+        "OFFICIAL_EXPLICIT_MULTIPLE",
+        "UNRESOLVED",
+    ]
+    official["peer_group_eligible"] = [True, False, False]
+
+    result = apply_official_support_form_peer_groups(ranking, official)
+
+    assert result["legacy_comparison_group"].eq("legacy").all()
+    assert result["support_form_peer_eligible"].tolist() == [True, False, False]
+    assert result["comparison_group"].notna().tolist() == [True, False, False]
+    assert result.loc[0, "comparison_group"] == ("GENERAL_ACCOUNT|SUBSIDY|PROGRAM_EXPENDITURE")
 
 
 def _ranking_rows() -> pd.DataFrame:

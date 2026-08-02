@@ -6,6 +6,7 @@ from analytics.mss_priority_scenario_analysis import (
     SIGNAL_FLAGS,
     PriorityScenarioPaths,
     aggregate_program_account_signals,
+    apply_feedback_cutoff,
     build_candidate_population,
     build_full_population_review_work_queue,
     build_project_review_work_queue,
@@ -17,6 +18,27 @@ from analytics.mss_priority_scenario_analysis import (
     load_scenario_config,
     score_scenarios,
 )
+
+
+def test_feedback_cutoff_blocks_outcomes_after_analysis_end_year() -> None:
+    frame = pd.DataFrame(
+        {
+            "fiscal_year": [2023, 2024],
+            "low_performance_budget_increase_t1": [True, True],
+            "low_performance_budget_increase_t2": [True, True],
+            "program_total_feedback_complete_t1": [True, True],
+            "program_total_feedback_complete_t2": [True, True],
+            "program_total_outcome_budget_t1": [110, 120],
+            "program_total_outcome_budget_t2": [120, 130],
+        }
+    )
+
+    result = apply_feedback_cutoff(frame, 2024)
+
+    assert result["low_performance_budget_increase_t1"].tolist() == [True, False]
+    assert result["low_performance_budget_increase_t2"].tolist() == [False, False]
+    assert result["program_total_outcome_budget_t1"].notna().tolist() == [True, False]
+    assert result["program_total_outcome_budget_t2"].isna().all()
 
 
 def test_multi_ministry_paths_and_scope_are_configuration_driven() -> None:

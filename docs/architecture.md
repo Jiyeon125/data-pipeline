@@ -75,6 +75,13 @@ LLM 응답은 최종 정답이 아니라 `data/interim/llm_harness`의 원시 �
 
 이 계층은 이름만 같은 사업을 자동 확정하지 않으며, 미매칭 행도 삭제하지 않습니다.
 
+승인된 구조개선 shadow는 `build_masters/core_v2_shadow.py`가 기존
+`project_year_financial_v2`를 변경하지 않고 `data/processed/core_v2_shadow/`에
+entity·year version·account/fund·budget/execution fact·evidence·legacy crosswalk로
+분해합니다. 완전한 공식 계층코드만 persistent identity로 사용하고, 불완전한 행은
+source-bound provisional identity로 유지합니다. 현재 대시보드와 analytics는 이
+shadow를 읽지 않습니다.
+
 ### `analytics`
 
 마스터 테이블만 읽어 동년도 점검, 환류, 집행설명필요 신호, 비교집단,
@@ -170,6 +177,7 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 - `openfiscal normalize-budget`: 예산 레코드·금액 이벤트 정규화와 코드 매칭
 - `fiscal-master build-project-year-budget`: 예산 기준 사업-연도 중간 테이블 구축
 - `fiscal-master build-project-year-financial`: 월별 집행 외부 결합
+- `fiscal-master build-core-v2-shadow`: 승인된 Parquet Core shadow와 계약 manifest 생성
 
 외부 LLM을 사용하지 않는 성과자료 명령은 다음과 같습니다.
 

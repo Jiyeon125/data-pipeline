@@ -36,23 +36,23 @@ def test_dashboard_data_contract_and_filter() -> None:
     assert len(candidates) == 412
     assert candidates["candidate_id"].is_unique
     assert set(candidates["candidate_id"]) == set(data["candidates"]["candidate_id"])
-    assert len(filtered) == 235
+    assert len(filtered) == 231
     assert _program_count(candidates) == 79
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape == (940, 28)
-    assert data["drilldown"].shape == (110, 40)
+    assert data["scores"].shape == (924, 28)
+    assert data["drilldown"].shape == (74, 40)
     assert not data["drilldown"]["project_performance_attributed"].any()
     assert data["work_queue"].shape == (412, 172)
     assert data["work_queue"]["work_lane"].value_counts().to_dict() == {
         "REPEATED_OR_MULTIPLE": 132,
-        "MONITOR": 96,
-        "CONTEXT_REVIEW": 93,
+        "MONITOR": 105,
+        "CONTEXT_REVIEW": 84,
         "SINGLE_REVIEW": 60,
         "STRONG_SINGLE": 16,
         "DATA_FIRST": 15,
     }
-    assert data["work_queue"]["program_total_feedback_complete_t1"].sum() == 107
-    assert data["work_queue"]["program_total_feedback_complete_t2"].sum() == 69
+    assert data["work_queue"]["program_total_feedback_complete_t1"].sum() == 72
+    assert data["work_queue"]["program_total_feedback_complete_t2"].sum() == 34
     assert data["work_queue"]["continuous_project_feedback_complete_t1"].sum() == 108
     assert data["work_queue"]["continuous_project_feedback_complete_t2"].sum() == 42
     assert data["work_queue"]["program_total_account_type_mismatch_t1"].sum() == 3
@@ -106,7 +106,7 @@ def test_dashboard_data_contract_and_filter() -> None:
         account_types=candidates["account_type"].dropna().unique().tolist(),
         tiers=candidates["review_intensity"].dropna().unique().tolist(),
     )
-    assert len(no_trigger) == 96
+    assert len(no_trigger) == 105
     assert no_trigger["safety_conclusion"].eq("NOT_ASSESSED").all()
 
     queue = load_pdf_review_queue(Path("."))
@@ -130,7 +130,7 @@ def test_dashboard_default_render() -> None:
         ("반복·복수 신호", "132"),
         ("강한 단일 신호", "16"),
         ("데이터 먼저", "15"),
-        ("신호 미검출", "96"),
+        ("신호 미검출", "105"),
     ]
     assert app.multiselect[0].options == [
         "고용노동부",
@@ -196,7 +196,7 @@ def test_dashboard_ministry_rank_view() -> None:
         item.value for item in app.subheader
     ]
     assert any(
-        "고용노동부 내부 기준 현재 필터 41행 중 공통 Top 5는 2행" in item.value
+        "고용노동부 내부 기준 현재 필터 40행 중 공통 Top 5는 2행" in item.value
         for item in app.warning
     )
 

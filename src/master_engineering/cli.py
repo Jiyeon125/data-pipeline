@@ -7,7 +7,9 @@ from pathlib import Path
 
 import typer
 
+from .build_masters.core_v2_shadow import build_core_v2_shadow
 from .build_masters.financial_v1 import build_financial_v1
+from .build_masters.official_support_form import recover_official_support_forms
 from .build_masters.project_classification import build_project_classification
 from .build_masters.project_continuity import build_project_continuity
 from .build_masters.project_year import (
@@ -17,6 +19,8 @@ from .build_masters.project_year import (
 from .quality.financial_followup import analyze_financial_quality_followup
 from .quality.population_sensitivity import analyze_population_sensitivity
 from .quality.ranking_population_v2 import build_ranking_population_v2
+from .quality.refactor_gate_a import build_refactor_gate_a_audit
+from .quality.refactor_gate_d import build_refactor_gate_d_impact
 
 app = typer.Typer(no_args_is_help=True, help="성과·재정 마스터 테이블 엔지니어링")
 
@@ -41,16 +45,10 @@ def build_project_continuity_command(
         Path("data/processed/masters/population_sensitivity/broad_population.parquet")
     ),
     core_population_path: Path = typer.Option(
-        Path(
-            "data/processed/masters/population_sensitivity/"
-            "core_financial_population.parquet"
-        )
+        Path("data/processed/masters/population_sensitivity/core_financial_population.parquet")
     ),
     strict_population_path: Path = typer.Option(
-        Path(
-            "data/processed/masters/population_sensitivity/"
-            "strict_ranking_population.parquet"
-        )
+        Path("data/processed/masters/population_sensitivity/strict_ranking_population.parquet")
     ),
     classification_path: Path = typer.Option(
         Path("data/processed/masters/project_classification.parquet")
@@ -84,23 +82,15 @@ def build_project_continuity_command(
 @app.command("build-ranking-population-v2")
 def build_ranking_population_v2_command(
     core_path: Path = typer.Option(
-        Path(
-            "data/processed/masters/population_sensitivity/"
-            "core_financial_population.parquet"
-        )
+        Path("data/processed/masters/population_sensitivity/core_financial_population.parquet")
     ),
     strict_path: Path = typer.Option(
-        Path(
-            "data/processed/masters/population_sensitivity/"
-            "strict_ranking_population.parquet"
-        )
+        Path("data/processed/masters/population_sensitivity/strict_ranking_population.parquet")
     ),
     financial_v2_path: Path = typer.Option(
         Path("data/processed/masters/project_year_financial_v2.parquet")
     ),
-    output_dir: Path = typer.Option(
-        Path("data/processed/masters/population_sensitivity")
-    ),
+    output_dir: Path = typer.Option(Path("data/processed/masters/population_sensitivity")),
     overwrite: bool = typer.Option(False),
 ) -> None:
     """core 기반 변수별 적격 순위 모집단 v2를 생성합니다."""
@@ -326,6 +316,113 @@ def analyze_financial_v1_quality(
         )
     except (OSError, FileExistsError, ValueError) as exc:
         typer.echo(f"financial v1 후속 품질분석 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("audit-refactor-gate-a")
+def audit_refactor_gate_a(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    output_dir: Path | None = typer.Option(None, help="기본 경로 외 별도 산출물 경로"),
+    overwrite: bool = typer.Option(False, help="기존 Gate A 산출물 덮어쓰기"),
+) -> None:
+    """4개 부처 구조개선 전 기준선·grain·ID·P0 위험을 재현합니다."""
+    try:
+        summary, output_paths = build_refactor_gate_a_audit(
+            root,
+            output_dir=output_dir,
+            overwrite=overwrite,
+        )
+    except (OSError, FileExistsError, ValueError) as exc:
+        typer.echo(f"Gate A 감사 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    for path in output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("audit-refactor-gate-d")
+def audit_refactor_gate_d(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+    output_dir: Path | None = typer.Option(None, help="기본 경로 외 별도 산출물 경로"),
+    overwrite: bool = typer.Option(False, help="기존 Gate D 산출물 덮어쓰기"),
+) -> None:
+    """운영 산출물 변경 전 P0 오류의 후보·순위 영향을 그림자로 재현합니다."""
+    try:
+        summary, output_paths = build_refactor_gate_d_impact(
+            root,
+            output_dir=output_dir,
+            overwrite=overwrite,
+        )
+    except (OSError, FileExistsError, ValueError) as exc:
+        typer.echo(f"Gate D 영향도 감사 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    for path in output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("build-core-v2-shadow")
+def build_core_v2_shadow_command(
+    input_path: Path = typer.Option(
+        Path("data/processed/masters/project_year_financial_v2.parquet"),
+        help="기존 project-year v2 입력",
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/processed/core_v2_shadow"), help="기존 경로와 분리된 shadow 출력"
+    ),
+    ministry_codes: str = typer.Option("019,075,102,162", help="쉼표 구분 부처 코드"),
+    fiscal_years: str = typer.Option("2022,2023,2024", help="쉼표 구분 회계연도"),
+    overwrite: bool = typer.Option(False, help="기존 shadow 출력 덮어쓰기"),
+) -> None:
+    """승인된 Parquet core_v2 shadow와 검증 manifest를 생성합니다."""
+    try:
+        result = build_core_v2_shadow(
+            input_path=input_path,
+            output_dir=output_dir,
+            ministry_codes=tuple(code.strip() for code in ministry_codes.split(",")),
+            fiscal_years=tuple(int(year.strip()) for year in fiscal_years.split(",")),
+            overwrite=overwrite,
+        )
+    except (OSError, FileExistsError, ValueError) as exc:
+        typer.echo(f"core_v2 shadow 생성 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    for path in result.output_paths:
+        typer.echo(f"- {path}")
+
+
+@app.command("recover-official-support-forms")
+def recover_official_support_forms_command(
+    source_observation_path: Path = typer.Option(
+        Path("data/processed/core_v2_shadow/source_observation.parquet")
+    ),
+    output_dir: Path = typer.Option(Path("data/processed/official_support_form")),
+    documents_dir: Path = typer.Option(Path("data/raw/official_project_descriptions")),
+    parser_exe: Path = typer.Option(..., help="SHA-256을 검증한 unhwp 실행 파일"),
+    ministry_codes: str = typer.Option("019,075,102,162"),
+    fiscal_years: str = typer.Option("2022,2023,2024"),
+    workers: int = typer.Option(4, min=1, max=8),
+    max_documents: int | None = typer.Option(None, help="표본 실행 시에만 문서 수 제한"),
+    overwrite: bool = typer.Option(False),
+) -> None:
+    """열린재정 공식 사업설명자료의 지원형태·시행주체를 회수합니다."""
+    try:
+        result = recover_official_support_forms(
+            source_observation_path=source_observation_path,
+            output_dir=output_dir,
+            documents_dir=documents_dir,
+            parser_exe=parser_exe,
+            ministry_codes=tuple(code.strip() for code in ministry_codes.split(",")),
+            fiscal_years=tuple(int(year.strip()) for year in fiscal_years.split(",")),
+            workers=workers,
+            max_documents=max_documents,
+            overwrite=overwrite,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        typer.echo(f"공식 지원형태 회수 실패: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
     for path in result.output_paths:

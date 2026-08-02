@@ -112,6 +112,14 @@ TYPE_ALTERNATIVE = {
     "MULTIPLE_FINANCIAL_SIGNALS": "하나의 구조적 사건이 여러 지표에 동시에 반영",
     "DATA_VALIDATION_PRIORITY": "원천 공개범위 또는 비표준 응답의 기술적 한계",
 }
+OFFICIAL_SUPPORT_FORM_KEY = [
+    "fiscal_year",
+    "ministry_code",
+    "account_code",
+    "program_code",
+    "activity_code",
+    "subactivity_code",
+]
 
 
 @dataclass(frozen=True)
@@ -127,6 +135,7 @@ class M3Paths:
     normalized_hhi: Path
     feedback_cohorts: Path
     unknown_review_workbook: Path
+    official_support_forms: Path
     output_dir: Path
     figure_dir: Path
     report: Path
@@ -155,6 +164,11 @@ class M3Paths:
             / "data"
             / "manual"
             / "unknown_priority_fiscal_instrument_review.xlsx",
+            official_support_forms=root
+            / "data"
+            / "processed"
+            / "official_support_form"
+            / "project_year_official_classification.parquet",
             output_dir=root / "data" / "analytics" / "m3",
             figure_dir=root / "artifacts" / "figures" / "m3",
             report=root / "docs" / "M3_FINANCIAL_INSIGHTS.md",
@@ -174,6 +188,7 @@ class M3Paths:
             self.normalized_hhi,
             self.feedback_cohorts,
             self.unknown_review_workbook,
+            self.official_support_forms,
         ]
 
 
@@ -253,6 +268,70 @@ def _read_patterns(path: Path) -> pd.DataFrame:
     )
 
 
+def apply_official_support_form_peer_groups(
+    ranking: pd.DataFrame, official: pd.DataFrame
+) -> pd.DataFrame:
+    """공식 단일 지원형태만 상대 비교집단에 연결합니다."""
+    result = ranking.copy()
+    evidence = official[
+        [
+            *OFFICIAL_SUPPORT_FORM_KEY,
+            "support_forms",
+            "support_form_status",
+            "peer_group_eligible",
+        ]
+    ].copy()
+    if evidence.duplicated(OFFICIAL_SUPPORT_FORM_KEY).any():
+        raise ValueError("공식 지원형태 사업-연도 키가 중복되었습니다.")
+    for frame in (result, evidence):
+        frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce").astype("Int64")
+        for column, width in (
+            ("ministry_code", 3),
+            ("account_code", 3),
+            ("program_code", None),
+            ("activity_code", None),
+            ("subactivity_code", 3),
+        ):
+            values = frame[column].astype("string").str.strip()
+            frame[column] = values.str.zfill(width) if width else values
+    evidence = evidence.rename(
+        columns={
+            "support_forms": "official_support_forms",
+            "support_form_status": "official_support_form_status",
+            "peer_group_eligible": "support_form_peer_eligible",
+        }
+    )
+    result = result.merge(
+        evidence,
+        on=OFFICIAL_SUPPORT_FORM_KEY,
+        how="left",
+        validate="many_to_one",
+    )
+    result["support_form_peer_eligible"] = _bool(result, "support_form_peer_eligible")
+    result["legacy_comparison_group"] = result["comparison_group"]
+    result["comparison_group"] = pd.NA
+    eligible = result["support_form_peer_eligible"] & result["official_support_forms"].notna()
+    result.loc[eligible, "comparison_group"] = (
+        result.loc[eligible, "account_type_classified"].astype(str)
+        + "|"
+        + result.loc[eligible, "official_support_forms"].astype(str)
+        + "|"
+        + result.loc[eligible, "project_category"].astype(str)
+    )
+    group_sizes = (
+        result.loc[eligible]
+        .groupby("comparison_group")["classification_project_id"]
+        .transform("nunique")
+    )
+    result["comparison_group_size"] = pd.Series(pd.NA, index=result.index, dtype="Int64")
+    result.loc[eligible, "comparison_group_size"] = group_sizes.astype("Int64")
+    result["ranking_small_group_limited_flag"] = result["support_form_peer_eligible"] & result[
+        "comparison_group_size"
+    ].fillna(0).lt(5)
+    result["comparison_group_basis"] = "OFFICIAL_SUPPORT_FORM_SINGLE_ONLY"
+    return result
+
+
 def _consecutive_two(years: pd.Series, flags: pd.Series) -> bool:
     selected = sorted(
         int(year) for year, flag in zip(years, flags, strict=True) if pd.notna(flag) and bool(flag)
@@ -326,7 +405,8 @@ def build_signal_features(
     p20 = frame.groupby(peer_keys)["execution_rate"].transform(
         lambda values: pd.to_numeric(values, errors="coerce").dropna().astype(float).quantile(0.20)
     )
-    peer_exec_valid = execution_valid & exec_group_size.ge(5)
+    peer_eligible = _bool(frame, "support_form_peer_eligible") & frame["comparison_group"].notna()
+    peer_exec_valid = execution_valid & peer_eligible & exec_group_size.ge(5)
     frame["peer_bottom_10_execution_flag"] = _nullable_flag(peer_exec_valid, execution.le(p10))
     frame["peer_bottom_20_execution_flag"] = _nullable_flag(peer_exec_valid, execution.le(p20))
 
@@ -364,7 +444,7 @@ def build_signal_features(
                 values[monthly_valid.loc[values.index]], errors="coerce"
             ).quantile(quantile)
         )
-        valid = monthly_valid & monthly_peer_size.ge(5)
+        valid = monthly_valid & peer_eligible & monthly_peer_size.ge(5)
         frame[f"peer_p{label}_year_end_concentration_flag"] = _nullable_flag(
             valid, q4.ge(q4_threshold) | december.ge(dec_threshold)
         )
@@ -390,7 +470,7 @@ def build_signal_features(
     p95 = frame.groupby(peer_keys)["signed_log_budget_change"].transform(
         lambda values: pd.to_numeric(values, errors="coerce").quantile(0.95)
     )
-    change_peer_valid = change_valid & change_group_size.ge(10)
+    change_peer_valid = change_valid & peer_eligible & change_group_size.ge(10)
     frame["budget_increase_extreme_flag"] = _nullable_flag(
         change_peer_valid, _numeric(frame, "signed_log_budget_change").ge(p95)
     )
@@ -1596,7 +1676,6 @@ def build_m3_report(
     feedback_t2: pd.DataFrame,
     robustness: pd.DataFrame,
     cases: pd.DataFrame,
-    unknown: pd.DataFrame,
 ) -> None:
     execution = _overall_rows(execution_comparison).set_index("criterion")
     year_end = _overall_rows(year_end_comparison).set_index("criterion")
@@ -1608,8 +1687,6 @@ def build_m3_report(
     fixed = year_end.loc["FIXED_UNION"]
     p90 = year_end.loc["PEER_P90"]
     p95 = year_end.loc["PEER_P95"]
-    unknown_80 = int(_bool(unknown, "priority_80pct_coverage").sum())
-    unknown_90 = int(_bool(unknown, "priority_90pct_coverage").sum())
     strong_bias = execution_comparison[
         execution_comparison["comparison_type"].eq("CRITERION_SEGMENT")
         & execution_comparison["criterion"].eq("STRONG_UNDER_80")
@@ -1986,7 +2063,11 @@ def build_m3_report(
             "- PARTIAL/UNMATCHED 프로그램의 집행률을 전체 프로그램 값으로 사용하지 않았습니다.",
             "- 관측경계는 신규·종료로 해석하지 않았습니다.",
             "- 월별 주 분석은 검증된 3,328행을 사용했고, 관측경계 유지 표본은 강건성 후보로 분리했습니다.",
-            "- UNKNOWN 재정수단은 확정하지 않았고 일반 재정통계에서는 유지했습니다.",
+            (
+                "- 공식 단일 지원형태 "
+                f"{summary['counts']['official_support_form_peer_eligible_rows']:,}행만 "
+                "지원형태 상대신호에 사용했고 복수·미확정은 전체 통계와 절대신호에 유지했습니다."
+            ),
             "- 결측 신호는 false나 0점으로 바꾸지 않았습니다.",
             "",
             "## 16. 성과자료 연결 전에 확정할 사항",
@@ -2001,16 +2082,13 @@ def build_m3_report(
             "1. 집행률: 80% 강한 신호, 80~90% 주의 신호, 하위 10%·20% 보조 신호 조합을 채택할지",
             "2. 연말 집중: 고정 기준 주 신호, P90 보조, P95 극단, P80 민감도 역할을 채택할지",
             "3. 반복: 2회 이상과 유효연도 50% 이상을 동시에 요구하고 연속 2회를 별도 표시할지",
-            (
-                f"4. UNKNOWN: 예산 80% 집합 {unknown_80:,}개를 먼저 검토할지, "
-                f"90% 집합 {unknown_90:,}개까지 확대할지"
-            ),
+            "4. 복수·미확정 지원형태는 상대순위가 아니라 원문 확인 대상으로 유지합니다.",
             "5. 이번 권장안을 설정값으로 확정할지 여부—현재 파일에는 확정 설정으로 저장하지 않았습니다.",
             "",
             "## 18. 권장 다음 단계",
             "",
             "1. 팀에서 임계값 역할을 결정하고 결정사항을 작업일지에 기록합니다.",
-            "2. UNKNOWN 예산 80% 검토 집합부터 재정수단을 수기 확정합니다.",
+            "2. 공식 단일 지원형태 상대신호의 상위 사례와 반례를 원문에서 확인합니다.",
             "3. 대표 사례와 반례의 예산서·결산 설명자료를 원문 확인합니다.",
             "4. 성과자료가 준비되면 프로그램 단위에서 재정 신호와 성과지표를 연결합니다.",
             "5. 팀 공유·피드백·결정 기록이 끝난 뒤에만 M3 팀 공유 마일스톤을 완료합니다.",
@@ -2027,6 +2105,7 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
     programs = pd.read_parquet(paths.program)
     core = pd.read_parquet(paths.core)
     broad = pd.read_parquet(paths.broad)
+    official_support_forms = pd.read_parquet(paths.official_support_forms)
     review_paths = UnknownReviewPaths(
         priority=paths.output_dir / "unknown_manual_review_priority.csv",
         ranking_population=paths.ranking_v2,
@@ -2049,6 +2128,10 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
     ranking = reviewed_ranking_all.loc[
         reviewed_ranking_all["overall_ranking_eligible"]
     ].reset_index(drop=True)
+    baseline_ranking = apply_official_support_form_peer_groups(
+        baseline_ranking, official_support_forms
+    )
+    ranking = apply_official_support_form_peer_groups(ranking, official_support_forms)
     patterns = _read_patterns(paths.monthly_patterns)
     hhi = pd.read_csv(
         paths.normalized_hhi,
@@ -2243,6 +2326,12 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
             "unique_projects": features["classification_project_id"].nunique(),
             "signal_types": len(TYPE_COLUMNS),
             "case_rows": len(cases),
+            "official_support_form_peer_eligible_rows": int(
+                _bool(features, "support_form_peer_eligible").sum()
+            ),
+            "official_support_form_peer_ineligible_rows": int(
+                (~_bool(features, "support_form_peer_eligible")).sum()
+            ),
             "unknown_projects": len(unknown),
             "unknown_80pct_review_count": int(_bool(unknown, "priority_80pct_coverage").sum()),
             "unknown_90pct_review_count": int(_bool(unknown, "priority_90pct_coverage").sum()),
@@ -2283,7 +2372,6 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
         feedback_t2,
         robustness,
         cases,
-        unknown,
     )
 
     after_hashes = {str(path): _hash(path) for path in paths.inputs}
@@ -2308,6 +2396,23 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
         "overall_rank_not_generated": True,
         "leading_zero_codes_preserved": {"019", "075"}.issubset(
             set(features["ministry_code"].astype(str))
+        ),
+        "official_support_form_peer_contract_valid": bool(
+            features.loc[
+                ~_bool(features, "support_form_peer_eligible"),
+                [
+                    "peer_bottom_10_execution_flag",
+                    "peer_bottom_20_execution_flag",
+                    "peer_p80_year_end_concentration_flag",
+                    "peer_p90_year_end_concentration_flag",
+                    "peer_p95_year_end_concentration_flag",
+                    "budget_increase_extreme_flag",
+                    "budget_decrease_extreme_flag",
+                ],
+            ]
+            .isna()
+            .all()
+            .all()
         ),
         "cases_max_10_per_type": bool(cases.groupby("signal_type").size().le(10).all()),
         "unknown_candidates_not_confirmed": bool(
