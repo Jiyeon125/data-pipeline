@@ -382,7 +382,15 @@ def _structure_route(selection_reasons: str, reasons: list[str]) -> tuple[str, l
 
 
 def _needs_previous_page_context(reasons: list[str], page_text: str) -> bool:
-    return "INDICATOR_HEADER_MISSING" in reasons and "성과지표" not in _compact(page_text)
+    return "CURRENT_YEAR_MISSING" in reasons or (
+        "INDICATOR_HEADER_MISSING" in reasons and "성과지표" not in _compact(page_text)
+    )
+
+
+def _needs_next_page_context(reasons: list[str], document_type: str) -> bool:
+    return document_type == "REPORT" and bool(
+        {"ACTUAL_LABEL_MISSING", "ACHIEVEMENT_RATE_LABEL_MISSING"} & set(reasons)
+    )
 
 
 def _render_for_vision(pdf_path: Path, output_path: Path) -> tuple[int, int, int, float | None]:
@@ -410,7 +418,7 @@ def _render_for_vision(pdf_path: Path, output_path: Path) -> tuple[int, int, int
     return width, height, rotation, confidence
 
 
-def _vision_schema() -> dict[str, Any]:
+def _vision_schema(fiscal_year: int) -> dict[str, Any]:
     nullable_string = {"type": ["string", "null"]}
     return {
         "type": "object",
@@ -436,7 +444,7 @@ def _vision_schema() -> dict[str, Any]:
                         "program_goal_number": nullable_string,
                         "indicator_name": nullable_string,
                         "unit": nullable_string,
-                        "fiscal_year": {"type": ["integer", "null"]},
+                        "fiscal_year": {"type": "integer", "enum": [fiscal_year]},
                         "planned_target": nullable_string,
                         "actual_value": nullable_string,
                         "achievement_rate": nullable_string,
@@ -448,6 +456,57 @@ def _vision_schema() -> dict[str, Any]:
     }
 
 
+def _merge_compatible_records(
+    records: list[dict[str, Any]], fiscal_year: int
+) -> tuple[list[dict[str, Any]], int, int]:
+    fields = (
+        "program_goal_number",
+        "indicator_name",
+        "unit",
+        "planned_target",
+        "actual_value",
+        "achievement_rate",
+    )
+    merged: list[dict[str, Any]] = []
+    positions: dict[tuple[str, str, int], int] = {}
+    merged_count = 0
+    conflict_count = 0
+    for record in records:
+        indicator = _compact(str(record.get("indicator_name") or ""))
+        goal = _compact(str(record.get("program_goal_number") or ""))
+        year = _optional_int(record.get("fiscal_year"))
+        if not indicator or year != fiscal_year:
+            merged.append(record)
+            continue
+        key = (goal, indicator, year)
+        if key not in positions:
+            positions[key] = len(merged)
+            merged.append(record)
+            continue
+        current = merged[positions[key]]
+        conflicts = any(
+            current.get(field) not in (None, "")
+            and record.get(field) not in (None, "")
+            and _compact(str(current[field])) != _compact(str(record[field]))
+            for field in fields
+        )
+        if conflicts:
+            conflict_count += 1
+            merged.append(record)
+            continue
+        for field in fields:
+            if current.get(field) in (None, "") and record.get(field) not in (None, ""):
+                current[field] = record[field]
+        evidence = [
+            value
+            for value in (current.get("source_evidence"), record.get("source_evidence"))
+            if value not in (None, "")
+        ]
+        current["source_evidence"] = " / ".join(dict.fromkeys(map(str, evidence))) or None
+        merged_count += 1
+    return merged, merged_count, conflict_count
+
+
 def _request_entry(
     row: dict[str, Any], image_path: Path, model: str, max_output_tokens: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -455,7 +514,8 @@ def _request_entry(
         "성과계획서·성과보고서의 표 이미지에서 보이는 값만 추출하세요. 추정하거나 "
         "누락값을 만들지 말고 불명확하면 null을 반환하세요. 모든 지표를 표의 연도 열과 "
         "목표·실적·달성률 행에 맞춰 분리하고, source_evidence에는 해당 지표와 값이 함께 "
-        "보이는 짧은 원문을 적으세요. "
+        "보이는 짧은 원문을 적으세요. 요청 회계연도 열로 명확히 귀속되는 레코드만 "
+        "반환하고, 연도를 확인할 수 없으면 해당 레코드를 반환하지 마세요. "
         f"문서유형={row['document_type']}, 회계연도={row['fiscal_year']}, "
         f"원본페이지={row['source_pdf_page']}, 로컬실패={row['structure_reasons']}"
     )
@@ -466,9 +526,26 @@ def _request_entry(
             else []
         ),
         image_path,
+        *(
+            [Path(str(row["next_context_image_path"]))]
+            if row.get("next_context_image_path")
+            else []
+        ),
     ]
-    if len(image_paths) > 1:
-        prompt += " 첫 이미지는 직전 페이지 문맥이고 마지막 이미지는 추출 대상 페이지입니다."
+    if row.get("previous_context_image_path"):
+        prompt += (
+            " 첫 이미지는 직전 페이지의 머리글·연도 문맥이며 그 다음 이미지가 추출 대상입니다."
+        )
+    if row.get("next_context_image_path"):
+        prompt += (
+            " 마지막 이미지는 다음 페이지에 이어지는 표 문맥이며 추출 대상 페이지에서 시작된 "
+            "같은 행만 연결하세요."
+        )
+    if row.get("previous_context_image_path") or row.get("next_context_image_path"):
+        prompt += (
+            " 문맥 이미지에서 새로 시작된 다른 지표는 반환하지 마세요. 지표명이 페이지 경계에서 "
+            "끊기면 같은 행의 글자를 이어 붙여 전체 명칭을 반환하세요."
+        )
     image_content = [
         {
             "type": "input_image",
@@ -500,7 +577,7 @@ def _request_entry(
                     "type": "json_schema",
                     "name": "performance_page_extraction",
                     "strict": True,
-                    "schema": _vision_schema(),
+                    "schema": _vision_schema(int(row["fiscal_year"])),
                 }
             },
             "max_output_tokens": max_output_tokens,
@@ -567,7 +644,9 @@ def _prepare_sync_requests(request_path: Path, max_output_tokens: int) -> list[d
         if line.strip()
     ]
     for request in requests:
-        request["body"]["max_output_tokens"] = max_output_tokens
+        request["body"]["max_output_tokens"] = min(
+            int(request["body"].get("max_output_tokens", max_output_tokens)), max_output_tokens
+        )
     return requests
 
 
@@ -626,6 +705,8 @@ def run_sync_pilot(
     output_dir = output_dir.resolve()
     _load_project_environment(root)
     config = yaml.safe_load((root / "configs/llm.yaml").read_text(encoding="utf-8"))
+    if not config["llm"].get("api_execution_allowed", False):
+        raise RuntimeError("configs/llm.yaml의 api_execution_allowed가 false입니다.")
     api_key = os.getenv(str(config["llm"]["api_key_env"]))
     if not api_key:
         raise RuntimeError("OpenAI API 키 환경변수가 없습니다.")
@@ -644,7 +725,7 @@ def run_sync_pilot(
     maximum_input_tokens = int(dry_run["pilot_image_tokens_estimate"]) + int(
         dry_run["pilot_text_tokens_estimate"]
     )
-    maximum_output_tokens = max_output_tokens * len(requests)
+    maximum_output_tokens = sum(int(row["body"]["max_output_tokens"]) for row in requests)
     maximum_cost = (
         1.1
         * (
@@ -691,12 +772,16 @@ def run_sync_pilot(
                     completed.append(saved)
                     continue
             previous_attempts = sorted(attempt_dir.glob(f"{custom_id}__*.json"))
-            next_output_tokens = max_output_tokens
+            next_output_tokens = int(request["body"]["max_output_tokens"])
             if previous_attempts:
                 previous = json.loads(previous_attempts[-1].read_text(encoding="utf-8"))
-                next_output_tokens = int(previous.get("next_max_output_tokens", max_output_tokens))
+                next_output_tokens = int(
+                    previous.get("next_max_output_tokens", request["body"]["max_output_tokens"])
+                )
             parsed: dict[str, Any] | None = None
             record: dict[str, Any] | None = None
+            duplicate_merged_count = 0
+            duplicate_conflict_count = 0
             for output_limit in dict.fromkeys((next_output_tokens, max(next_output_tokens, 3600))):
                 attempt_ceiling = _attempt_max_cost_usd(
                     request_index[custom_id],
@@ -730,6 +815,13 @@ def run_sync_pilot(
                         parsed = json.loads(_response_output_text(payload))
                         if not isinstance(parsed.get("records"), list):
                             raise TypeError("records가 배열이 아닙니다.")
+                        (
+                            parsed["records"],
+                            duplicate_merged_count,
+                            duplicate_conflict_count,
+                        ) = _merge_compatible_records(
+                            parsed["records"], int(request_index[custom_id]["fiscal_year"])
+                        )
                     except (json.JSONDecodeError, RuntimeError, TypeError) as error:
                         parsed = None
                         parse_error = f"{type(error).__name__}: {error}"
@@ -746,6 +838,8 @@ def run_sync_pilot(
                     "usage": usage,
                     "cost_usd": cost,
                     "parse_error": parse_error,
+                    "compatible_duplicate_merged_count": duplicate_merged_count,
+                    "conflicting_duplicate_group_count": duplicate_conflict_count,
                     "next_max_output_tokens": 3600
                     if parsed is None and output_limit < 3600
                     else None,
@@ -769,6 +863,8 @@ def run_sync_pilot(
                     "position": position,
                     "usage": usage,
                     "cost_usd": cost,
+                    "compatible_duplicate_merged_count": duplicate_merged_count,
+                    "conflicting_duplicate_group_count": duplicate_conflict_count,
                     "parsed": parsed,
                     "response": payload,
                 }
@@ -800,6 +896,12 @@ def run_sync_pilot(
         "request_count": len(requests),
         "completed_count": len(completed),
         "record_count": sum(len(row["parsed"]["records"]) for row in completed),
+        "compatible_duplicate_merged_count": sum(
+            int(row.get("compatible_duplicate_merged_count", 0)) for row in completed
+        ),
+        "conflicting_duplicate_group_count": sum(
+            int(row.get("conflicting_duplicate_group_count", 0)) for row in completed
+        ),
         "elapsed_seconds": time.perf_counter() - started,
         "usage": usage,
         "successful_response_cost_usd": sum(float(row["cost_usd"]) for row in completed),
@@ -845,21 +947,6 @@ def evaluate_sync_pilot(
         with fitz.open(root / row["input_pdf"]) as document:
             if page := printed_page_number(document[0].get_text("text")):
                 printed.add(page)
-        if previous_page := _optional_int(row.get("previous_context_page")):
-            physical.add(previous_page)
-            previous = manifest_by_page.get(
-                (
-                    str(row["ministry_code"]).zfill(3),
-                    int(row["fiscal_year"]),
-                    row["document_type"],
-                    row["source_file"],
-                    previous_page,
-                )
-            )
-            if previous:
-                with fitz.open(root / previous["input_pdf"]) as document:
-                    if page := printed_page_number(document[0].get_text("text")):
-                        printed.add(page)
         request_page_evidence[request_id] = {"physical": physical, "printed": printed}
     responses = [
         json.loads(line)
@@ -889,6 +976,28 @@ def evaluate_sync_pilot(
                 output_dir / "opendataloader/raw" / f"{page['page_id']}.json"
             )
         )
+        for context_column in ("previous_context_page", "next_context_page"):
+            context_page = _optional_int(page.get(context_column))
+            if context_page is None:
+                continue
+            context = manifest_by_page.get(
+                (
+                    str(page["ministry_code"]).zfill(3),
+                    int(page["fiscal_year"]),
+                    page["document_type"],
+                    page["source_file"],
+                    context_page,
+                )
+            )
+            if not context:
+                continue
+            with fitz.open(root / context["input_pdf"]) as document:
+                source += "\n" + document[0].get_text("text")
+            source += "\n" + "\n".join(
+                local_parser._opendataloader_table_rows(
+                    output_dir / "opendataloader/raw" / f"{context['page_id']}.json"
+                )
+            )
         source_by_request[request_id] = source
         key = (str(page["ministry_code"]).zfill(3), int(page["fiscal_year"]), page["document_type"])
         for record_index, record in enumerate(response["parsed"]["records"], start=1):
@@ -1555,6 +1664,28 @@ def package_vision_requests(
                             "image_patch_tokens": quality["image_patch_tokens"] + context_tokens,
                         }
                     )
+            if _needs_next_page_context(reasons, row["document_type"]):
+                next_key = (
+                    str(row["ministry_code"]).zfill(3),
+                    int(row["fiscal_year"]),
+                    str(row["document_type"]),
+                    str(row["source_file"]),
+                    int(row["source_pdf_page"]) + 1,
+                )
+                if following := page_lookup.get(next_key):
+                    context_path = output_dir / "vision_images" / f"{row['page_id']}_next.png"
+                    context_width, context_height, _, _ = _render_for_vision(
+                        root / following["input_pdf"], context_path
+                    )
+                    context_tokens = math.ceil(context_width / 32) * math.ceil(context_height / 32)
+                    quality.update(
+                        {
+                            "next_context_page": following["source_pdf_page"],
+                            "next_context_image_path": str(context_path),
+                            "next_context_image_patch_tokens": context_tokens,
+                            "image_patch_tokens": quality["image_patch_tokens"] + context_tokens,
+                        }
+                    )
             request, index = _request_entry(quality, image_path, model, max_output_tokens)
             requests.append(request)
             request_index.append(index)
@@ -1604,6 +1735,9 @@ def package_vision_requests(
         "vision_request_count": len(requests),
         "previous_context_image_count": sum(
             bool(row.get("previous_context_image_path")) for row in request_index
+        ),
+        "next_context_image_count": sum(
+            bool(row.get("next_context_image_path")) for row in request_index
         ),
         "human_review_before_vision_count": 0,
         "model": model,

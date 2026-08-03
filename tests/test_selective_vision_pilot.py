@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -11,13 +12,18 @@ from selective_vision_pilot import (
     _billed_cost_usd,
     _expected_value_visible,
     _manual_page_numbers,
+    _merge_compatible_records,
+    _needs_next_page_context,
     _needs_previous_page_context,
     _pilot_sample,
     _prepare_sync_requests,
+    _request_entry,
     _response_output_text,
     _structure_route,
     _sync_cost_usd,
     _text_bounds,
+    _vision_schema,
+    run_sync_pilot,
     structure_reasons,
 )
 
@@ -65,6 +71,81 @@ def test_continued_table_without_visible_header_gets_previous_page_context() -> 
         ["INDICATOR_HEADER_MISSING"], "과학기술인재 육성지원 정책만족도"
     )
     assert not _needs_previous_page_context(["INDICATOR_HEADER_MISSING"], "프로그램 성과지표 현황")
+    assert _needs_previous_page_context(
+        ["INDICATOR_HEADER_MISSING", "CURRENT_YEAR_MISSING"], "성과지표 및 목표치 적정성"
+    )
+
+
+def test_report_missing_outcome_labels_gets_next_page_context() -> None:
+    assert _needs_next_page_context(["ACTUAL_LABEL_MISSING"], "REPORT")
+    assert _needs_next_page_context(["ACHIEVEMENT_RATE_LABEL_MISSING"], "REPORT")
+    assert not _needs_next_page_context(["ACTUAL_LABEL_MISSING"], "PLAN")
+
+
+def test_context_images_only_complete_rows_started_on_target_page(tmp_path) -> None:
+    previous = tmp_path / "previous.png"
+    target = tmp_path / "target.png"
+    following = tmp_path / "following.png"
+    for path in (previous, target, following):
+        path.write_bytes(b"image")
+    request, _ = _request_entry(
+        {
+            "page_id": "p1",
+            "document_type": "REPORT",
+            "fiscal_year": 2024,
+            "source_pdf_page": 10,
+            "structure_reasons": "CURRENT_YEAR_MISSING;ACTUAL_LABEL_MISSING",
+            "previous_context_image_path": str(previous),
+            "next_context_image_path": str(following),
+        },
+        target,
+        "gpt-5.6-luna",
+        1800,
+    )
+
+    content = request["body"]["input"][0]["content"]
+    prompt = content[0]["text"]
+    assert len(content) == 4
+    assert "추출 대상 페이지에서 시작된 같은 행만 연결" in prompt
+    assert "문맥 이미지에서 새로 시작된 다른 지표는 반환하지 마세요" in prompt
+
+
+def test_vision_schema_forces_requested_fiscal_year() -> None:
+    fiscal_year = _vision_schema(2024)["properties"]["records"]["items"]["properties"][
+        "fiscal_year"
+    ]
+
+    assert fiscal_year == {"type": "integer", "enum": [2024]}
+
+
+def test_compatible_duplicate_records_merge_without_hiding_conflicts() -> None:
+    base = {
+        "program_goal_number": "Ⅰ-1",
+        "indicator_name": "공통지표",
+        "unit": "%",
+        "fiscal_year": 2024,
+        "planned_target": None,
+        "actual_value": "10",
+        "achievement_rate": None,
+        "source_evidence": "실적 10",
+    }
+    compatible = {
+        **base,
+        "actual_value": None,
+        "achievement_rate": "100",
+        "source_evidence": "달성률 100",
+    }
+    conflict = {**base, "actual_value": "11"}
+
+    merged, merged_count, conflict_count = _merge_compatible_records(
+        [base.copy(), compatible, conflict], 2024
+    )
+
+    assert len(merged) == 2
+    assert merged_count == 1
+    assert conflict_count == 1
+    assert merged[0]["actual_value"] == "10"
+    assert merged[0]["achievement_rate"] == "100"
 
 
 def test_pilot_sample_keeps_unresolved_and_spreads_strata() -> None:
@@ -89,7 +170,8 @@ def test_pilot_sample_keeps_unresolved_and_spreads_strata() -> None:
 def test_sync_request_clamps_output_and_parses_response(tmp_path) -> None:
     request_path = tmp_path / "requests.jsonl"
     request_path.write_text(
-        '{"custom_id":"p1","body":{"max_output_tokens":6000}}\n',
+        '{"custom_id":"p1","body":{"max_output_tokens":6000}}\n'
+        '{"custom_id":"p2","body":{"max_output_tokens":1200}}\n',
         encoding="utf-8",
     )
     requests = _prepare_sync_requests(request_path, 1800)
@@ -105,6 +187,7 @@ def test_sync_request_clamps_output_and_parses_response(tmp_path) -> None:
     }
 
     assert requests[0]["body"]["max_output_tokens"] == 1800
+    assert requests[1]["body"]["max_output_tokens"] == 1200
     assert _response_output_text(payload) == '{"records":[]}'
     assert _sync_cost_usd({"input_tokens": 1000, "output_tokens": 500}, 0.2, 1.2) == 0.0008
     index = {
@@ -113,6 +196,23 @@ def test_sync_request_clamps_output_and_parses_response(tmp_path) -> None:
         "prompt_char_count": "200",
     }
     assert round(_attempt_max_cost_usd(index, 1800, 0.2, 1.2), 6) == 0.003256
+
+
+def test_sync_pilot_requires_explicit_config_permission(tmp_path) -> None:
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "llm.yaml").write_text(
+        "llm:\n  api_execution_allowed: false\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="api_execution_allowed"):
+        run_sync_pilot(
+            tmp_path,
+            tmp_path / "output",
+            max_approved_cost_usd=0.01,
+            execute=True,
+        )
 
 
 def test_billed_cost_does_not_double_count_resumed_success() -> None:

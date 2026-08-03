@@ -193,6 +193,7 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 - `fiscal-analytics analyze-manual-same-year-budget`
 - `fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite`
 - `fiscal-analytics analyze-priority-scenarios --root . --overwrite`
+- `fiscal-analytics analyze-real-budget-feedback --root .`
 
 위 준비·검증 명령은 OpenAI API 키 없이 로컬 파일만으로 실행합니다. 수기 골드셋
 경로는 보고서 최종 목표가 없으면 계획 목표로 대체하지 않고 결측으로 유지합니다.
@@ -201,6 +202,10 @@ API 키와 모델 자격증명은 설정 파일에 쓰지 않고 환경변수로
 허용, API 키, 모델, 실행별 비용승인이 모두 있어야만 작동합니다.
 예산 기준 중간 테이블은 결산·성과 자료가 결합되기 전에는 최종 마스터로
 간주하지 않습니다.
+
+실질 예산환류 분석은 기존 명목 후보 테이블을 입력으로 읽고 별도 산출물에만
+실질 증감률과 점검강도 민감도를 추가합니다. 명목 신호와 업무대기열을 덮어쓰지
+않으며, GDP 디플레이터가 없는 연도는 남은 지수로 보간하지 않습니다.
 
 ## 팀 공유 마일스톤
 

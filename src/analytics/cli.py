@@ -31,6 +31,10 @@ from analytics.priority_case_evidence_review import (
     CaseEvidenceReviewError,
     build_case_evidence_review,
 )
+from analytics.real_budget_feedback import (
+    RealBudgetFeedbackPaths,
+    build_real_budget_feedback_sensitivity,
+)
 from analytics.unknown_top16_review import (
     UnknownReviewPaths,
     build_unknown_review_workbook,
@@ -82,6 +86,16 @@ def audit_m3_methodology(
     typer.echo(
         f"M3 방법론 감사 완료: 산출물 {len(result.output_paths)}개, 보고서 {result.report_path}"
     )
+
+
+@app.command("analyze-real-budget-feedback")
+def analyze_real_budget_feedback(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+) -> None:
+    """GDP 디플레이터로 T+1·T+2 실질 예산환류 민감도를 검증합니다."""
+    result = build_real_budget_feedback_sensitivity(RealBudgetFeedbackPaths.from_root(root))
+    typer.echo(json.dumps(result.summary, ensure_ascii=False, indent=2))
+    typer.echo(f"- {result.report_path}")
 
 
 @app.command("build-analysis-policy-decision-support")
