@@ -26,6 +26,11 @@ from analytics.mss_same_year_budget_check import (
     SameYearBudgetCheckError,
     run_same_year_budget_check,
 )
+from analytics.explanation_need_score import (
+    ExplanationNeedPaths,
+    ExplanationNeedScoreError,
+    run_explanation_need_score,
+)
 from analytics.priority_case_evidence_review import (
     CaseEvidencePaths,
     CaseEvidenceReviewError,
@@ -270,6 +275,21 @@ def analyze_priority_scenarios(
     typer.echo(json.dumps(priority.summary, ensure_ascii=False, indent=2))
     typer.echo(f"- {combined_path}")
     for path in (*priority.output_paths, *priority.figure_paths):
+        typer.echo(f"- {path}")
+
+
+@app.command("build-explanation-need-score")
+def build_explanation_need_score(
+    root: Path = typer.Option(Path("."), help="프로젝트 루트"),
+) -> None:
+    """검증 기반 설명요구 점수·새 대기열 파일럿을 생성합니다."""
+    try:
+        summary = run_explanation_need_score(ExplanationNeedPaths.from_root(root))
+    except (ExplanationNeedScoreError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"설명요구 점수 산출 실패: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    for path in summary.get("output_paths", []):
         typer.echo(f"- {path}")
 
 

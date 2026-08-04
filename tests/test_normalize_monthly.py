@@ -6,12 +6,14 @@ from pathlib import Path
 import pandas as pd
 
 from open_fiscal_pipeline.normalize_monthly import (
+    MISSING_REASON_RECOVERED,
     apply_validation_flags,
     build_normalization_summary,
     extract_rows_from_document,
     normalize_monthly,
     normalize_record,
     parse_amount,
+    recover_masked_cumulative_amounts,
 )
 
 
@@ -140,6 +142,52 @@ def test_masked_amount_is_null_and_raw_preserved() -> None:
     assert row["manual_review_required"] is True
     assert row["review_status"] == "needs_review"
     assert row["table_id"] == "project_month"
+
+
+def test_masked_cumulative_is_recovered_with_adjacent_month_identity() -> None:
+    rows = [
+        normalize_record(
+            _base_row(EXE_M="202401", EP_AMT=100, THISM_AGGR_EP_AMT=100),
+            source_file="a.json",
+            source_page=1,
+            source_requested_at="t",
+        ),
+        normalize_record(
+            _base_row(EXE_M="202402", EP_AMT=50, THISM_AGGR_EP_AMT="150*******"),
+            source_file="b.json",
+            source_page=1,
+            source_requested_at="t",
+        ),
+        normalize_record(
+            _base_row(EXE_M="202403", EP_AMT=20, THISM_AGGR_EP_AMT=170),
+            source_file="c.json",
+            source_page=1,
+            source_requested_at="t",
+        ),
+    ]
+    frame = pd.DataFrame(rows)
+    for column in (
+        "expenditure_amount",
+        "cumulative_expenditure_amount",
+        "cumulative_net_expenditure_amount",
+        "budget_amount",
+        "current_budget_amount",
+    ):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
+    recovered, probe = recover_masked_cumulative_amounts(frame)
+    recovered, _ = apply_validation_flags(recovered)
+
+    assert int(recovered.loc[1, "cumulative_expenditure_amount"]) == 150
+    assert bool(recovered.loc[1, "mask_recovery_applied"]) is True
+    assert recovered.loc[1, "review_status"] == "recovered_adjacent_month"
+    assert bool(recovered.loc[1, "is_masked"]) is False
+    assert (
+        json.loads(recovered.loc[1, "amount_missing_reasons"])["THISM_AGGR_EP_AMT"]
+        == MISSING_REASON_RECOVERED
+    )
+    assert json.loads(recovered.loc[1, "masked_raw_values"])["THISM_AGGR_EP_AMT"] == "150*******"
+    assert bool(probe.loc[0, "promoted_to_operational_amount"]) is True
+    assert bool(probe.loc[0, "raw_source_overwritten"]) is False
 
 
 

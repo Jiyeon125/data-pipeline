@@ -16,10 +16,13 @@ BLOCKING_REASONS = {
     "SETTLEMENT_DUPLICATE_KEY",
     "SETTLEMENT_CODE_NO_MATCH",
     "SETTLEMENT_CODE_MULTIPLE_MATCHES",
-    "SETTLEMENT_MISSING",
     "FINANCIAL_BASE_MISSING",
-    "MISSING_DENOMINATOR",
     "UNSUPPORTED_ACCOUNT_TYPE",
+}
+# 결산 미연결·분모 없음은 행 전체 BLOCKING이 아니라 결산·집행률 분석만 제한한다.
+ANALYSIS_RESTRICTED_REASONS = {
+    "SETTLEMENT_MISSING",
+    "MISSING_DENOMINATOR",
 }
 INFORMATIONAL_REASONS = {
     "ZERO_DENOMINATOR",
@@ -168,6 +171,10 @@ def _auto_resolution(row: pd.Series) -> str:
     reasons = _reason_set(row.get("quality_issue_reasons"))
     if priority == "BLOCKING":
         return "NOT_AUTO_RESOLVED"
+    if "SETTLEMENT_MISSING" in reasons:
+        return "RESTRICT_SETTLEMENT_AND_EXECUTION_RATE_KEEP_BUDGET_SCOPE"
+    if "MISSING_DENOMINATOR" in reasons:
+        return "EXCLUDE_EXECUTION_RATE_MISSING_DENOMINATOR"
     if "ZERO_DENOMINATOR" in reasons:
         return "EXCLUDE_EXECUTION_RATE_DENOMINATOR_ZERO"
     if row.get("settlement_reconciliation_status") == "MISMATCH":

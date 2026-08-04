@@ -34,9 +34,7 @@ BLOCKING_REASONS = {
     "SETTLEMENT_DUPLICATE_KEY",
     "SETTLEMENT_CODE_NO_MATCH",
     "SETTLEMENT_CODE_MULTIPLE_MATCHES",
-    "SETTLEMENT_MISSING",
     "FINANCIAL_BASE_MISSING",
-    "MISSING_DENOMINATOR",
     "UNSUPPORTED_ACCOUNT_TYPE",
 }
 REPRESENTATIVENESS_LIMITED = {
@@ -60,6 +58,10 @@ SOURCE_AMOUNT_COLUMNS = (
     "execution_numerator_amount",
     "execution_denominator_amount",
 )
+PREWINDOW_MATCH_METHOD = "PREWINDOW_BUDGET_NAME_KEY_2020_2021"
+DEFAULT_PREWINDOW_BUDGET_PATH = Path(
+    "data/processed/budget_continuity_2020_2021/budget_records.parquet"
+)
 
 
 @dataclass
@@ -78,6 +80,81 @@ def normalize_project_name(value: Any) -> str:
     if pd.isna(value):
         return ""
     return re.sub(r"[^0-9A-Za-z가-힣]", "", str(value)).lower()
+
+
+def continuity_name_key(
+    ministry_code: Any,
+    account_name: Any,
+    program_name: Any,
+    activity_name: Any,
+    subactivity_name: Any,
+) -> str:
+    """관측창 이전 예산과 연결할 명칭키를 만듭니다."""
+    ministry = "" if pd.isna(ministry_code) else str(ministry_code).strip().zfill(3)
+    return "|".join(
+        [
+            ministry,
+            normalize_project_name(account_name),
+            normalize_project_name(program_name),
+            normalize_project_name(activity_name),
+            normalize_project_name(subactivity_name),
+        ]
+    )
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, float) and pd.isna(value):
+            continue
+        try:
+            if pd.isna(value):
+                continue
+        except (TypeError, ValueError):
+            pass
+        if str(value).strip() == "":
+            continue
+        return value
+    return pd.NA
+
+
+def _name_fields_for_continuity(row: Any) -> tuple[Any, Any, Any, Any, Any]:
+    def value(name: str) -> Any:
+        if isinstance(row, pd.Series):
+            return row.get(name)
+        return getattr(row, name, None)
+
+    return (
+        value("ministry_code"),
+        _first_present(value("account_name_budget_api"), value("account_name")),
+        _first_present(value("program_name_budget_api"), value("program_name")),
+        _first_present(value("activity_name_budget_api"), value("activity_name")),
+        _first_present(value("subactivity_name_budget_api"), value("subactivity_name")),
+    )
+
+
+def load_prewindow_budget_name_years(path: Path) -> dict[str, set[int]]:
+    """2020~2021 예산 정규화 테이블에서 명칭키→관측연도 집합을 로드합니다."""
+    if not path.exists():
+        return {}
+    frame = pd.read_parquet(path)
+    if frame.empty:
+        return {}
+    result: dict[str, set[int]] = {}
+    for row in frame.itertuples(index=False):
+        key = continuity_name_key(
+            getattr(row, "ministry_code", None),
+            getattr(row, "account_name", None),
+            getattr(row, "program_name", None),
+            getattr(row, "activity_name", None),
+            getattr(row, "subactivity_name", None),
+        )
+        year = pd.to_numeric(getattr(row, "fiscal_year", pd.NA), errors="coerce")
+        if pd.isna(year) or not key or key.endswith("||||"):
+            continue
+        result.setdefault(key, set()).add(int(year))
+    return result
 
 
 def _similarity(left: Any, right: Any) -> float:
@@ -257,15 +334,49 @@ def _mutual_best_pairs(
     return pairs
 
 
-def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
-    """인접 회계연도 간 사업관계 후보를 규칙 순서에 따라 생성합니다."""
+def build_project_relations(
+    frame: pd.DataFrame,
+    *,
+    prewindow_name_years: dict[str, set[int]] | None = None,
+) -> pd.DataFrame:
+    """인접 회계연도 간 사업관계 후보를 규칙 순서에 따라 생성합니다.
+
+    `prewindow_name_years`가 있으면 분석 시작연도 행을 2020~2021 예산 명칭키와
+    대조해, 이전이 확인된 사업은 LEFT_CENSORED/OBSERVATION_START 대신 CONTINUED로
+    연결합니다. 신규(NEW)로 승격하지는 않습니다.
+    """
     projects = _prepare_projects(frame)
+    prior = prewindow_name_years or {}
     relations: list[dict[str, Any]] = []
     years = sorted(int(year) for year in projects["fiscal_year"].dropna().unique())
     first_year = years[0]
     last_year = years[-1]
     first_rows = projects.loc[projects["fiscal_year"].eq(first_year)]
     for row in first_rows.itertuples(index=False):
+        ministry, account, program, activity, subactivity = _name_fields_for_continuity(row)
+        name_key = continuity_name_key(ministry, account, program, activity, subactivity)
+        prior_years = sorted(prior.get(name_key, set()))
+        if prior_years:
+            prior_year = int(prior_years[-1])
+            _add_relation(
+                relations,
+                previous_project_id=f"prewindow:{name_key}",
+                next_project_id=row.project_id,
+                previous_year=prior_year,
+                next_year=first_year,
+                relation_type="CONTINUED",
+                continuity_flag=True,
+                matching_method=PREWINDOW_MATCH_METHOD,
+                matching_score=1.0,
+                evidence=(
+                    "관측창 이전 예산편성 API 명칭키 일치; "
+                    f"prior_years={prior_years}; name_key={name_key}; "
+                    "코드 매칭이 아닌 정규화 명칭 일치이며 NEW로 확정하지 않음"
+                ),
+                review_status="RULE_CONFIRMED",
+                manual_review_required=False,
+            )
+            continue
         _add_relation(
             relations,
             previous_project_id=pd.NA,
@@ -276,7 +387,14 @@ def build_project_relations(frame: pd.DataFrame) -> pd.DataFrame:
             continuity_flag=None,
             matching_method="OBSERVATION_WINDOW_START",
             matching_score=None,
-            evidence="분석 시작연도 이전 자료 부재로 실제 신규 여부 확인 불가",
+            evidence=(
+                "분석 시작연도 이전 자료 부재로 실제 신규 여부 확인 불가"
+                + (
+                    f"; prewindow_name_key_checked={name_key}"
+                    if name_key and not name_key.endswith("||||")
+                    else ""
+                )
+            ),
             review_status="INFORMATIONAL",
             manual_review_required=False,
         )
@@ -756,6 +874,28 @@ def build_financial_v2(
         index=frame.index,
         dtype="boolean",
     )
+    prewindow_incoming = relations.loc[
+        relations["matching_method"].eq(PREWINDOW_MATCH_METHOD)
+        & relations["next_project_id"].notna()
+    ].copy()
+    prior_years_map = {
+        str(row.next_project_id): str(row.relation_evidence)
+        for row in prewindow_incoming.itertuples(index=False)
+    }
+    frame["prior_window_observed"] = frame["project_id"].astype(str).isin(prior_years_map)
+    frame["prior_window_match_method"] = pd.Series(pd.NA, index=frame.index, dtype="string")
+    frame.loc[frame["prior_window_observed"], "prior_window_match_method"] = PREWINDOW_MATCH_METHOD
+    frame["prior_window_years"] = pd.Series(pd.NA, index=frame.index, dtype="string")
+    for project_id, evidence in prior_years_map.items():
+        marker = "prior_years="
+        if marker not in evidence:
+            continue
+        years_text = evidence.split(marker, 1)[1].split(";", 1)[0].strip()
+        years_text = years_text.strip("[]").replace(" ", "")
+        frame.loc[frame["project_id"].astype(str).eq(project_id), "prior_window_years"] = years_text
+    frame["continuity_evidence_window_start_year"] = pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    if frame["prior_window_observed"].any():
+        frame.loc[frame["prior_window_observed"], "continuity_evidence_window_start_year"] = 2020
     boundary_statuses = {"OBSERVATION_START", "OBSERVATION_END"}
     frame["structural_change_flag"] = ~frame["project_status"].isin(
         {"CONTINUING", *boundary_statuses}
@@ -769,6 +909,8 @@ def build_financial_v2(
     frame.loc[frame["project_status"].eq("OBSERVATION_END"), "structural_change_type"] = (
         "RIGHT_CENSORED"
     )
+    frame.loc[frame["prior_window_observed"], "structural_change_type"] = pd.NA
+    frame.loc[frame["prior_window_observed"], "structural_change_flag"] = False
     frame["trend_analysis_eligible"] = (
         frame["in_core_financial_population"]
         & frame["continuity_flag"].fillna(False)
@@ -1222,6 +1364,7 @@ def build_project_continuity(
     project_plan_path: Path,
     output_dir: Path,
     overwrite: bool = False,
+    prewindow_budget_path: Path | None = DEFAULT_PREWINDOW_BUDGET_PATH,
 ) -> ProjectContinuityResult:
     """관계·financial v2·프로그램-연도와 품질 산출물을 생성합니다."""
     required = [
@@ -1244,7 +1387,12 @@ def build_project_continuity(
     for frame in (financial_v1, broad, core, strict, classification):
         frame["ministry_code"] = frame["ministry_code"].astype("string")
 
-    relations = build_project_relations(financial_v1)
+    prewindow_path = prewindow_budget_path or DEFAULT_PREWINDOW_BUDGET_PATH
+    prewindow_name_years = load_prewindow_budget_name_years(prewindow_path)
+    relations = build_project_relations(
+        financial_v1,
+        prewindow_name_years=prewindow_name_years,
+    )
     financial_v2 = build_financial_v2(
         financial_v1=financial_v1,
         relations=relations,
@@ -1334,16 +1482,28 @@ def build_project_continuity(
     }
     first_year = int(financial_v2["fiscal_year"].min())
     last_year = int(financial_v2["fiscal_year"].max())
+    prewindow_continued = int(relations["matching_method"].eq(PREWINDOW_MATCH_METHOD).sum())
     observation_summary = {
         "generated_at": datetime.now(UTC).isoformat(),
         "observation_window": {"start_year": first_year, "end_year": last_year},
+        "continuity_evidence_window": {
+            "start_year": 2020 if prewindow_name_years else None,
+            "end_year": 2021 if prewindow_name_years else None,
+            "source_path": str(prewindow_path),
+            "unique_name_key_count": len(prewindow_name_years),
+            "match_method": PREWINDOW_MATCH_METHOD,
+        },
         "left_censored_relation_count": relation_counts.get("LEFT_CENSORED", 0),
         "right_censored_relation_count": relation_counts.get("RIGHT_CENSORED", 0),
+        "prewindow_continued_relation_count": prewindow_continued,
         "observation_start_project_year_count": int(
             financial_v2["project_status"].eq("OBSERVATION_START").sum()
         ),
         "observation_end_project_year_count": int(
             financial_v2["project_status"].eq("OBSERVATION_END").sum()
+        ),
+        "prior_window_observed_project_year_count": int(
+            financial_v2["prior_window_observed"].fillna(False).sum()
         ),
         "start_year_new_due_only_to_boundary_count": int(
             financial_v2.loc[financial_v2["fiscal_year"].eq(first_year), "project_status"]
@@ -1366,6 +1526,11 @@ def build_project_continuity(
         "relationship_candidate_count": review_priority_counts.get("MANUAL_REVIEW", 0),
         "observation_boundary_count": sum(
             relation_counts.get(value, 0) for value in ["LEFT_CENSORED", "RIGHT_CENSORED"]
+        ),
+        "interpretation": (
+            "분석 금액 창은 기존 시작연도~종료연도를 유지하고, 2020~2021 예산 명칭키가 "
+            "확인된 시작연도 행만 OBSERVATION_START에서 CONTINUING으로 운영 승격한다. "
+            "이전 미확인 행은 LEFT_CENSORED를 유지하며 NEW로 바꾸지 않는다."
         ),
     }
     v2_summary = {

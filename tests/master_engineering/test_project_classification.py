@@ -215,9 +215,9 @@ def _build(tmp_path: Path):
                 "project_id": source.loc[1, "project_id"],
                 "fiscal_year": 2024,
                 "ministry_code": "075",
-                "review_priority": "BLOCKING",
-                "blocks_annual_financial_analysis": True,
-                "automatic_resolution_rule": "NOT_AUTO_RESOLVED",
+                "review_priority": "NON_BLOCKING",
+                "blocks_annual_financial_analysis": False,
+                "automatic_resolution_rule": "EXCLUDE_EXECUTION_RATE_MISSING_DENOMINATOR",
                 "priority_reason": "MISSING_DENOMINATOR",
             },
             {
@@ -269,15 +269,23 @@ def _build(tmp_path: Path):
     )
 
 
-def test_blocking_is_excluded_and_execution_over_100_is_rate_limited(
+def test_missing_denominator_restricts_rate_not_row_and_over_100_is_rate_limited(
     tmp_path: Path,
 ) -> None:
     source, result = _build(tmp_path)
-    excluded = result.analysis_excluded.set_index("source_project_year_id")
-    assert excluded.loc[source.loc[1, "project_id"], "financial_quality_level"] == "BLOCKING"
     combined = pd.concat(
         [result.analysis_population, result.analysis_excluded], ignore_index=True
     ).set_index("source_project_year_id")
+    missing_den = combined.loc[source.loc[1, "project_id"]]
+    assert missing_den["financial_quality_level"] == "RESTRICTED"
+    assert bool(missing_den["financial_analysis_eligible"])
+    assert not bool(missing_den["execution_rate_analysis_eligible"])
+    assert "SETTLEMENT_UNLINKED" not in str(
+        missing_den.get("financial_analysis_limitation_flags") or ""
+    )
+    assert "EXECUTION_DENOMINATOR_UNCONFIRMED" in str(
+        missing_den.get("financial_analysis_limitation_flags") or ""
+    )
     over_row = combined.loc[source.loc[2, "project_id"]]
     assert bool(over_row["financial_analysis_eligible"])
     assert not bool(over_row["execution_rate_analysis_eligible"])

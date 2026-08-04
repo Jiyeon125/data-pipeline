@@ -40,6 +40,10 @@ fiscal-performance = "performance_pipeline.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Streamlit Cloud(uv)가 루트 패키지 설치에 실패할 때 의존성만 설치하도록 함
+[tool.uv]
+package = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--basetemp=.pytest_tmp"
@@ -53,3 +57,4 @@ target-version = "py311"
 "src/master_engineering/cli.py" = ["B008"]
 "src/analytics/cli.py" = ["B008"]
 "src/performance_pipeline/cli.py" = ["B008"]
+"src/fiscal_dashboard/app.py" = ["E402", "I001"]

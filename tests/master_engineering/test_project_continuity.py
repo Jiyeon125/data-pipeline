@@ -3,10 +3,12 @@ from __future__ import annotations
 import pandas as pd
 
 from master_engineering.build_masters.project_continuity import (
+    PREWINDOW_MATCH_METHOD,
     SOURCE_AMOUNT_COLUMNS,
     build_financial_v2,
     build_program_year_financial,
     build_project_relations,
+    continuity_name_key,
     normalize_project_name,
 )
 
@@ -20,6 +22,9 @@ def _project(
     ministry_code: str = "019",
     program_code: str = "P1",
     activity_code: str = "A1",
+    account_name: str = "일반회계",
+    program_name: str = "청년지원프로그램",
+    activity_name: str = "청년지원단위사업",
 ) -> dict[str, object]:
     return {
         "project_id": project_id,
@@ -27,13 +32,29 @@ def _project(
         "ministry_code": ministry_code,
         "ministry_name": "테스트부",
         "account_code": "001",
+        "account_name": account_name,
         "program_code": program_code,
-        "program_name": "청년지원프로그램",
+        "program_name": program_name,
         "activity_code": activity_code,
-        "activity_name": "청년지원단위사업",
+        "activity_name": activity_name,
         "subactivity_code": subactivity_code,
         "subactivity_name": subactivity_name,
     }
+
+
+def test_prewindow_budget_name_key_lifts_observation_start() -> None:
+    source = pd.DataFrame([_project("p22", 2022, "S1", "청년 지원")])
+    key = continuity_name_key("019", "일반회계", "청년지원프로그램", "청년지원단위사업", "청년 지원")
+    relations = build_project_relations(
+        source,
+        prewindow_name_years={key: {2020, 2021}},
+    )
+    assert relations["relation_type"].eq("LEFT_CENSORED").sum() == 0
+    continued = relations.loc[relations["matching_method"].eq(PREWINDOW_MATCH_METHOD)].iloc[0]
+    assert continued["relation_type"] == "CONTINUED"
+    assert bool(continued["continuity_flag"])
+    assert continued["previous_fiscal_year"] == 2021
+    assert "NEW" not in set(relations["relation_type"])
 
 
 def test_name_normalization_and_same_code_continuity() -> None:

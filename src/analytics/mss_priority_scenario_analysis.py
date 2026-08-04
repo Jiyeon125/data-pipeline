@@ -22,6 +22,13 @@ COMPONENTS = (
     "budget_performance_mismatch",
     "fiscal_impact",
 )
+SIGNAL_SCORE_COMPONENTS = (
+    "performance_gap",
+    "execution_management",
+    "budget_performance_mismatch",
+)
+SIGNAL_SCORE_METHOD = "equal_mean_of_three_signal_components"
+SIZE_ROLE_IN_WORK_QUEUE = "tiebreak_only"
 SIGNAL_FLAGS = (
     "type_repeated_strong_low_execution",
     "type_repeated_moderate_low_execution",
@@ -831,6 +838,7 @@ def build_full_population_review_work_queue(
             "context_only_candidate",
             "context_signal_family_count",
             "account_original_budget",
+            "signal_score",
         },
         "후보표",
     )
@@ -892,6 +900,7 @@ def build_full_population_review_work_queue(
     result["work_queue_role"] = "REVIEW_WORKFLOW_ORDER_NOT_POLICY_EFFECTIVENESS_RANK"
 
     budget = pd.to_numeric(result["account_original_budget"], errors="coerce").fillna(0)
+    signal_score = pd.to_numeric(result["signal_score"], errors="coerce").fillna(0)
     result["_resolved_order"] = resolved.astype(int)
     result["_repeat_order"] = -pd.to_numeric(
         result["repeated_signal_family_count"], errors="coerce"
@@ -902,29 +911,25 @@ def build_full_population_review_work_queue(
     result["_evidence_order"] = (
         result["evidence_status"].map({"CONFIRMED": 0, "LIMITED": 1, "DATA_BLOCKED": 2}).fillna(3)
     )
+    # 규모는 신호 강도 다음의 동률 정리만. 가중합 점수로 쓰지 않음.
+    result["_signal_score_order"] = -signal_score
     result["_budget_order"] = -budget
 
-    result = result.sort_values(
-        [
-            "work_lane_order",
-            "_repeat_order",
-            "_signal_order",
-            "_evidence_order",
-            "_budget_order",
-            "candidate_id",
-        ],
-        ignore_index=True,
-    )
+    lane_sort_keys = [
+        "work_lane_order",
+        "_repeat_order",
+        "_signal_order",
+        "_evidence_order",
+        "_signal_score_order",
+        "_budget_order",
+        "candidate_id",
+    ]
+    result = result.sort_values(lane_sort_keys, ignore_index=True)
     result["work_lane_rank_overall"] = result.groupby("work_lane").cumcount() + 1
     ministry_order = result.sort_values(
         [
             "ministry_code",
-            "work_lane_order",
-            "_repeat_order",
-            "_signal_order",
-            "_evidence_order",
-            "_budget_order",
-            "candidate_id",
+            *lane_sort_keys,
         ]
     )
     result["work_lane_rank_within_ministry"] = (
@@ -964,6 +969,7 @@ def build_full_population_review_work_queue(
             "_repeat_order",
             "_signal_order",
             "_evidence_order",
+            "_signal_score_order",
             "_budget_order",
         ]
     ).convert_dtypes()
@@ -1009,6 +1015,20 @@ def build_full_population_review_work_queue(
         "original_budget_reconciled": True,
         "safety_conclusion_generated": False,
         "final_policy_rank_generated": False,
+        "signal_size_separation": {
+            "signal_score_method": SIGNAL_SCORE_METHOD,
+            "signal_score_components": list(SIGNAL_SCORE_COMPONENTS),
+            "fiscal_impact_in_signal_score": False,
+            "size_role": SIZE_ROLE_IN_WORK_QUEUE,
+            "within_lane_order": [
+                "repeated_signal_family_count_desc",
+                "independent_signal_family_count_desc",
+                "evidence_status",
+                "signal_score_desc",
+                "account_original_budget_desc_tiebreak_only",
+                "candidate_id",
+            ],
+        },
     }
     return result, summary
 
@@ -1559,10 +1579,17 @@ def build_candidate_population(
         merged["review_candidate"] & ~merged["scenario_ranking_eligible"]
     )
 
+    # priority_tier의 강한 단일도 동일 원칙(성과미달 단독 금지).
     strong_single = (
-        merged["performance_gap"].fillna(0).ge(1)
-        | merged["current_execution_severity"].fillna(0).ge(1)
+        merged["current_execution_severity"].fillna(0).ge(1)
         | merged["type_repeated_strong_low_execution_budget_share"].fillna(0).ge(0.5)
+        | (
+            merged["performance_gap"].fillna(0).ge(1)
+            & (
+                merged["low_performance_budget_increase_t1"].fillna(False)
+                | merged["low_performance_budget_increase_t2"].fillna(False)
+            )
+        )
     )
     merged["priority_tier"] = "INFORMATION"
     merged.loc[merged["context_only_candidate"], "priority_tier"] = "CONTEXT_REVIEW"
@@ -1576,11 +1603,18 @@ def build_candidate_population(
         "priority_tier",
     ] = "MULTIPLE_SIGNAL_REVIEW"
     merged.loc[merged["data_validation_signal"], "priority_tier"] = "DATA_REVIEW"
-    strong_independent = (
-        merged["performance_gap"].fillna(0).ge(1)
-        | merged["current_execution_severity"].fillna(0).ge(1)
-        | merged["low_performance_budget_increase_t1"]
-        | merged["low_performance_budget_increase_t2"]
+    # 3차 멘토링: 성과미달만으로 최우선(강한 단일) 금지.
+    # 강한 단일은 집행 강신호이거나, 성과미달+후속예산증가 등 추가 근거가 있을 때만.
+    performance_full_gap = merged["performance_gap"].fillna(0).ge(1)
+    execution_strong_signal = merged["current_execution_severity"].fillna(0).ge(1)
+    low_perf_budget_increase = merged["low_performance_budget_increase_t1"].fillna(
+        False
+    ) | merged["low_performance_budget_increase_t2"].fillna(False)
+    strong_independent = execution_strong_signal | (
+        performance_full_gap & low_perf_budget_increase
+    ) | (
+        performance_full_gap
+        & merged["type_repeated_strong_low_execution_budget_share"].fillna(0).ge(0.5)
     )
     merged["review_intensity"] = "MONITOR"
     merged.loc[
@@ -1654,6 +1688,29 @@ def build_candidate_population(
     ).reset_index(drop=True)
     if result["candidate_id"].duplicated().any():
         raise PriorityScenarioError("후보 ID가 중복되었습니다.")
+    return attach_signal_size_separation(result.convert_dtypes())
+
+
+def attach_signal_size_separation(candidates: pd.DataFrame) -> pd.DataFrame:
+    """신호 점수와 예산 규모를 분리해 본편 대기열용 필드를 붙입니다.
+
+    - signal_score: 성과·집행·성과-예산불일치의 산술평균 (fiscal_impact 제외)
+    - fiscal_impact: 민감도·파급 시나리오용으로 유지
+    - 본편 업무순서는 signal_score 후 예산 동률 정리만 사용
+    """
+    result = candidates.copy()
+    signal_parts = [
+        pd.to_numeric(result[column], errors="coerce") for column in SIGNAL_SCORE_COMPONENTS
+    ]
+    signal_frame = pd.concat(signal_parts, axis=1)
+    present = signal_frame.notna().sum(axis=1)
+    result["signal_score"] = signal_frame.sum(axis=1, min_count=1) / present.where(present.gt(0))
+    result["signal_score"] = result["signal_score"].astype("Float64")
+    result["signal_score_method"] = SIGNAL_SCORE_METHOD
+    result["size_role_in_work_queue"] = SIZE_ROLE_IN_WORK_QUEUE
+    result["fiscal_impact_in_signal_score"] = False
+    if result["signal_score"].isna().all():
+        raise PriorityScenarioError("신호 점수를 계산할 수 없습니다.")
     return result.convert_dtypes()
 
 
@@ -2146,10 +2203,16 @@ def _build_summary(
                 "repeated_signal_family_count_desc",
                 "independent_signal_family_count_desc",
                 "evidence_status",
-                "account_original_budget_desc",
+                "signal_score_desc",
+                "account_original_budget_desc_tiebreak_only",
                 "candidate_id",
             ],
             "weighted_sum_used": False,
+            "signal_score_used_in_work_queue": True,
+            "signal_score_method": SIGNAL_SCORE_METHOD,
+            "signal_score_components": list(SIGNAL_SCORE_COMPONENTS),
+            "fiscal_impact_in_signal_score": False,
+            "size_role_in_work_queue": SIZE_ROLE_IN_WORK_QUEUE,
             "t1_t2_kept_separate": True,
             "performance_attributed_to_detailed_project": False,
             "account_type_kept_separate": True,

@@ -78,13 +78,15 @@ EXCLUSION_RULES = {
 }
 HARD_FINANCIAL_REASONS = {
     "FINANCIAL_BASE_MISSING",
-    "MISSING_DENOMINATOR",
     "SETTLEMENT_CODE_MULTIPLE_MATCHES",
     "SETTLEMENT_CODE_NO_MATCH",
     "SETTLEMENT_DUPLICATE_KEY",
-    "SETTLEMENT_MISSING",
     "UNSUPPORTED_ACCOUNT_TYPE",
     "V1_PRIMARY_KEY_DUPLICATE",
+}
+ANALYSIS_RESTRICTED_FINANCIAL_REASONS = {
+    "MISSING_DENOMINATOR",
+    "SETTLEMENT_MISSING",
 }
 
 
@@ -251,6 +253,11 @@ def _financial_restrictions(row: pd.Series) -> list[str]:
     reasons = _reason_set(row.get("quality_issue_reasons"))
     if priority == "BLOCKING" or reasons & HARD_FINANCIAL_REASONS:
         restrictions.append("BLOCKING_FINANCIAL_QUALITY")
+    if reasons & ANALYSIS_RESTRICTED_FINANCIAL_REASONS:
+        if "SETTLEMENT_MISSING" in reasons:
+            restrictions.append("SETTLEMENT_UNLINKED")
+        if "MISSING_DENOMINATOR" in reasons:
+            restrictions.append("EXECUTION_DENOMINATOR_UNCONFIRMED")
     if _bool(row.get("execution_rate_over_100_flag")):
         restrictions.append("EXECUTION_RATE_OVER_1")
     if row.get("execution_denominator_status") != "APPLIED":

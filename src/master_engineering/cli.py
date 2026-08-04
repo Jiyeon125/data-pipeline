@@ -55,6 +55,10 @@ def build_project_continuity_command(
     ),
     mentoring_guide_path: Path = typer.Option(Path("docs/MENTORING_GUIDE.md")),
     project_plan_path: Path = typer.Option(Path("docs/PROJECT_PLAN.md")),
+    prewindow_budget_path: Path = typer.Option(
+        Path("data/processed/budget_continuity_2020_2021/budget_records.parquet"),
+        help="관측창 이전(2020~2021) 예산 정규화 테이블. 명칭키 연속성 운영 반영에 사용",
+    ),
     output_dir: Path = typer.Option(Path("data/processed/masters")),
     overwrite: bool = typer.Option(False),
 ) -> None:
@@ -70,6 +74,7 @@ def build_project_continuity_command(
             project_plan_path=project_plan_path,
             output_dir=output_dir,
             overwrite=overwrite,
+            prewindow_budget_path=prewindow_budget_path,
         )
     except (OSError, FileExistsError, ValueError) as exc:
         typer.echo(f"사업 연속성 산출물 생성 실패: {exc}", err=True)

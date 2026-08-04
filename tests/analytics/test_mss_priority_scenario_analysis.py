@@ -4,9 +4,11 @@ import pandas as pd
 
 from analytics.mss_priority_scenario_analysis import (
     SIGNAL_FLAGS,
+    SIGNAL_SCORE_COMPONENTS,
     PriorityScenarioPaths,
     aggregate_program_account_signals,
     apply_feedback_cutoff,
+    attach_signal_size_separation,
     build_candidate_population,
     build_full_population_review_work_queue,
     build_project_review_work_queue,
@@ -118,6 +120,65 @@ def test_manual_candidate_rules_and_budget_weighting() -> None:
     assert not candidates.loc["D", "review_candidate"]  # 규모만으로 후보를 만들지 않음
     assert candidates.loc["E", "priority_tier"] == "DATA_REVIEW"
     assert signals["project_signal_budget"].sum() == analysis["account_original_budget"].sum()
+    assert "signal_score" in candidates.columns
+    assert not bool(candidates["fiscal_impact_in_signal_score"].iloc[0])
+    assert candidates.loc["A", "signal_score"] == candidates.loc[
+        "A", list(SIGNAL_SCORE_COMPONENTS)
+    ].astype(float).mean()
+
+
+def test_work_queue_orders_by_signal_score_before_budget() -> None:
+    """같은 레인·신호 수면 예산이 커도 signal_score가 높은 쪽이 앞선다."""
+    rows = []
+    for program, budget, gap in (
+        ("BIG", 1_000_000.0, 0.2),
+        ("STRONG", 10_000.0, 0.9),
+    ):
+        rows.append(
+            {
+                "candidate_id": f"102:2024:f:s:{program}:GENERAL_ACCOUNT",
+                "ministry_code": "102",
+                "field_name": "f",
+                "sector_name": "s",
+                "program_code": program,
+                "fiscal_year": 2024,
+                "account_type": "GENERAL_ACCOUNT",
+                "performance_program_name": program,
+                "analysis_status": "JOINT_ANALYSIS",
+                "scenario_ranking_eligible": True,
+                "data_validation_signal": False,
+                "context_only_candidate": False,
+                "context_signal_family_count": 0,
+                "account_original_budget": budget,
+                "performance_gap": gap,
+                "execution_management": gap,
+                "budget_performance_mismatch": gap,
+                "review_intensity": "SINGLE_REVIEW",
+                "review_item_type": "DETAILED_PROJECT_REVIEW",
+                "repeated_signal_family_count": 0,
+                "independent_signal_family_count": 1,
+                "evidence_status": "CONFIRMED",
+                "next_action": "표시된 독립 신호의 근거를 확인",
+            }
+        )
+    candidates = attach_signal_size_separation(pd.DataFrame(rows))
+    stability = pd.DataFrame(
+        {
+            "candidate_id": candidates["candidate_id"],
+            "mean_scenario_rank": [1.0, 2.0],
+            "scenario_rank_range": [0.0, 0.0],
+            "mean_scenario_rank_within_ministry": [1.0, 2.0],
+            "scenario_rank_range_within_ministry": [0.0, 0.0],
+            "exploratory_consensus_order": [1, 2],
+            "all_scenario_top_5": [False, False],
+            "all_scenario_top_5_within_ministry": [False, False],
+        }
+    )
+    work_queue, summary = build_full_population_review_work_queue(candidates, stability)
+    ordered = work_queue.sort_values("work_queue_order")["program_code"].tolist()
+    assert ordered == ["STRONG", "BIG"]
+    assert summary["signal_size_separation"]["size_role"] == "tiebreak_only"
+    assert summary["signal_size_separation"]["fiscal_impact_in_signal_score"] is False
 
 
 def test_program_signals_use_classified_account_type() -> None:
@@ -165,19 +226,21 @@ def test_manual_scenario_rank_stability() -> None:
     assert work_summary["candidate_coverage_rate"] == 1
     assert work_queue["work_lane"].value_counts().to_dict() == {
         "REPEATED_OR_MULTIPLE": 1,
-        "STRONG_SINGLE": 1,
+        "SINGLE_REVIEW": 1,
         "DATA_FIRST": 1,
         "CONTEXT_REVIEW": 1,
         "MONITOR": 1,
     }
     assert work_queue["safety_conclusion"].eq("NOT_ASSESSED").all()
+    # 성과미달만인 A는 STRONG_SINGLE이 아니라 SINGLE_REVIEW (3차 멘토링)
     assert work_queue.sort_values("work_queue_order")["review_intensity"].tolist() == [
         "DATA_FIRST",
         "REPEATED_OR_MULTIPLE",
-        "STRONG_SINGLE",
+        "SINGLE_REVIEW",
         "CONTEXT_REVIEW",
         "MONITOR",
     ]
+    assert work_queue.set_index("program_code").loc["A", "review_intensity"] == "SINGLE_REVIEW"
 
 
 def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
@@ -201,6 +264,9 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
                 "data_validation_signal": False,
                 "context_only_candidate": False,
                 "context_signal_family_count": 0,
+                "performance_gap": 1.0,
+                "execution_management": 0.0,
+                "budget_performance_mismatch": 0.0,
                 "review_intensity": "SINGLE_REVIEW",
                 "review_intensity_order": 3,
                 "review_item_type": "DETAILED_PROJECT_REVIEW",
@@ -217,6 +283,7 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
             }
         ]
     )
+    candidate = attach_signal_size_separation(candidate)
     stability = pd.DataFrame(
         [
             {

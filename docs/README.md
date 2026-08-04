@@ -33,6 +33,8 @@
 | [Cursor 작업지시서](CURSOR_MSS_PERFORMANCE_PDF_RECONCILIATION_PROMPT.md) | 중기부 대조 작업의 외부 AI 실행 계약 |
 | [원기획 대비 차이 감사](ORIGINAL_PROPOSAL_PIPELINE_GAP_AUDIT.md) | 최초 제안과 현재 구현의 차이 |
 | [멘토링 반영 감사](MENTORING_IMPLEMENTATION_AUDIT.md) | 멘토링 요구사항별 구현 근거와 미반영 항목 |
+| [3차 멘토링 정리(2026-08-04)](MENTORING_SESSION_3_2026-08-04.md) | 사전질문지 Q&A·프로젝트 반영 상태 |
+| [멘토링 반영 재점검](MENTORING_IMPLEMENTATION_REFRESH_2026-07-31.md) | 원칙별 완료/미완 요약표 |
 | [UNKNOWN 검수 안내](UNKNOWN_PRIORITY_REVIEW_GUIDE.md) | 재정수단 수기검수 워크북 사용법 |
 
 `MENTORING_GUIDE.md`, `WORK_LOG.md`, `WORK_TRACKER.md`,

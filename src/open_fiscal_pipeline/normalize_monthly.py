@@ -73,6 +73,11 @@ EXTRACTION_METHOD = "api_json_normalize"
 MISSING_REASON_MASKED = "MASKED_SOURCE_VALUE"
 MISSING_REASON_PARSE_FAILED = "PARSE_FAILED"
 MISSING_REASON_SOURCE_MISSING = "SOURCE_VALUE_MISSING"
+MISSING_REASON_RECOVERED = "RECOVERED_ADJACENT_MONTH_IDENTITY"
+RECOVERY_METHOD_PREV = "PREV_CUMULATIVE_PLUS_MONTH_EXPENDITURE"
+RECOVERY_METHOD_NEXT = "NEXT_CUMULATIVE_MINUS_NEXT_EXPENDITURE"
+RECOVERY_METHOD_BOTH = "PREV_AND_NEXT_IDENTITY_AGREE"
+MASKED_CUMULATIVE_SOURCE_FIELD = "THISM_AGGR_EP_AMT"
 
 CODE_FIELD_MAP: dict[str, str] = {
     "OFFC_CD": "ministry_code",
@@ -117,6 +122,156 @@ YYYYMM_RE = re.compile(r"^\d{6}$")
 MASK_RE = re.compile(r"\*")
 
 OutputFormat = Literal["parquet", "csv", "both"]
+
+
+def _mask_prefix(raw: object) -> str:
+    text = "" if raw is None or (isinstance(raw, float) and pd.isna(raw)) else str(raw)
+    star = text.find("*")
+    return text if star < 0 else text[:star]
+
+
+def _prefix_matches(value: int, raw: object) -> bool:
+    prefix = _mask_prefix(raw)
+    return bool(prefix) and str(int(value)).startswith(prefix)
+
+
+def _parse_json_object(value: object) -> dict[str, Any]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def recover_masked_cumulative_amounts(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """마스킹된 누계지출을 인접월 항등식으로 복원해 운영 금액에 승격합니다.
+
+    원본 raw JSON은 변경하지 않습니다. `masked_raw_values`는 보존하고,
+    접두어가 일치할 때만 `cumulative_expenditure_amount`를 채웁니다.
+    """
+    result = frame.copy()
+    result["mask_recovery_applied"] = False
+    result["cumulative_expenditure_recovery_method"] = pd.Series(
+        pd.NA, index=result.index, dtype="string"
+    )
+    probe_rows: list[dict[str, Any]] = []
+    if result.empty or "cumulative_expenditure_amount" not in result.columns:
+        return result, pd.DataFrame(probe_rows)
+
+    masked_raw = result.get("masked_raw_values")
+    if masked_raw is None:
+        return result, pd.DataFrame(probe_rows)
+
+    candidates: list[int] = []
+    for idx, raw_value in masked_raw.items():
+        payload = _parse_json_object(raw_value)
+        if MASKED_CUMULATIVE_SOURCE_FIELD not in payload:
+            continue
+        if pd.notna(result.at[idx, "cumulative_expenditure_amount"]):
+            continue
+        candidates.append(idx)
+
+    if not candidates:
+        return result, pd.DataFrame(probe_rows)
+
+    sort_columns = [*BUSINESS_KEY_FIELDS, "execution_month"]
+    ordered = result.sort_values(sort_columns, kind="mergesort")
+    for idx in candidates:
+        row = result.loc[idx]
+        raw_payload = _parse_json_object(row.get("masked_raw_values"))
+        masked_raw_text = raw_payload.get(MASKED_CUMULATIVE_SOURCE_FIELD)
+        key_mask = pd.Series(True, index=ordered.index)
+        for column in BUSINESS_KEY_FIELDS:
+            key_mask &= ordered[column].astype("string").eq(str(row[column]))
+        series = ordered.loc[key_mask].copy()
+        month = str(row["execution_month"])
+        prev_rows = series[series["execution_month"].astype("string") < month]
+        next_rows = series[series["execution_month"].astype("string") > month]
+        prev_estimate = None
+        next_estimate = None
+        if not prev_rows.empty:
+            previous = prev_rows.iloc[-1]
+            prev_cum = previous["cumulative_expenditure_amount"]
+            month_ep = row["expenditure_amount"]
+            if pd.notna(prev_cum) and pd.notna(month_ep):
+                prev_estimate = int(prev_cum) + int(month_ep)
+        if not next_rows.empty:
+            following = next_rows.iloc[0]
+            next_cum = following["cumulative_expenditure_amount"]
+            next_ep = following["expenditure_amount"]
+            if pd.notna(next_cum) and pd.notna(next_ep):
+                next_estimate = int(next_cum) - int(next_ep)
+
+        recovered = None
+        method = None
+        if prev_estimate is not None and next_estimate is not None:
+            if prev_estimate == next_estimate:
+                recovered = prev_estimate
+                method = RECOVERY_METHOD_BOTH
+            elif _prefix_matches(prev_estimate, masked_raw_text):
+                recovered = prev_estimate
+                method = RECOVERY_METHOD_PREV
+            elif _prefix_matches(next_estimate, masked_raw_text):
+                recovered = next_estimate
+                method = RECOVERY_METHOD_NEXT
+        elif prev_estimate is not None:
+            recovered = prev_estimate
+            method = RECOVERY_METHOD_PREV
+        elif next_estimate is not None:
+            recovered = next_estimate
+            method = RECOVERY_METHOD_NEXT
+
+        prefix_ok = (
+            recovered is not None and _prefix_matches(recovered, masked_raw_text)
+        )
+        probe_rows.append(
+            {
+                "ministry_code": row.get("ministry_code"),
+                "fiscal_year": row.get("fiscal_year"),
+                "execution_month": row.get("execution_month"),
+                "account_code": row.get("account_code"),
+                "program_code": row.get("program_code"),
+                "activity_code": row.get("activity_code"),
+                "subactivity_code": row.get("subactivity_code"),
+                "program_name": row.get("program_name"),
+                "subactivity_name": row.get("subactivity_name"),
+                "masked_raw_value": masked_raw_text,
+                "expenditure_amount": row.get("expenditure_amount"),
+                "recovered_cumulative_expenditure_amount": recovered,
+                "recovery_method": method,
+                "prefix_match": prefix_ok,
+                "promoted_to_operational_amount": bool(prefix_ok and recovered is not None),
+                "raw_source_overwritten": False,
+            }
+        )
+        if not prefix_ok or recovered is None or method is None:
+            continue
+
+        result.at[idx, "cumulative_expenditure_amount"] = recovered
+        result.at[idx, "mask_recovery_applied"] = True
+        result.at[idx, "cumulative_expenditure_recovery_method"] = method
+        reasons = _parse_json_object(result.at[idx, "amount_missing_reasons"])
+        reasons[MASKED_CUMULATIVE_SOURCE_FIELD] = MISSING_REASON_RECOVERED
+        result.at[idx, "amount_missing_reasons"] = json.dumps(reasons, ensure_ascii=False)
+        # 누계 필드만 마스킹된 경우 운영 마스킹 플래그를 해제한다. 원문은 masked_raw_values에 남긴다.
+        remaining_masked = {
+            field
+            for field, reason in reasons.items()
+            if reason == MISSING_REASON_MASKED
+        }
+        if not remaining_masked:
+            result.at[idx, "is_masked"] = False
+            result.at[idx, "masked_amount_flag"] = False
+            result.at[idx, "manual_review_required"] = False
+            result.at[idx, "review_status"] = "recovered_adjacent_month"
+
+    return result, pd.DataFrame(probe_rows)
 
 
 @dataclass
@@ -493,7 +648,8 @@ def apply_validation_flags(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
                 prev_cum = int(cum)
                 prev_month = str(month_value) if month_value is not None else None
 
-    for idx in result.index[result["is_masked"]]:
+    still_masked = result["is_masked"].fillna(False).astype(bool)
+    for idx in result.index[still_masked]:
         row = result.loc[idx]
         issues.append(
             _issue_row(
@@ -509,15 +665,19 @@ def apply_validation_flags(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     # 데이터 품질 검수 대상(§23). 누계감소 등 집행설명필요는 별도 신호로 유지.
     if "manual_review_required" not in result.columns:
         result["manual_review_required"] = False
+    if "mask_recovery_applied" not in result.columns:
+        result["mask_recovery_applied"] = False
+    recovered = result["mask_recovery_applied"].fillna(False).astype(bool)
     result["manual_review_required"] = (
         result["manual_review_required"].fillna(False).astype(bool)
-        | result["is_masked"].astype(bool)
+        | still_masked
         | result["execution_month_year_mismatch"].astype(bool)
         | result["duplicate_key_flag"].astype(bool)
-    )
+    ) & ~recovered
     result["review_status"] = result["manual_review_required"].map(
         lambda flag: "needs_review" if bool(flag) else "normalized"
     )
+    result.loc[recovered, "review_status"] = "recovered_adjacent_month"
 
     result = result.drop(columns=["_dup_count"], errors="ignore")
     issues_frame = pd.DataFrame(issues)
@@ -587,13 +747,16 @@ def build_normalization_summary(
             "mentoring_notes": {
                 "amount_types": "별도 컬럼 보존, 혼합·대체 금지",
                 "aggregation_basis": "총계·순계 혼용 금지",
-                "masked_amounts": "추정·0 변환 금지",
+                "masked_amounts": (
+                    "추정·0 변환 금지. 인접월 항등식+접두어 일치 시에만 누계 운영값 승격"
+                ),
                 "cumulative_signals": "집행설명필요 신호이며 실패·낭비 판정 아님",
             },
         }
 
     masked_field_counts: Counter[str] = Counter()
-    for values in frame.loc[frame["is_masked"], "masked_fields"]:
+    masked_rows = frame["is_masked"].fillna(False).astype(bool)
+    for values in frame.loc[masked_rows, "masked_fields"]:
         try:
             parsed = json.loads(values) if isinstance(values, str) else values
         except json.JSONDecodeError:
@@ -745,7 +908,7 @@ def data_dictionary_rows() -> list[dict[str, str]]:
                 "dtype": "string(json object)",
                 "description": "마스킹(또는 비정수) 금액 원문",
                 "source_field": "",
-                "notes": "원본값 보존. 추정 숫자로 덮어쓰지 않음(§25.18-19)",
+                "notes": "API 원문 보존. 운영 금액 승격 후에도 raw JSON/원문은 변경하지 않음",
             },
             {
                 "column_name": "amount_missing_reasons",
@@ -753,8 +916,26 @@ def data_dictionary_rows() -> list[dict[str, str]]:
                 "description": "금액 결측사유 코드",
                 "source_field": "",
                 "notes": (
-                    "MASKED_SOURCE_VALUE|PARSE_FAILED|SOURCE_VALUE_MISSING "
-                    "(§15.2 확장). 0으로 보간하지 않음"
+                    "MASKED_SOURCE_VALUE|PARSE_FAILED|SOURCE_VALUE_MISSING|"
+                    "RECOVERED_ADJACENT_MONTH_IDENTITY. 0으로 보간하지 않음"
+                ),
+            },
+            {
+                "column_name": "mask_recovery_applied",
+                "dtype": "bool",
+                "description": "마스킹 누계지출 인접월 항등식 복원 승격 여부",
+                "source_field": "",
+                "notes": "접두어 일치 시에만 True. raw 미변경",
+            },
+            {
+                "column_name": "cumulative_expenditure_recovery_method",
+                "dtype": "string",
+                "description": "누계지출 복원 방법",
+                "source_field": "",
+                "notes": (
+                    "PREV_CUMULATIVE_PLUS_MONTH_EXPENDITURE|"
+                    "NEXT_CUMULATIVE_MINUS_NEXT_EXPENDITURE|"
+                    "PREV_AND_NEXT_IDENTITY_AGREE"
                 ),
             },
             {
@@ -804,7 +985,7 @@ def data_dictionary_rows() -> list[dict[str, str]]:
                 "dtype": "string",
                 "description": "검수상태",
                 "source_field": "",
-                "notes": "normalized|needs_review",
+                "notes": "normalized|needs_review|recovered_adjacent_month",
             },
             {
                 "column_name": "execution_month_year_mismatch",
@@ -862,6 +1043,7 @@ def write_outputs(
     output_dir: Path,
     output_format: OutputFormat = "parquet",
     overwrite: bool = False,
+    recovery_probe: pd.DataFrame | None = None,
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     formats: list[Literal["parquet", "csv"]]
@@ -920,6 +1102,12 @@ def write_outputs(
     issues.to_csv(issues_path, index=False, encoding="utf-8-sig")
     written.append(issues_path)
 
+    probe = recovery_probe if recovery_probe is not None else pd.DataFrame()
+    probe_path = output_dir / "masked_amount_recovery_probe.csv"
+    _ensure_writable(probe_path)
+    probe.to_csv(probe_path, index=False, encoding="utf-8-sig")
+    written.append(probe_path)
+
     return written
 
 
@@ -951,6 +1139,7 @@ def normalize_monthly(
         frame["fiscal_year"] = pd.to_numeric(frame["fiscal_year"], errors="coerce").astype("Int64")
         frame["source_page"] = pd.to_numeric(frame["source_page"], errors="coerce").astype("Int64")
 
+    frame, recovery_probe = recover_masked_cumulative_amounts(frame)
     frame, issues = apply_validation_flags(frame)
     summary = build_normalization_summary(
         files_read=len(paths),
@@ -959,6 +1148,18 @@ def normalize_monthly(
         issues=issues,
         failed_files=failed,
     )
+    summary["masked_cumulative_recovery"] = {
+        "candidate_row_count": len(recovery_probe),
+        "promoted_row_count": (
+            int(recovery_probe["promoted_to_operational_amount"].sum())
+            if not recovery_probe.empty
+            else 0
+        ),
+        "rule": (
+            "인접월 항등식(이전월 누계+당월 지출 또는 다음월 누계-다음월 지출) + "
+            "마스킹 접두어 일치 시에만 운영 금액 승격. raw JSON 미변경."
+        ),
+    }
     output_paths = write_outputs(
         frame,
         issues,
@@ -966,6 +1167,7 @@ def normalize_monthly(
         output_dir=output_dir,
         output_format=output_format,
         overwrite=overwrite,
+        recovery_probe=recovery_probe,
     )
     return NormalizationResult(
         frame=frame,

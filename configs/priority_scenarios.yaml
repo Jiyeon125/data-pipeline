@@ -51,6 +51,25 @@ interpretation:
   evidence_boundary: >
     설정에 포함된 부처의 수기 성과표와 원문 검수 상태를 분리합니다.
     순위는 점검 순서를 좁히는 탐색 결과이며 자동 정책 판정으로 사용하지 않습니다.
+  work_queue:
+    primary: signal_type_lanes_then_signal_score
+    size_role: tiebreak_only
+    signal_score_components:
+      - performance_gap
+      - execution_management
+      - budget_performance_mismatch
+    fiscal_impact_in_primary_score: false
+  weighted_scenarios:
+    product_status: removed_from_primary_ui
+    note: >
+      균등·성과중심·집행중심·재정영향 보정 시나리오는 본편 대시보드·발표 대기열에서
+      제거했습니다. 파이프라인 산출 파일은 재현용으로 남을 수 있으나 화면·정책
+      결론에 사용하지 않습니다.
+  feedback_horizon:
+    primary: T+2
+    secondary: T+1
+    same_year: structural_coherence_only
+  mentoring_session_3: docs/MENTORING_SESSION_3_2026-08-04.md
   fiscal_impact_role: >
-    전체 순위는 연도 내 설정 부처 전체의 예산 백분위, 부처별 순위는
-    부처-연도 내 예산 백분위를 사용합니다.
+    fiscal_impact는 연도 내 예산 백분위이며 본편 signal_score에는 넣지 않습니다.
+    같은 신호 강도일 때만 본예산으로 동률을 정리합니다.

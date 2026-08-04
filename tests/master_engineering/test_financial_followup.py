@@ -73,7 +73,7 @@ def test_followup_prefers_gross_and_makes_small_difference_informational(
     assert len(result.execution_rate_over_100) == 1
 
 
-def test_missing_denominator_remains_blocking(tmp_path: Path) -> None:
+def test_settlement_missing_is_analysis_restricted_not_blocking(tmp_path: Path) -> None:
     source = tmp_path / "financial.parquet"
     pd.DataFrame(
         [
@@ -92,5 +92,10 @@ def test_missing_denominator_remains_blocking(tmp_path: Path) -> None:
         output_dir=tmp_path / "out",
     )
 
-    assert result.manual_review.loc[0, "review_priority"] == "BLOCKING"
-    assert result.summary["blocking_count"] == 1
+    assert result.manual_review.loc[0, "review_priority"] == "NON_BLOCKING"
+    assert bool(result.manual_review.loc[0, "blocks_annual_financial_analysis"]) is False
+    assert (
+        result.manual_review.loc[0, "automatic_resolution_rule"]
+        == "RESTRICT_SETTLEMENT_AND_EXECUTION_RATE_KEEP_BUDGET_SCOPE"
+    )
+    assert result.summary["blocking_count"] == 0
