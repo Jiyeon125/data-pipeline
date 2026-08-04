@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-07-29T02:51:27.700367+00:00",
+  "input_row_count": 116,
+  "output_row_count": 116,
+  "rows_by_fiscal_year": {
+    "2023": 48,
+    "2022": 42,
+    "2024": 26
+  },
+  "rows_by_overall_status": {
+    "OCR_REQUIRED": 68,
+    "MATCH_AFTER_CHANGE": 30,
+    "EXACT_MATCH": 15,
+    "AMBIGUOUS": 2,
+    "VALUE_MISMATCH": 1
+  },
+  "plan_name_match_counts": {
+    "MATCH_AFTER_CHANGE": 59,
+    "EXACT_MATCH": 50,
+    "PDF_NOT_FOUND": 5,
+    "AMBIGUOUS": 2
+  },
+  "report_name_match_counts": {
+    "EXACT_MATCH": 114,
+    "AMBIGUOUS": 2
+  },
+  "plan_target_match_counts": {
+    "EXACT_MATCH": 84,
+    "VALUE_MISMATCH": 27,
+    "PDF_NOT_FOUND": 5
+  },
+  "report_actual_match_counts": {
+    "EXACT_MATCH": 111,
+    "PDF_MISSING_MANUAL_PRESENT": 2,
+    "VALUE_MISMATCH": 2,
+    "NOT_APPLICABLE": 1
+  },
+  "report_achievement_rate_match_counts": {
+    "EXACT_MATCH": 111,
+    "PDF_MISSING_MANUAL_PRESENT": 2,
+    "VALUE_MISMATCH": 2,
+    "NOT_APPLICABLE": 1
+  },
+  "ocr_required_row_count": 68,
+  "ocr_required_pages": [
+    2.0,
+    4.0,
+    8.0,
+    9.0,
+    31.0,
+    38.0,
+    46.0,
+    48.0,
+    54.0,
+    56.0,
+    64.0,
+    66.0,
+    74.0,
+    77.0,
+    88.0,
+    92.0,
+    98.0,
+    104.0,
+    112.0,
+    117.0,
+    125.0,
+    134.0,
+    136.0,
+    140.0,
+    143.0,
+    149.0,
+    154.0,
+    158.0,
+    165.0,
+    172.0,
+    177.0,
+    183.0,
+    189.0,
+    190.0,
+    196.0,
+    198.0,
+    202.0,
+    204.0,
+    205.0,
+    208.0,
+    212.0,
+    215.0,
+    220.0,
+    225.0,
+    226.0,
+    232.0,
+    239.0,
+    246.0,
+    252.0,
+    260.0,
+    268.0
+  ],
+  "ambiguous_row_count": 2,
+  "pdf_not_found_row_count": 0,
+  "manual_missing_pdf_present_count": 0,
+  "pdf_missing_manual_present_count": 2,
+  "primary_key_duplicate_count": 0,
+  "manual_review_csv_row_count": 101,
+  "review_status_counts": {
+    "None": 116
+  },
+  "plan_vs_report_target_change": {
+    "rows_with_both_pdf_targets": 48,
+    "rows_excluded_unverified_ocr": 62,
+    "rows_unchanged": 16,
+    "rows_changed": 32,
+    "abs_pct_over_10": 9,
+    "abs_pct_over_50": 0,
+    "median_abs_pct_when_changed": 2.2839565975586056,
+    "top_changes": [
+      {
+        "source_indicator_id": "MOHW-2023-II5-01",
+        "plan_target_pdf": 63.8,
+        "report_target_pdf": 80.2,
+        "change_abs": 16.400000000000006,
+        "change_pct": 25.705329153605028,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-IV1-01",
+        "plan_target_pdf": 12.1,
+        "report_target_pdf": 9.7,
+        "change_abs": -2.4000000000000004,
+        "change_pct": -19.834710743801658,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-IV5-02",
+        "plan_target_pdf": 813208.0,
+        "report_target_pdf": 950871.0,
+        "change_abs": 137663.0,
+        "change_pct": 16.92838732525996,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-II4-01",
+        "plan_target_pdf": 89.2,
+        "report_target_pdf": 104.0,
+        "change_abs": 14.799999999999997,
+        "change_pct": 16.59192825112107,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-IV1-02",
+        "plan_target_pdf": 4.5,
+        "report_target_pdf": 3.8,
+        "change_abs": -0.7000000000000002,
+        "change_pct": -15.555555555555559,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-I5-01",
+        "plan_target_pdf": 41.3,
+        "report_target_pdf": 46.7,
+        "change_abs": 5.400000000000006,
+        "change_pct": 13.075060532687665,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-II4-02",
+        "plan_target_pdf": 311.0,
+        "report_target_pdf": 275.6,
+        "change_abs": -35.39999999999998,
+        "change_pct": -11.382636655948545,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-IV2-02",
+        "plan_target_pdf": 51.7,
+        "report_target_pdf": 45.9,
+        "change_abs": -5.800000000000004,
+        "change_pct": -11.218568665377184,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-I3-02",
+        "plan_target_pdf": 24.8,
+        "report_target_pdf": 22.2,
+        "change_abs": -2.6000000000000014,
+        "change_pct": -10.483870967741941,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOHW-2023-IV3-01",
+        "plan_target_pdf": 70.0,
+        "report_target_pdf": 73.0,
+        "change_abs": 3.0,
+        "change_pct": 4.285714285714286,
+        "ocr_status": "NOT_APPLICABLE"
+      }
+    ]
+  },
+  "source_file_sha256": {
+    "data\\manual\\LLM_문서구조화_3개부처_최종제출본.xlsx": "2a375eb75720fc514e8104fbca38e5f2ddad2bd53d5a1426a1ba478a06acb8d9",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=075\\2022년도 성과계획서_보건복지부-323-433.pdf": "103e658f804466b094d697b9f50fb30d21ad6eb224c223888c7bd7d6b0ca3ab7",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=075\\2022년도 성과보고서_보건복지부-243-333.pdf": "54d83574b0102100535c081a7da0d4b7c953ddc919446f216f49aa7178525e1e",
+    "data\\raw\\performance_docs\\2022년도 성과보고서_보건복지부.pdf": "7db078452f7090a4a12092e4bda64e789e0643cf1d4e07b3ca55137e5f48fca7",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=075\\2023년도 성과계획서_보건복지부-346-442.pdf": "c1e9e188b88812fa6b23559e32058679720fa5b7e3109359ed254fcfacf06d75",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=075\\2023년도 성과보고서_보건복지부-256-363.pdf": "b8b525fe7150739cc8225525633434edbe05c986e58f5aec2465462a135dc0fd",
+    "data\\raw\\performance_docs\\2023년도 성과보고서_보건복지부.pdf": "a0a5ce6ca1e12adf9c045d764848fd63954c963908696dcf19f14cdda2bdad42",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=075\\2024년도 성과계획서_보건복지부-364-456.pdf": "521a5d8c7b9bc5ef2330d6d2056764847f0819b024c893814aaa0320f07ddb43",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=075\\2024년도 성과보고서_보건복지부-278-394.pdf": "d62898e123eb05d07a0c66e067b2a05c185754511376c5496df30a3787256271",
+    "data\\raw\\performance_docs\\2024년도 성과보고서_보건복지부.pdf": "ff8a9f5691353e6215c02d8a54f24186a63b0be5b1eb64d25a513b13ac095de8",
+    "data\\processed\\performance\\by_ministry\\ministry_code=075\\program_kpi_year.parquet": "ae0fc7a33207eb40b664b7bd23f0e554d3f05d32a4b105cce9f42c5766a8519f"
+  },
+  "source_file_hash_unchanged": true,
+  "source_file_hash_mismatches": {}
+}

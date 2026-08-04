@@ -1,0 +1,213 @@
+{
+  "generated_at": "2026-07-29T02:53:09.230064+00:00",
+  "input_row_count": 183,
+  "output_row_count": 183,
+  "rows_by_fiscal_year": {
+    "2022": 75,
+    "2023": 73,
+    "2024": 35
+  },
+  "rows_by_overall_status": {
+    "OCR_REQUIRED": 79,
+    "MATCH_AFTER_CHANGE": 53,
+    "EXACT_MATCH": 33,
+    "VALUE_MISMATCH": 13,
+    "AMBIGUOUS": 4,
+    "PDF_MISSING_MANUAL_PRESENT": 1
+  },
+  "plan_name_match_counts": {
+    "EXACT_MATCH": 85,
+    "MATCH_AFTER_CHANGE": 82,
+    "PDF_NOT_FOUND": 14,
+    "AMBIGUOUS": 2
+  },
+  "report_name_match_counts": {
+    "EXACT_MATCH": 173,
+    "OCR_REQUIRED": 6,
+    "AMBIGUOUS": 4
+  },
+  "plan_target_match_counts": {
+    "EXACT_MATCH": 135,
+    "VALUE_MISMATCH": 31,
+    "PDF_NOT_FOUND": 14,
+    "MANUAL_MISSING_PDF_PRESENT": 3
+  },
+  "report_actual_match_counts": {
+    "EXACT_MATCH": 160,
+    "VALUE_MISMATCH": 10,
+    "OCR_REQUIRED": 7,
+    "PDF_MISSING_MANUAL_PRESENT": 3,
+    "MANUAL_MISSING_PDF_PRESENT": 3
+  },
+  "report_achievement_rate_match_counts": {
+    "EXACT_MATCH": 159,
+    "VALUE_MISMATCH": 13,
+    "OCR_REQUIRED": 7,
+    "PDF_MISSING_MANUAL_PRESENT": 4
+  },
+  "ocr_required_row_count": 81,
+  "ocr_required_pages": [
+    3.0,
+    4.0,
+    5.0,
+    6.0,
+    8.0,
+    11.0,
+    15.0,
+    18.0,
+    20.0,
+    41.0,
+    49.0,
+    56.0,
+    79.0,
+    85.0,
+    86.0,
+    93.0,
+    99.0,
+    108.0,
+    115.0,
+    116.0,
+    123.0,
+    130.0,
+    134.0,
+    143.0,
+    151.0,
+    159.0,
+    168.0,
+    174.0,
+    180.0,
+    185.0,
+    186.0,
+    202.0,
+    212.0,
+    220.0,
+    250.0,
+    264.0,
+    274.0,
+    284.0,
+    294.0,
+    297.0,
+    298.0,
+    306.0,
+    313.0,
+    325.0,
+    337.0,
+    344.0,
+    386.0
+  ],
+  "ambiguous_row_count": 4,
+  "pdf_not_found_row_count": 0,
+  "manual_missing_pdf_present_count": 5,
+  "pdf_missing_manual_present_count": 4,
+  "primary_key_duplicate_count": 0,
+  "manual_review_csv_row_count": 150,
+  "review_status_counts": {
+    "None": 183
+  },
+  "plan_vs_report_target_change": {
+    "rows_with_both_pdf_targets": 101,
+    "rows_excluded_unverified_ocr": 61,
+    "rows_unchanged": 50,
+    "rows_changed": 51,
+    "abs_pct_over_10": 20,
+    "abs_pct_over_50": 6,
+    "median_abs_pct_when_changed": 4.761904761904765,
+    "top_changes": [
+      {
+        "source_indicator_id": "MSIT-2023-VI1-01",
+        "plan_target_pdf": 0.5,
+        "report_target_pdf": 6255.0,
+        "change_abs": 6254.5,
+        "change_pct": 1250900.0,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-VI2-01",
+        "plan_target_pdf": 10.5,
+        "report_target_pdf": 500.0,
+        "change_abs": 489.5,
+        "change_pct": 4661.904761904762,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-VI1-02",
+        "plan_target_pdf": -230.0,
+        "report_target_pdf": -1500.0,
+        "change_abs": -1270.0,
+        "change_pct": -552.1739130434783,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-I6-02",
+        "plan_target_pdf": 1.37,
+        "report_target_pdf": 4.08,
+        "change_abs": 2.71,
+        "change_pct": 197.81021897810217,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-VI3-01",
+        "plan_target_pdf": 2900.0,
+        "report_target_pdf": 500.0,
+        "change_abs": -2400.0,
+        "change_pct": -82.75862068965517,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-II1-01",
+        "plan_target_pdf": 88.6,
+        "report_target_pdf": 24.0,
+        "change_abs": -64.6,
+        "change_pct": -72.91196388261851,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-V5-02",
+        "plan_target_pdf": 2650.0,
+        "report_target_pdf": 3849.0,
+        "change_abs": 1199.0,
+        "change_pct": 45.24528301886793,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2023-IV10-01",
+        "plan_target_pdf": 120.0,
+        "report_target_pdf": 170.0,
+        "change_abs": 50.0,
+        "change_pct": 41.66666666666667,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2024-IV6-01",
+        "plan_target_pdf": 111.5,
+        "report_target_pdf": 156.9,
+        "change_abs": 45.400000000000006,
+        "change_pct": 40.71748878923767,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MSIT-2024-V2-01",
+        "plan_target_pdf": 77.2,
+        "report_target_pdf": 104.8,
+        "change_abs": 27.599999999999994,
+        "change_pct": 35.75129533678756,
+        "ocr_status": "NOT_APPLICABLE"
+      }
+    ]
+  },
+  "source_file_sha256": {
+    "data\\manual\\LLM_문서구조화_3개부처_최종제출본.xlsx": "2a375eb75720fc514e8104fbca38e5f2ddad2bd53d5a1426a1ba478a06acb8d9",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=162\\2022년도 성과계획서_과학기술정보통신부-459-546.pdf": "85dab97a986bd971e6463dd904c0d8402ee1b1e3b61ec9ebc9187f32c523b950",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=162\\2022년도 성과보고서_과학기술정보통신부-411-510.pdf": "ceb352796730e2892c9b243f375619ca0ef9b1de83ff3fec0cc8455259022142",
+    "data\\raw\\performance_docs\\2022년도 성과보고서_과학기술정보통신부.pdf": "0713a9caabc829666761e373b751e4cea6e9d6f7fc42c244d86fb7ffb31a9604",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=162\\2023년도 성과계획서_과학기술정보통신부-486-577.pdf": "be9dbb5ac3b72a87e8bc43245cf1353ae48110c0bb94cc0617d7660ee9ef7a66",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=162\\2023년도 성과보고서_과학기술정보통신부-465-583.pdf": "840c20383b6c7729a1f144168ec727dca752f6709dde6b1e4fb0104394035ce3",
+    "data\\raw\\performance_docs\\2023년도 성과보고서_과학기술정보통신부.pdf": "30ac79e03e857aa33a7ed7a04c52b8ea074a4e17445e0bb483a1e0623fcc405e",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=162\\2024년도 성과계획서_과학기술정보통신부-490-582.pdf": "2fd9e99d29c4c40942e51c96de89e668500f27f4cc607a83731c913f06b5926c",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=162\\2024년도 성과보고서_과학기술정보통신부-494-594.pdf": "f5a469d3cf78a02472bd48f5c0ce5aded2ce807563e079cabc0390625e906c2c",
+    "data\\raw\\performance_docs\\2024년도 성과보고서_과학기술정보통신부.pdf": "4f405dcdbb2c89ea67b44851dc7f10cff2e6422b94159b7c2b31ed7553d467d4",
+    "data\\processed\\performance\\by_ministry\\ministry_code=162\\program_kpi_year.parquet": "a5f28f445b5b999c1f2c281b92709d655fb52187638f676211eae3f2102422cc"
+  },
+  "source_file_hash_unchanged": true,
+  "source_file_hash_mismatches": {}
+}

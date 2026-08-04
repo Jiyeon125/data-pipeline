@@ -1,0 +1,29 @@
+{
+  "status": "share_with_caveats",
+  "candidate_rows": 412,
+  "selected_case_rows": 7,
+  "selected_case_role_counts": {
+    "MISS_THEN_T1_INCREASE": 3,
+    "ALL_MET_THEN_T1_INCREASE_CONTEXT": 2,
+    "DATA_BLOCKER": 1,
+    "MISS_THEN_T1_DECREASE_COUNTEREXAMPLE": 1
+  },
+  "indicator_evidence_rows": 12,
+  "indicator_source_trace_missing_rows": 0,
+  "project_drilldown_rows": 14,
+  "project_performance_attributed_rows": 0,
+  "project_budget_mismatch_rows": 0,
+  "low_performance_t1_complete_rows": 29,
+  "low_performance_t1_increase_rows": 22,
+  "low_performance_t1_decrease_rows": 7,
+  "confirmed_low_performance_t1_rows": 6,
+  "confirmed_low_performance_t1_increase_rows": 5,
+  "confirmed_low_performance_t1_decrease_rows": 1,
+  "t1_budget_direction_mismatch_rows": 4,
+  "repeated_execution_rows": 126,
+  "repeated_execution_with_performance_miss_rows": 41,
+  "repeated_execution_without_performance_miss_rows": 85,
+  "data_first_rows": 15,
+  "data_first_budget_share": 0.082953139722253,
+  "interpretation": "점검 후보와 반례를 설명하는 탐색 결과이며 실패·낭비·삭감·증액 판정이 아님"
+}

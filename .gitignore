@@ -68,6 +68,13 @@ data/**
 !data/**/
 !data/**/.gitkeep
 !data/README.md
+
+# Streamlit Cloud 대시보드용 산출물만 추적 (원본 raw·대용량 PDF 제외)
+!data/analytics/multi_ministry_priority_scenarios/**
+!data/analytics/priority_case_evidence_review/**
+!data/processed/performance/pdf_reconciliation/**
+!data/manual/performance/pdf_reconciliation_manual_confirmations.csv
+
 logs/*
 /.pilot_envs/
 /.pilot_cache/

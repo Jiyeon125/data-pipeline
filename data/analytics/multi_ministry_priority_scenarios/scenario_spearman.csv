@@ -1,0 +1,17 @@
+﻿scenario_left,scenario_right,candidate_count,spearman_rank_correlation
+equal,equal,231,1.0
+equal,performance_focus,231,0.8577417925149189
+equal,execution_focus,231,0.8548048320668395
+equal,fiscal_impact_adjusted,231,0.9150131707717446
+performance_focus,equal,231,0.8577417925149189
+performance_focus,performance_focus,231,1.0
+performance_focus,execution_focus,231,0.8109198998520218
+performance_focus,fiscal_impact_adjusted,231,0.6564496972293075
+execution_focus,equal,231,0.8548048320668395
+execution_focus,performance_focus,231,0.8109198998520217
+execution_focus,execution_focus,231,1.0
+execution_focus,fiscal_impact_adjusted,231,0.6382383414392852
+fiscal_impact_adjusted,equal,231,0.9150131707717446
+fiscal_impact_adjusted,performance_focus,231,0.6564496972293075
+fiscal_impact_adjusted,execution_focus,231,0.6382383414392852
+fiscal_impact_adjusted,fiscal_impact_adjusted,231,1.0

@@ -1,0 +1,172 @@
+{
+  "generated_at": "2026-08-01T07:58:28.255238+00:00",
+  "input_row_count": 63,
+  "output_row_count": 63,
+  "rows_by_fiscal_year": {
+    "2023": 26,
+    "2022": 24,
+    "2024": 13
+  },
+  "rows_by_overall_status": {
+    "OCR_REQUIRED": 26,
+    "MANUAL_MISSING_PDF_PRESENT": 15,
+    "EXACT_MATCH": 14,
+    "MATCH_AFTER_CHANGE": 7,
+    "PDF_MISSING_MANUAL_PRESENT": 1
+  },
+  "plan_name_match_counts": {
+    "EXACT_MATCH": 39,
+    "MATCH_AFTER_CHANGE": 24
+  },
+  "report_name_match_counts": {
+    "EXACT_MATCH": 59,
+    "OCR_REQUIRED": 4
+  },
+  "plan_target_match_counts": {
+    "EXACT_MATCH": 59,
+    "VALUE_MISMATCH": 4
+  },
+  "report_actual_match_counts": {
+    "EXACT_MATCH": 39,
+    "MANUAL_MISSING_PDF_PRESENT": 19,
+    "OCR_REQUIRED": 4,
+    "PDF_MISSING_MANUAL_PRESENT": 1
+  },
+  "report_achievement_rate_match_counts": {
+    "EXACT_MATCH": 39,
+    "MANUAL_MISSING_PDF_PRESENT": 19,
+    "OCR_REQUIRED": 4,
+    "PDF_MISSING_MANUAL_PRESENT": 1
+  },
+  "ocr_required_row_count": 26,
+  "ocr_required_pages": [
+    2.0,
+    3.0,
+    5.0,
+    6.0,
+    7.0,
+    8.0,
+    9.0,
+    34.0,
+    35.0,
+    36.0,
+    37.0
+  ],
+  "ambiguous_row_count": 0,
+  "pdf_not_found_row_count": 0,
+  "manual_missing_pdf_present_count": 19,
+  "pdf_missing_manual_present_count": 1,
+  "primary_key_duplicate_count": 0,
+  "manual_review_csv_row_count": 49,
+  "review_status_counts": {
+    "CONFIRMED": 49,
+    "None": 14
+  },
+  "plan_vs_report_target_change": {
+    "rows_with_both_pdf_targets": 36,
+    "rows_excluded_unverified_ocr": 22,
+    "rows_unchanged": 17,
+    "rows_changed": 19,
+    "abs_pct_over_10": 10,
+    "abs_pct_over_50": 4,
+    "median_abs_pct_when_changed": 12.486368593238822,
+    "top_changes": [
+      {
+        "source_indicator_id": "중기부-2023-I1-03",
+        "plan_target_pdf": 2.05,
+        "report_target_pdf": 27.7,
+        "change_abs": 25.65,
+        "change_pct": 1251.219512195122,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2024-III1-02",
+        "plan_target_pdf": 1.8,
+        "report_target_pdf": 4.09,
+        "change_abs": 2.29,
+        "change_pct": 127.22222222222221,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2023-I2-01",
+        "plan_target_pdf": 7.6,
+        "report_target_pdf": 12.6,
+        "change_abs": 5.0,
+        "change_pct": 65.78947368421053,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2023-II2-01",
+        "plan_target_pdf": 8.6,
+        "report_target_pdf": 4.2,
+        "change_abs": -4.3999999999999995,
+        "change_pct": -51.16279069767441,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2023-I2-02",
+        "plan_target_pdf": 11.03,
+        "report_target_pdf": 14.7,
+        "change_abs": 3.67,
+        "change_pct": 33.27289211242067,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2024-II2-01",
+        "plan_target_pdf": 3.2,
+        "report_target_pdf": 3.9,
+        "change_abs": 0.6999999999999997,
+        "change_pct": 21.874999999999993,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2024-II1-02",
+        "plan_target_pdf": 126.5,
+        "report_target_pdf": 102.5,
+        "change_abs": -24.0,
+        "change_pct": -18.972332015810274,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2023-III2-02",
+        "plan_target_pdf": 9.29,
+        "report_target_pdf": 7.8,
+        "change_abs": -1.4899999999999993,
+        "change_pct": -16.038751345532827,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2023-III2-03",
+        "plan_target_pdf": 658.0,
+        "report_target_pdf": 744.0,
+        "change_abs": 86.0,
+        "change_pct": 13.069908814589665,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "중기부-2023-II2-02",
+        "plan_target_pdf": 1834.0,
+        "report_target_pdf": 1605.0,
+        "change_abs": -229.0,
+        "change_pct": -12.486368593238822,
+        "ocr_status": "NOT_APPLICABLE"
+      }
+    ]
+  },
+  "source_file_sha256": {
+    "data\\manual\\LLM_문서구조화_중기부_최종.xlsx": "d163ce4a45a364ec3411f09134b2ba08f138a92b12b2c04b4c6cc37e150d8303",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=102\\2022년도 성과계획서_중소벤처기업부-176-216.pdf": "180842ffa052e15479b7f1b7b5ee176c4e6c8752ce413c52f50565042ff52793",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=102\\2022년도 성과보고서_중소벤처기업부-170-212.pdf": "c6d1c5ec190b400baacbea69bc8433edff310d871ce67874cf7fc3a525765b33",
+    "data\\raw\\performance_docs\\2022년도 성과보고서_중소벤처기업부.pdf": "fca699dd90f2d2270d723dc8be8ccdafaa70ef5447bc4a8cb026729189888e76",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=102\\2023년도 성과계획서_중소벤처기업부-184-224.pdf": "a27be190383ad6ca4e28ad5d2cd96af20a5d5f1a5768855dc980077b93890c71",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=102\\2023년도 성과보고서_중소벤처기업부-179-226.pdf": "f04ed58a10835cc63ee4b9af3251aef06bcec32f487132fc14e5efcceae364f8",
+    "data\\raw\\performance_docs\\2023년도 성과보고서_중소벤처기업부.pdf": "3292535a0d7910d75447d428a3271e45c77499e64ef23d4d6a6b813becc0ded4",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=102\\2024년도 성과계획서_중소벤처기업부-188-226.pdf": "cd4201efcc8b7b1e6519ff1f55f8d4204a412761699b47e2cf1c9724dad6486a",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=102\\2024년도 성과보고서_중소벤처기업부-159-208.pdf": "386e18dbd58c5b4988b38b4b362d8ab110992756c15bfa421e88860ca37e2c27",
+    "data\\raw\\performance_docs\\2024년도 성과보고서_중소벤처기업부.pdf": "64086aafe6db556f0a634dd8ad65485af29331c6d731eec48ed705115d33ccf8",
+    "data\\raw\\performance_docs\\appendix\\year=2025\\ministry_code=102\\2025년도 성과계획서_중소벤처기업부-190-231.pdf": "b5fb6659bb2631362a5e524218745957ab6453eebf883a516c70251cf79e95cd",
+    "data\\processed\\performance\\program_kpi_year.parquet": "902a750339c8208524c10517f1cf793f4a82b0892d3ca0c8a1b31cfe0a6b5cb4"
+  },
+  "source_file_hash_unchanged": true,
+  "source_file_hash_mismatches": {}
+}

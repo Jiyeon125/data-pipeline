@@ -1,0 +1,167 @@
+{
+  "generated_at": "2026-07-29T02:48:59.596541+00:00",
+  "input_row_count": 62,
+  "output_row_count": 62,
+  "rows_by_fiscal_year": {
+    "2022": 27,
+    "2023": 26,
+    "2024": 9
+  },
+  "rows_by_overall_status": {
+    "OCR_REQUIRED": 27,
+    "MATCH_AFTER_CHANGE": 23,
+    "EXACT_MATCH": 6,
+    "VALUE_MISMATCH": 5,
+    "PDF_MISSING_MANUAL_PRESENT": 1
+  },
+  "plan_name_match_counts": {
+    "MATCH_AFTER_CHANGE": 32,
+    "EXACT_MATCH": 30
+  },
+  "report_name_match_counts": {
+    "EXACT_MATCH": 62
+  },
+  "plan_target_match_counts": {
+    "EXACT_MATCH": 46,
+    "VALUE_MISMATCH": 16
+  },
+  "report_actual_match_counts": {
+    "EXACT_MATCH": 59,
+    "PDF_MISSING_MANUAL_PRESENT": 3
+  },
+  "report_achievement_rate_match_counts": {
+    "EXACT_MATCH": 59,
+    "PDF_MISSING_MANUAL_PRESENT": 3
+  },
+  "ocr_required_row_count": 27,
+  "ocr_required_pages": [
+    38.0,
+    65.0,
+    66.0,
+    79.0,
+    80.0,
+    90.0,
+    102.0,
+    123.0,
+    134.0,
+    135.0,
+    147.0,
+    158.0,
+    159.0
+  ],
+  "ambiguous_row_count": 0,
+  "pdf_not_found_row_count": 0,
+  "manual_missing_pdf_present_count": 0,
+  "pdf_missing_manual_present_count": 3,
+  "primary_key_duplicate_count": 0,
+  "manual_review_csv_row_count": 56,
+  "review_status_counts": {
+    "None": 62
+  },
+  "plan_vs_report_target_change": {
+    "rows_with_both_pdf_targets": 34,
+    "rows_excluded_unverified_ocr": 25,
+    "rows_unchanged": 11,
+    "rows_changed": 23,
+    "abs_pct_over_10": 3,
+    "abs_pct_over_50": 0,
+    "median_abs_pct_when_changed": 2.2900763358778624,
+    "top_changes": [
+      {
+        "source_indicator_id": "MOEL-2024-II1-01",
+        "plan_target_pdf": 634100.0,
+        "report_target_pdf": 786600.0,
+        "change_abs": 152500.0,
+        "change_pct": 24.049834410976185,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-III2-02",
+        "plan_target_pdf": 116378.0,
+        "report_target_pdf": 134495.0,
+        "change_abs": 18117.0,
+        "change_pct": 15.567375277114232,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-I2-01",
+        "plan_target_pdf": 1.76,
+        "report_target_pdf": 1.96,
+        "change_abs": 0.19999999999999996,
+        "change_pct": 11.36363636363636,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2024-I2-01",
+        "plan_target_pdf": 4.8,
+        "report_target_pdf": 5.18,
+        "change_abs": 0.3799999999999999,
+        "change_pct": 7.916666666666665,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-IV1-02",
+        "plan_target_pdf": 64.98,
+        "report_target_pdf": 69.49,
+        "change_abs": 4.509999999999991,
+        "change_pct": 6.940597106802078,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-II1-02",
+        "plan_target_pdf": 75.3,
+        "report_target_pdf": 80.3,
+        "change_abs": 5.0,
+        "change_pct": 6.640106241699867,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-IV2-02",
+        "plan_target_pdf": 0.57,
+        "report_target_pdf": 0.54,
+        "change_abs": -0.029999999999999916,
+        "change_pct": -5.263157894736828,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-III1-02",
+        "plan_target_pdf": 76.0,
+        "report_target_pdf": 79.7,
+        "change_abs": 3.700000000000003,
+        "change_pct": 4.868421052631583,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-IV2-01",
+        "plan_target_pdf": 0.088,
+        "report_target_pdf": 0.084,
+        "change_abs": -0.00399999999999999,
+        "change_pct": -4.545454545454533,
+        "ocr_status": "NOT_APPLICABLE"
+      },
+      {
+        "source_indicator_id": "MOEL-2023-III3-02",
+        "plan_target_pdf": 75.6,
+        "report_target_pdf": 78.5,
+        "change_abs": 2.9000000000000057,
+        "change_pct": 3.8359788359788443,
+        "ocr_status": "NOT_APPLICABLE"
+      }
+    ]
+  },
+  "source_file_sha256": {
+    "data\\manual\\LLM_문서구조화_3개부처_최종제출본.xlsx": "2a375eb75720fc514e8104fbca38e5f2ddad2bd53d5a1426a1ba478a06acb8d9",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=019\\2022년도 성과계획서_고용노동부-201-249.pdf": "b1890bf3d9306b675e04e71b3b25091e79efd07783303e9de3433ad37f716686",
+    "data\\raw\\performance_docs\\appendix\\year=2022\\ministry_code=019\\2022년도 성과보고서_고용노동부-174-222.pdf": "d2236bcbfaf5d9820d458c70647d42887d4a925b5b735c86a38f5a5ddc46fc77",
+    "data\\raw\\performance_docs\\2022년도 성과보고서_고용노동부.pdf": "b2c0c4083b9c0d0ae79fe40989503c2516242e24cd6dc5dae93148afb1691e15",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=019\\2023년도 성과계획서_고용노동부-211-255.pdf": "dbb4acd9b81424628de659e5e7bf664f162c0afe7bd7967f53a368b2666104b8",
+    "data\\raw\\performance_docs\\appendix\\year=2023\\ministry_code=019\\2023년도 성과보고서_고용노동부-181-237.pdf": "053a214acc8b6d9a2a94e5b19d3afbd1cb0e6b4ae131e3f6f625dfb68f9453fc",
+    "data\\raw\\performance_docs\\2023년도 성과보고서_고용노동부.pdf": "0d39bed4a28c1e9799bb61763ff5833032b70aebab988a9a434b4ffc037559ce",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=019\\2024년도 성과계획서_고용노동부-218-259.pdf": "86b32654ad61523bfee6e246fd66a127968283e561f6b6a03d14b8dda368af72",
+    "data\\raw\\performance_docs\\appendix\\year=2024\\ministry_code=019\\2024년도 성과보고서_고용노동부-162-209.pdf": "9630ef8d3bd0908ade845a4f39136dc92574da1b8fa98622c8faabe68ea086b9",
+    "data\\raw\\performance_docs\\2024년도 성과보고서_고용노동부.pdf": "3d93222039c22222d72920be138ac4cb78697b5da8d0d376c26a28ca957ec136",
+    "data\\processed\\performance\\by_ministry\\ministry_code=019\\program_kpi_year.parquet": "571c93d686542a2dd1523e809261fd2bde58c04c9d3abc3b0d1781fcc75e9bfd"
+  },
+  "source_file_hash_unchanged": true,
+  "source_file_hash_mismatches": {}
+}
