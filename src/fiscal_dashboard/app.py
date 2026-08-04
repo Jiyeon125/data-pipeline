@@ -1031,33 +1031,98 @@ def _plain_lane_help(lane: object) -> str:
     }.get(str(lane), str(lane))
 
 
-def _signal_level_label(value: object) -> str:
-    """0~1 구성요소를 사람이 읽는 강도 라벨로 바꿉니다."""
+def _as_int(value: object) -> int | None:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
-        return "자료없음"
-    strength = float(numeric)
-    if strength <= 0:
-        return "없음"
-    if strength < 0.25:
-        return "약"
-    if strength < 0.5:
-        return "중간"
-    if strength < 0.75:
-        return "강"
-    return "매우강"
+        return None
+    return int(numeric)
 
 
 def _signal_composition_label(row: pd.Series | object) -> str:
-    """대기열용: 점수 숫자 대신 성과·집행·불일치 구성을 보여 줍니다."""
+    """대기열용: 점수% 대신 개수·유무로 구성을 보여 줍니다."""
     getter = row.get if isinstance(row, pd.Series) else lambda key, default=None: getattr(
         row, key, default
     )
-    return (
-        f"성과 {_signal_level_label(getter('performance_gap'))} · "
-        f"집행 {_signal_level_label(getter('execution_management'))} · "
-        f"불일치 {_signal_level_label(getter('budget_performance_mismatch'))}"
-    )
+    below = _as_int(getter("below_target_count"))
+    comparable = _as_int(getter("comparable_rate_count"))
+    if below is None or comparable is None:
+        perf = "성과 —"
+    else:
+        perf = f"성과 미달 {below}/{comparable}개"
+
+    rate = pd.to_numeric(pd.Series([getter("account_execution_rate")]), errors="coerce").iloc[0]
+    if pd.isna(rate):
+        exec_label = "집행률 —"
+    else:
+        exec_label = f"집행률 {float(rate):.0%}"
+    if bool(getter("repeated_execution_signal")):
+        exec_label += "·반복"
+
+    if bool(getter("budget_mismatch_signal")):
+        mismatch = "불일치 있음"
+    elif pd.isna(
+        pd.to_numeric(
+            pd.Series([getter("budget_performance_mismatch")]), errors="coerce"
+        ).iloc[0]
+    ):
+        mismatch = "불일치 —"
+    else:
+        mismatch = "불일치 없음"
+    return f"{perf} · {exec_label} · {mismatch}"
+
+
+def _plain_signal_cards(row: pd.Series) -> list[tuple[str, str, str]]:
+    """사업 카드용: (제목, 값, 설명) — 퍼센트 강도 대신 개수·유무."""
+    below = _as_int(row.get("below_target_count"))
+    comparable = _as_int(row.get("comparable_rate_count"))
+    if below is None or comparable is None:
+        perf_value, perf_help = "자료 없음", "비교 가능한 성과지표 수를 확인하지 못함"
+    else:
+        perf_value = f"{below} / {comparable}개"
+        perf_help = "비교 가능한 성과지표 중 목표 미달 개수"
+
+    rate = pd.to_numeric(row.get("account_execution_rate"), errors="coerce")
+    review_projects = _as_int(row.get("account_execution_review_project_count"))
+    total_projects = _as_int(row.get("account_project_count"))
+    exec_bits: list[str] = []
+    if bool(row.get("execution_below_80")):
+        exec_bits.append("80% 미만")
+    elif bool(row.get("execution_below_90")):
+        exec_bits.append("90% 미만")
+    if bool(row.get("repeated_execution_signal")):
+        exec_bits.append("반복 집행신호")
+    if pd.isna(rate):
+        exec_value = "자료 없음"
+    else:
+        exec_value = f"{float(rate):.0%}"
+        if review_projects is not None and total_projects is not None and total_projects > 0:
+            exec_value = f"{float(rate):.0%} · 점검세부 {review_projects}/{total_projects}"
+    exec_help = " · ".join(exec_bits) if exec_bits else "올해 집행률 (필요 시 반복·세부사업 수)"
+
+    mismatch_bits: list[str] = []
+    if bool(row.get("low_performance_budget_increase_t1")) or bool(
+        row.get("low_performance_budget_increase_t2")
+    ):
+        mismatch_bits.append("미달 뒤 예산↑")
+    if bool(row.get("good_performance_budget_decrease_t1")) or bool(
+        row.get("good_performance_budget_decrease_t2")
+    ):
+        mismatch_bits.append("양호 뒤 예산↓")
+    if bool(row.get("budget_mismatch_signal")):
+        mismatch_value = "있음"
+        mismatch_help = " · ".join(mismatch_bits) if mismatch_bits else "성과와 후속예산 방향이 어색함"
+    else:
+        mismatch_value = "없음"
+        mismatch_help = "성과·후속예산 불일치 신호 없음"
+
+    independent = _as_int(row.get("independent_signal_family_count")) or 0
+    repeated = _as_int(row.get("repeated_signal_family_count")) or 0
+    return [
+        ("성과 미달 지표", perf_value, perf_help),
+        ("집행", exec_value, exec_help),
+        ("성과·예산 불일치", mismatch_value, mismatch_help),
+        ("독립 / 반복 신호", f"{independent} / {repeated}개", "켜진 신호 종류 수 · 반복 계열 수"),
+    ]
 
 
 def _queue_simple_table(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1141,22 +1206,7 @@ def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> Non
         st.markdown(f"- {item}")
     st.caption(f"점검 근거 코드: {_reason_text(row.get('priority_reason'))}")
 
-    comparable_value = pd.to_numeric(
-        pd.Series([row.get("comparable_rate_count")]), errors="coerce"
-    ).iloc[0]
-    below_value = pd.to_numeric(
-        pd.Series([row.get("below_target_count")]), errors="coerce"
-    ).iloc[0]
-    comparable_count = 0 if pd.isna(comparable_value) else int(comparable_value)
-    below_count = 0 if pd.isna(below_value) else int(below_value)
-    execution_rate = pd.to_numeric(row.get("account_execution_rate"), errors="coerce")
     budget = pd.to_numeric(row.get("account_original_budget"), errors="coerce")
-    gap = pd.to_numeric(row.get("performance_gap"), errors="coerce")
-    execution_mgmt = pd.to_numeric(row.get("execution_management"), errors="coerce")
-    mismatch = pd.to_numeric(row.get("budget_performance_mismatch"), errors="coerce")
-    signal_score = pd.to_numeric(row.get("signal_score"), errors="coerce")
-    repeated = pd.to_numeric(row.get("repeated_signal_family_count"), errors="coerce")
-    independent = pd.to_numeric(row.get("independent_signal_family_count"), errors="coerce")
 
     def feedback_label(horizon: str) -> str:
         rate = pd.to_numeric(
@@ -1167,42 +1217,21 @@ def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> Non
             return "비교 제한"
         return f"{float(rate):+.1%}"
 
-    def strength_metric(value: object) -> str:
-        numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-        if pd.isna(numeric):
-            return "자료없음"
-        return f"{_signal_level_label(numeric)} ({float(numeric):.0%})"
+    st.markdown("**숫자로 보는 신호** (대기 순서가 아닙니다)")
+    cards = _plain_signal_cards(row)
+    columns = st.columns(4)
+    for column, (title, value, help_text) in zip(columns, cards, strict=True):
+        column.metric(title, value, help=help_text)
+        column.caption(help_text)
 
-    st.markdown("**신호 구성** (대기 순서가 아닙니다. 같은 단계 안에서만 정렬에 씁니다.)")
-    s1, s2, s3, s4 = st.columns(4)
-    s1.metric("성과 미달", strength_metric(gap))
-    s2.metric("집행 관리", strength_metric(execution_mgmt))
-    s3.metric("성과·예산 불일치", strength_metric(mismatch))
-    s4.metric(
-        "독립 / 반복 신호",
-        f"{0 if pd.isna(independent) else int(independent)} / "
-        f"{0 if pd.isna(repeated) else int(repeated)}",
+    m1, m2, m3 = st.columns(3)
+    m1.metric("후속예산 T+2 (주)", feedback_label("t2"))
+    m2.metric("후속예산 T+1 (보조)", feedback_label("t1"))
+    m3.metric(
+        "본예산 (참고)",
+        "—" if pd.isna(budget) else f"{float(budget) / 100_000_000:,.1f}억",
     )
-    if not pd.isna(signal_score):
-        st.caption(
-            f"참고용 평균점수(signal_score) {float(signal_score):.2f} · "
-            "1번 행이어도 점수가 낮을 수 있음 "
-            "(예: 데이터 먼저 레인이 신호 강한 행보다 앞에 옴)."
-        )
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("성과 미달 지표", f"{below_count}/{comparable_count}")
-    m2.metric(
-        "집행률",
-        "자료 없음" if pd.isna(execution_rate) else f"{float(execution_rate):.1%}",
-    )
-    m3.metric("후속예산 T+2 (주)", feedback_label("t2"))
-    m4.metric("후속예산 T+1 (보조)", feedback_label("t1"))
-    st.caption(
-        f"본예산(참고) "
-        f"{0 if pd.isna(budget) else float(budget) / 100_000_000:,.1f}억원 · "
-        "환류는 T+2가 주, T+1은 보조 · 예산은 동률 정리용"
-    )
+    st.caption("환류는 T+2가 주, T+1은 보조 · 예산은 동률·파급 참고용 (위험 점수 아님)")
     if str(row.get("account_type")) == "FUND":
         st.warning(
             "기금·융자는 일반회계와 같은 예산 크기로 서열 비교하지 않습니다.",
