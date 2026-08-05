@@ -130,6 +130,13 @@ def test_program_aggregation_uses_counts_not_rate_average() -> None:
     assert result.loc[0, "at_or_above_target_count"] == 1
     assert result.loc[0, "formula_review_count"] == 1
     assert result.loc[0, "reported_performance_signal"] == "MIXED_COMPARABLE"
+    assert result.loc[0, "reported_target_status"] == "MIXED_COMPARABLE"
+    assert (
+        result.loc[0, "reported_target_status_interpretation"]
+        == "OFFICIAL_REPORTED_TARGET_STATUS_NOT_POLICY_EFFECT"
+    )
+    assert result.loc[0, "indicator_coverage_status"] == "PARTIAL_REPORTED_RATE_COVERAGE"
+    assert not result.loc[0, "performance_effect_eligible"]
     assert not any("average" in column or "mean" in column for column in result.columns)
 
 

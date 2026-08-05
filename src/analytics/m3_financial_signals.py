@@ -519,6 +519,14 @@ def build_signal_features(
 
 def build_repeated_signals(features: pd.DataFrame) -> pd.DataFrame:
     """유효 관측연도 수를 분모로 반복 신호 대안을 모두 계산합니다."""
+    duplicate_key = features.duplicated(["classification_project_id", "fiscal_year"], keep=False)
+    if duplicate_key.any():
+        duplicates = (
+            features.loc[duplicate_key, ["classification_project_id", "fiscal_year"]]
+            .drop_duplicates()
+            .to_dict("records")
+        )
+        raise ValueError(f"반복 신호 입력의 사업-회계연도 키가 중복되었습니다: {duplicates[:10]}")
     rows: list[dict[str, Any]] = []
     for project_id, part in features.groupby("classification_project_id"):
         valid_exec = part["strong_low_execution_flag"].notna()
@@ -602,9 +610,23 @@ def build_repeated_signals(features: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_repeated_signals_as_of(features: pd.DataFrame) -> pd.DataFrame:
+    """자료 공개 후 연례 사후검토에서 회계연도 축 누적 반복 신호를 계산합니다."""
+    rows: list[dict[str, Any]] = []
+    for _, part in features.groupby("classification_project_id"):
+        years = sorted(pd.to_numeric(part["fiscal_year"], errors="raise").unique())
+        for fiscal_year in years:
+            prefix = part.loc[pd.to_numeric(part["fiscal_year"]).le(fiscal_year)]
+            row = build_repeated_signals(prefix).iloc[0].to_dict()
+            row["fiscal_year"] = int(fiscal_year)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def attach_signal_types(features: pd.DataFrame, repeated: pd.DataFrame) -> pd.DataFrame:
     repeat_columns = [
         "classification_project_id",
+        "fiscal_year",
         "valid_execution_year_count",
         "valid_monthly_year_count",
         "strong_low_execution_year_count",
@@ -621,7 +643,7 @@ def attach_signal_types(features: pd.DataFrame, repeated: pd.DataFrame) -> pd.Da
     ]
     frame = features.merge(
         repeated[repeat_columns],
-        on="classification_project_id",
+        on=["classification_project_id", "fiscal_year"],
         how="left",
         validate="many_to_one",
     )
@@ -2152,7 +2174,8 @@ def build_m3_analysis(paths: M3Paths) -> M3Result:
     baseline_features = build_signal_features(baseline_ranking, patterns, hhi)
     features = build_signal_features(ranking, patterns, hhi)
     repeated = build_repeated_signals(features)
-    features = attach_signal_types(features, repeated)
+    repeated_as_of = build_repeated_signals_as_of(features)
+    features = attach_signal_types(features, repeated_as_of)
 
     execution_criteria = {
         "STRONG_UNDER_80": "strong_low_execution_flag",

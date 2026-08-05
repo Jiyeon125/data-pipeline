@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from analytics.m3_financial_signals import (
     SIGNAL_COLUMNS,
@@ -8,6 +9,7 @@ from analytics.m3_financial_signals import (
     apply_official_support_form_peer_groups,
     attach_signal_types,
     build_repeated_signals,
+    build_repeated_signals_as_of,
     build_signal_features,
     feedback_summary,
     program_year_signal_summary,
@@ -179,13 +181,90 @@ def test_repeat_uses_valid_year_denominator_and_consecutive_years() -> None:
 
 def test_types_are_nonexclusive() -> None:
     features = build_signal_features(_ranking_rows(), _patterns(), _hhi())
-    repeated = build_repeated_signals(features)
+    repeated = build_repeated_signals_as_of(features)
     result = attach_signal_types(features, repeated)
     assert set(TYPE_COLUMNS).issubset(result.columns)
     row = result[result["fiscal_year"].eq(2024)].iloc[0]
     assert bool(row["type_accounting_adjustment_pattern"])
     assert bool(row["type_program_budget_concentration"])
     assert bool(row["type_multiple_financial_signals"])
+
+
+def test_repeated_signal_as_of_is_invariant_to_future_append() -> None:
+    features = build_signal_features(_ranking_rows(), _patterns(), _hhi())
+    historical = features.loc[features["fiscal_year"].le(2024)]
+    repeat_columns = [
+        "classification_project_id",
+        "fiscal_year",
+        "strong_low_execution_year_count",
+        "strong_low_execution_repeat_2plus",
+        "fixed_year_end_concentration_year_count",
+        "fixed_year_end_repeat_2plus",
+    ]
+
+    before = build_repeated_signals_as_of(historical)[repeat_columns].reset_index(drop=True)
+    after = (
+        build_repeated_signals_as_of(features)
+        .loc[lambda frame: frame["fiscal_year"].le(2024), repeat_columns]
+        .reset_index(drop=True)
+    )
+
+    pd.testing.assert_frame_equal(before, after, check_dtype=False)
+
+
+def test_repeat_does_not_treat_missing_middle_year_as_consecutive() -> None:
+    features = build_signal_features(_ranking_rows(), _patterns(), _hhi())
+    features = features.loc[features["fiscal_year"].isin([2022, 2024])].copy()
+    features["strong_low_execution_flag"] = True
+
+    repeated = build_repeated_signals(features).iloc[0]
+
+    assert repeated["strong_low_execution_year_count"] == 2
+    assert not repeated["strong_low_execution_consecutive_2"]
+
+
+def test_repeat_rejects_duplicate_project_year_rows() -> None:
+    features = build_signal_features(_ranking_rows(), _patterns(), _hhi())
+    duplicate = pd.concat([features, features.iloc[[0]]], ignore_index=True)
+
+    with pytest.raises(ValueError, match="사업-회계연도 키가 중복"):
+        build_repeated_signals(duplicate)
+
+
+def test_repeat_distinguishes_no_observation_from_observed_no_signal() -> None:
+    features = build_signal_features(_ranking_rows(), _patterns(), _hhi()).iloc[[0]].copy()
+    no_observation = features.copy()
+    no_observation["strong_low_execution_flag"] = pd.NA
+    no_signal = features.copy()
+    no_signal["strong_low_execution_flag"] = False
+
+    missing = build_repeated_signals(no_observation).iloc[0]
+    observed = build_repeated_signals(no_signal).iloc[0]
+
+    assert missing["valid_execution_year_count"] == 0
+    assert pd.isna(missing["strong_low_execution_valid_year_share"])
+    assert observed["valid_execution_year_count"] == 1
+    assert observed["strong_low_execution_valid_year_share"] == 0
+
+
+def test_repeat_first_and_single_valid_year_are_limited_not_repeated() -> None:
+    features = build_signal_features(_ranking_rows(), _patterns(), _hhi()).iloc[[0]].copy()
+
+    repeated = build_repeated_signals_as_of(features).iloc[0]
+
+    assert repeated["observed_year_count"] == 1
+    assert repeated["valid_execution_year_count"] == 1
+    assert repeated["limited_execution_observation_flag"]
+    assert not repeated["strong_low_execution_repeat_2plus"]
+
+
+def test_repeat_as_of_sorts_string_years_numerically() -> None:
+    features = build_signal_features(_ranking_rows(), _patterns(), _hhi()).iloc[:2].copy()
+    features["fiscal_year"] = ["10", "2"]
+
+    repeated = build_repeated_signals_as_of(features)
+
+    assert repeated["fiscal_year"].tolist() == [2, 10]
 
 
 def test_unknown_candidates_are_not_confirmed() -> None:

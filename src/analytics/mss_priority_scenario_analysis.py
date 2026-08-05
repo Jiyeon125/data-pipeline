@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import combinations
@@ -27,8 +28,11 @@ SIGNAL_SCORE_COMPONENTS = (
     "execution_management",
     "budget_performance_mismatch",
 )
-SIGNAL_SCORE_METHOD = "equal_mean_of_three_signal_components"
+SIGNAL_SCORE_METHOD = "complete_case_equal_mean_of_three_signal_components"
 SIZE_ROLE_IN_WORK_QUEUE = "tiebreak_only"
+ANALYSIS_VERSION = "review_workbench_v2_1"
+OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v2"
+ANALYSIS_TIME_BASIS = "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
 SIGNAL_FLAGS = (
     "type_repeated_strong_low_execution",
     "type_repeated_moderate_low_execution",
@@ -132,6 +136,36 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _checked_git(root: Path, *args: str) -> str:
+    boundary = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout.strip()
+    if Path(boundary).resolve() != root.resolve():
+        raise PriorityScenarioError(f"Git 저장소 경계가 다릅니다: {boundary}")
+    return subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout.strip()
+
+
+def _git_provenance(root: Path) -> dict[str, Any]:
+    return {
+        "commit_sha": _checked_git(root, "rev-parse", "HEAD"),
+        "worktree_dirty": bool(_checked_git(root, "status", "--porcelain")),
+    }
 
 
 def load_scenario_config(path: Path) -> dict[str, Any]:
@@ -715,10 +749,12 @@ def build_stable_top5_project_drilldown(
     drilldown["budget_rank_within_candidate"] = drilldown.groupby("candidate_id")[
         "project_original_budget"
     ].rank(method="min", ascending=False)
-    drilldown["program_performance_signal"] = drilldown["priority_reason"].str.contains(
-        "PERFORMANCE_BELOW_TARGET",
-        na=False,
-    )
+    drilldown["program_level_reported_target_context_signal"] = drilldown[
+        "priority_reason"
+    ].str.contains("PERFORMANCE_BELOW_TARGET", na=False)
+    drilldown["program_level_priority_reason_context"] = drilldown["priority_reason"]
+    drilldown["program_context_grain"] = "PROGRAM_YEAR_ACCOUNT"
+    drilldown["program_context_disclaimer"] = "PROGRAM_LEVEL_REFERENCE_NOT_PROJECT_PERFORMANCE"
     drilldown["project_performance_attributed"] = False
     drilldown["drilldown_role"] = "PROJECT_FINANCIAL_CONTEXT_ONLY"
     drilldown = drilldown.rename(
@@ -758,11 +794,13 @@ def build_stable_top5_project_drilldown(
         "candidate_id",
         *KEY,
         "performance_program_name",
-        "priority_reason",
+        "program_level_priority_reason_context",
         "all_scenario_top_5",
         "all_scenario_top_5_within_ministry",
         "drilldown_selection_scope",
-        "program_performance_signal",
+        "program_level_reported_target_context_signal",
+        "program_context_grain",
+        "program_context_disclaimer",
         "project_performance_attributed",
         "drilldown_role",
         "project_id",
@@ -820,6 +858,87 @@ def build_stable_top5_project_drilldown(
         ),
     }
     return result.convert_dtypes(), summary
+
+
+def validate_candidate_work_queue_integrity(
+    candidates: pd.DataFrame,
+    work_queue: pd.DataFrame,
+) -> dict[str, Any]:
+    """후보별 불변키·금액이 업무대기열에서 이동하거나 증식하지 않았는지 검증합니다."""
+    amount_columns = [
+        "account_original_budget",
+        "account_current_budget",
+        "account_settlement_expenditure",
+    ]
+    immutable_columns = [
+        *KEY,
+        "performance_program_name",
+        "analysis_status",
+        "priority_reason",
+        "signal_score",
+        "signal_score_status",
+        "review_intensity",
+        *amount_columns,
+    ]
+    required = {"candidate_id", *immutable_columns}
+    _require_columns(candidates, required, "후보표")
+    _require_columns(work_queue, required, "전체 업무대기열")
+    if (
+        candidates["candidate_id"].duplicated().any()
+        or work_queue["candidate_id"].duplicated().any()
+    ):
+        raise PriorityScenarioError("후보 또는 업무대기열 candidate_id가 중복되었습니다.")
+
+    audit = candidates[["candidate_id", *immutable_columns]].merge(
+        work_queue[["candidate_id", *immutable_columns]],
+        on="candidate_id",
+        how="outer",
+        suffixes=("_before", "_after"),
+        indicator=True,
+        validate="one_to_one",
+    )
+    anti_join = audit["_merge"].value_counts().to_dict()
+    if anti_join.get("left_only", 0) or anti_join.get("right_only", 0):
+        raise PriorityScenarioError(f"후보-업무대기열 anti-join이 발생했습니다: {anti_join}")
+
+    diff_counts: dict[str, int] = {}
+    for column in immutable_columns:
+        before = audit[f"{column}_before"]
+        after = audit[f"{column}_after"]
+        both_missing = before.isna() & after.isna()
+        if column in amount_columns or column == "signal_score":
+            tolerance = 0.5 if column in amount_columns else 1e-12
+            equal = (
+                pd.to_numeric(before, errors="coerce")
+                .sub(pd.to_numeric(after, errors="coerce"))
+                .abs()
+                .le(tolerance)
+            )
+        else:
+            equal = before.eq(after)
+        diff_counts[column] = int((~(both_missing | equal.fillna(False))).sum())
+    changed = {column: count for column, count in diff_counts.items() if count}
+    if changed:
+        raise PriorityScenarioError(f"업무대기열 불변 필드가 변경되었습니다: {changed}")
+
+    group_diffs: dict[str, int] = {}
+    for column in amount_columns:
+        before = candidates.groupby(KEY, dropna=False)[column].sum(min_count=1).sort_index()
+        after = work_queue.groupby(KEY, dropna=False)[column].sum(min_count=1).sort_index()
+        group_diffs[column] = int(before.sub(after).abs().gt(0.5).sum())
+    if any(group_diffs.values()):
+        raise PriorityScenarioError(f"프로그램-연도-회계 금액이 변경되었습니다: {group_diffs}")
+
+    return {
+        "candidate_rows_before": len(candidates),
+        "candidate_rows_after": len(work_queue),
+        "candidate_id_cardinality": "one_to_one",
+        "candidate_id_left_only": int(anti_join.get("left_only", 0)),
+        "candidate_id_right_only": int(anti_join.get("right_only", 0)),
+        "immutable_field_diff_counts": diff_counts,
+        "program_year_account_amount_diff_counts": group_diffs,
+        "intended_added_fields": sorted(set(work_queue.columns) - set(candidates.columns)),
+    }
 
 
 def build_full_population_review_work_queue(
@@ -900,7 +1019,7 @@ def build_full_population_review_work_queue(
     result["work_queue_role"] = "REVIEW_WORKFLOW_ORDER_NOT_POLICY_EFFECTIVENESS_RANK"
 
     budget = pd.to_numeric(result["account_original_budget"], errors="coerce").fillna(0)
-    signal_score = pd.to_numeric(result["signal_score"], errors="coerce").fillna(0)
+    signal_score = pd.to_numeric(result["signal_score"], errors="coerce")
     result["_resolved_order"] = resolved.astype(int)
     result["_repeat_order"] = -pd.to_numeric(
         result["repeated_signal_family_count"], errors="coerce"
@@ -912,7 +1031,8 @@ def build_full_population_review_work_queue(
         result["evidence_status"].map({"CONFIRMED": 0, "LIMITED": 1, "DATA_BLOCKED": 2}).fillna(3)
     )
     # 규모는 신호 강도 다음의 동률 정리만. 가중합 점수로 쓰지 않음.
-    result["_signal_score_order"] = -signal_score
+    result["_signal_score_missing_order"] = signal_score.isna().astype(int)
+    result["_signal_score_order"] = -signal_score.fillna(0)
     result["_budget_order"] = -budget
 
     lane_sort_keys = [
@@ -920,6 +1040,7 @@ def build_full_population_review_work_queue(
         "_repeat_order",
         "_signal_order",
         "_evidence_order",
+        "_signal_score_missing_order",
         "_signal_score_order",
         "_budget_order",
         "candidate_id",
@@ -969,6 +1090,7 @@ def build_full_population_review_work_queue(
             "_repeat_order",
             "_signal_order",
             "_evidence_order",
+            "_signal_score_missing_order",
             "_signal_score_order",
             "_budget_order",
         ]
@@ -999,6 +1121,7 @@ def build_full_population_review_work_queue(
     result_budget = pd.to_numeric(result["account_original_budget"], errors="coerce").sum()
     if abs(float(source_budget - result_budget)) > 0.5:
         raise PriorityScenarioError("전체 업무대기열에서 본예산 합계가 보존되지 않았습니다.")
+    key_integrity = validate_candidate_work_queue_integrity(candidates, result)
     summary = {
         "candidate_count": len(result),
         "candidate_coverage_rate": len(result) / len(candidates),
@@ -1007,12 +1130,17 @@ def build_full_population_review_work_queue(
             str(key): float(value)
             for key, value in result.groupby("work_lane")["account_original_budget"].sum().items()
         },
+        "signal_score_status_counts": {
+            str(key): int(value)
+            for key, value in result["signal_score_status"].value_counts().items()
+        },
         "resolved_context_count": int(result["work_item_status"].eq("RESOLVED_CONTEXT").sum()),
         "scenario_ranking_rows_preserved": int(
             result["scenario_ranking_eligible"].fillna(False).sum()
         ),
         "work_queue_order_unique": True,
         "original_budget_reconciled": True,
+        "key_integrity": key_integrity,
         "safety_conclusion_generated": False,
         "final_policy_rank_generated": False,
         "signal_size_separation": {
@@ -1024,7 +1152,7 @@ def build_full_population_review_work_queue(
                 "repeated_signal_family_count_desc",
                 "independent_signal_family_count_desc",
                 "evidence_status",
-                "signal_score_desc",
+                "complete_case_signal_score_desc",
                 "account_original_budget_desc_tiebreak_only",
                 "candidate_id",
             ],
@@ -1059,12 +1187,7 @@ def build_project_review_work_queue(
         "evidence_status",
         "independent_signal_family_count",
         "repeated_signal_family_count",
-        "performance_signal",
         "execution_review_signal",
-        "low_performance_budget_increase_t1",
-        "low_performance_budget_increase_t2",
-        "good_performance_budget_decrease_t1",
-        "good_performance_budget_decrease_t2",
     ]
     _require_columns(work_queue, set(work_columns), "전체 업무대기열")
     reviewable_ids = candidates.loc[
@@ -1187,6 +1310,11 @@ def build_review_workbench_queue(
     program_tasks["project_name"] = pd.NA
     program_tasks["work_item_budget"] = program_tasks["account_original_budget"]
     program_tasks["review_sequence_overall"] = pd.NA
+    program_tasks["program_context_grain"] = "PROGRAM_YEAR_ACCOUNT"
+    program_tasks["program_context_disclaimer"] = pd.NA
+    program_tasks["program_level_priority_reason_context"] = pd.NA
+    program_tasks["program_level_reported_target_context_signal"] = pd.NA
+    program_tasks["project_performance_attributed"] = pd.NA
 
     project_tasks = project_queue.copy()
     project_tasks["review_item_type"] = "DETAILED_PROJECT_REVIEW"
@@ -1220,6 +1348,11 @@ def build_review_workbench_queue(
         "low_performance_budget_increase_t2",
         "good_performance_budget_decrease_t1",
         "good_performance_budget_decrease_t2",
+        "program_level_priority_reason_context",
+        "program_level_reported_target_context_signal",
+        "program_context_grain",
+        "program_context_disclaimer",
+        "project_performance_attributed",
         "work_queue_order",
         "work_queue_order_within_ministry",
         "review_sequence_overall",
@@ -1274,15 +1407,22 @@ def _build_priority_reason(row: pd.Series) -> str:
         reasons.append("ACCOUNTING_ADJUSTMENT_CONTEXT")
     if bool(row["structure_context_signal"]):
         reasons.append("PROGRAM_STRUCTURE_CONTEXT")
-    if bool(row.get("low_performance_budget_increase_t1", False)):
-        reasons.append("LOW_PERFORMANCE_BUDGET_INCREASE_T1")
-    if bool(row.get("low_performance_budget_increase_t2", False)):
-        reasons.append("LOW_PERFORMANCE_BUDGET_INCREASE_T2")
-    if bool(row.get("good_performance_budget_decrease_t1", False)):
-        reasons.append("GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT")
-    if bool(row.get("good_performance_budget_decrease_t2", False)):
-        reasons.append("GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT")
     return ";".join(reasons) or "NO_REVIEW_SIGNAL"
+
+
+def _build_retrospective_feedback_reason(row: pd.Series) -> str:
+    reasons: list[str] = []
+    for column, reason in (
+        ("low_performance_budget_increase_t1", "LOW_PERFORMANCE_BUDGET_INCREASE_T1"),
+        ("low_performance_budget_increase_t2", "LOW_PERFORMANCE_BUDGET_INCREASE_T2"),
+        ("good_performance_budget_decrease_t1", "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT"),
+        ("good_performance_budget_decrease_t2", "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT"),
+        ("program_total_account_type_mismatch_t1", "PROGRAM_ACCOUNT_TYPE_MISMATCH_T1"),
+        ("program_total_account_type_mismatch_t2", "PROGRAM_ACCOUNT_TYPE_MISMATCH_T2"),
+    ):
+        if bool(row.get(column, False)):
+            reasons.append(reason)
+    return ";".join(reasons) or "NO_RETROSPECTIVE_FEEDBACK"
 
 
 def apply_feedback_cutoff(frame: pd.DataFrame, cutoff_year: int) -> pd.DataFrame:
@@ -1470,9 +1610,10 @@ def build_candidate_population(
         | ~signal_joined
         | ~merged["financial_signal_budget_reconciled"]
         | merged["type_data_validation_priority_budget_share"].fillna(0).gt(0)
-        | merged["program_total_account_type_mismatch_t1"].fillna(False)
-        | merged["program_total_account_type_mismatch_t2"].fillna(False)
     )
+    merged["retrospective_feedback_data_quality_signal"] = merged[
+        "program_total_account_type_mismatch_t1"
+    ].fillna(False) | merged["program_total_account_type_mismatch_t2"].fillna(False)
     merged["performance_signal"] = merged["performance_gap"].fillna(0).gt(0)
     merged["execution_signal"] = merged["execution_management"].fillna(0).gt(0)
     merged["budget_mismatch_signal"] = merged["budget_performance_mismatch"].fillna(0).gt(0)
@@ -1548,8 +1689,6 @@ def build_candidate_population(
     independent_columns = [
         "performance_signal",
         "execution_review_signal",
-        "low_performance_budget_increase_t1",
-        "low_performance_budget_increase_t2",
     ]
     merged["independent_signal_family_count"] = merged[independent_columns].sum(axis=1)
     merged["evidence_status"] = "CONFIRMED"
@@ -1580,17 +1719,9 @@ def build_candidate_population(
     )
 
     # priority_tier의 강한 단일도 동일 원칙(성과미달 단독 금지).
-    strong_single = (
-        merged["current_execution_severity"].fillna(0).ge(1)
-        | merged["type_repeated_strong_low_execution_budget_share"].fillna(0).ge(0.5)
-        | (
-            merged["performance_gap"].fillna(0).ge(1)
-            & (
-                merged["low_performance_budget_increase_t1"].fillna(False)
-                | merged["low_performance_budget_increase_t2"].fillna(False)
-            )
-        )
-    )
+    strong_single = merged["current_execution_severity"].fillna(0).ge(1) | merged[
+        "type_repeated_strong_low_execution_budget_share"
+    ].fillna(0).ge(0.5)
     merged["priority_tier"] = "INFORMATION"
     merged.loc[merged["context_only_candidate"], "priority_tier"] = "CONTEXT_REVIEW"
     merged.loc[merged["scenario_ranking_eligible"], "priority_tier"] = "MODERATE_OR_CONTEXT_REVIEW"
@@ -1603,27 +1734,15 @@ def build_candidate_population(
         "priority_tier",
     ] = "MULTIPLE_SIGNAL_REVIEW"
     merged.loc[merged["data_validation_signal"], "priority_tier"] = "DATA_REVIEW"
-    # 3차 멘토링: 성과미달만으로 최우선(강한 단일) 금지.
-    # 강한 단일은 집행 강신호이거나, 성과미달+후속예산증가 등 추가 근거가 있을 때만.
-    performance_full_gap = merged["performance_gap"].fillna(0).ge(1)
+    # 보고된 목표 미달과 후속예산은 강한 단일 판정 근거로 사용하지 않습니다.
     execution_strong_signal = merged["current_execution_severity"].fillna(0).ge(1)
-    low_perf_budget_increase = merged["low_performance_budget_increase_t1"].fillna(
-        False
-    ) | merged["low_performance_budget_increase_t2"].fillna(False)
-    strong_independent = execution_strong_signal | (
-        performance_full_gap & low_perf_budget_increase
-    ) | (
-        performance_full_gap
-        & merged["type_repeated_strong_low_execution_budget_share"].fillna(0).ge(0.5)
-    )
+    strong_independent = execution_strong_signal
     merged["review_intensity"] = "MONITOR"
     merged.loc[
         merged["accounting_context_signal"]
         | merged["structure_context_signal"]
         | merged["budget_increase_context_signal"]
-        | merged["budget_decrease_context_signal"]
-        | merged["good_performance_budget_decrease_t1"]
-        | merged["good_performance_budget_decrease_t2"],
+        | merged["budget_decrease_context_signal"],
         "review_intensity",
     ] = "CONTEXT_REVIEW"
     merged.loc[merged["independent_signal_family_count"].eq(1), "review_intensity"] = (
@@ -1660,6 +1779,10 @@ def build_candidate_population(
         }
     )
     merged["priority_reason"] = merged.apply(_build_priority_reason, axis=1)
+    merged["retrospective_feedback_reason"] = merged.apply(
+        _build_retrospective_feedback_reason,
+        axis=1,
+    )
     program_identity = merged["program_code"].fillna(
         merged["performance_program_name"].astype("string")
     )
@@ -1694,7 +1817,7 @@ def build_candidate_population(
 def attach_signal_size_separation(candidates: pd.DataFrame) -> pd.DataFrame:
     """신호 점수와 예산 규모를 분리해 본편 대기열용 필드를 붙입니다.
 
-    - signal_score: 성과·집행·성과-예산불일치의 산술평균 (fiscal_impact 제외)
+    - signal_score: 세 구성요소가 모두 있을 때만 산술평균 (fiscal_impact 제외)
     - fiscal_impact: 민감도·파급 시나리오용으로 유지
     - 본편 업무순서는 signal_score 후 예산 동률 정리만 사용
     """
@@ -1703,9 +1826,9 @@ def attach_signal_size_separation(candidates: pd.DataFrame) -> pd.DataFrame:
         pd.to_numeric(result[column], errors="coerce") for column in SIGNAL_SCORE_COMPONENTS
     ]
     signal_frame = pd.concat(signal_parts, axis=1)
-    present = signal_frame.notna().sum(axis=1)
-    result["signal_score"] = signal_frame.sum(axis=1, min_count=1) / present.where(present.gt(0))
-    result["signal_score"] = result["signal_score"].astype("Float64")
+    complete = signal_frame.notna().all(axis=1)
+    result["signal_score"] = signal_frame.mean(axis=1).where(complete).astype("Float64")
+    result["signal_score_status"] = complete.map({True: "COMPLETE", False: "INCOMPLETE_COMPONENTS"})
     result["signal_score_method"] = SIGNAL_SCORE_METHOD
     result["size_role_in_work_queue"] = SIZE_ROLE_IN_WORK_QUEUE
     result["fiscal_impact_in_signal_score"] = False
@@ -2089,6 +2212,7 @@ def _build_summary(
     config: dict[str, Any],
     *,
     input_hashes: dict[str, str],
+    provenance: dict[str, Any],
 ) -> dict[str, Any]:
     off_diagonal = spearman.loc[
         spearman["scenario_left"].ne(spearman["scenario_right"]),
@@ -2140,6 +2264,15 @@ def _build_summary(
         }
     return {
         "generated_at": datetime.now(UTC).isoformat(),
+        "analysis_version": ANALYSIS_VERSION,
+        "output_schema_version": OUTPUT_SCHEMA_VERSION,
+        "analysis_time_basis": ANALYSIS_TIME_BASIS,
+        "availability_cutoff_enforced": False,
+        "real_time_or_historical_information_set_reconstructed": False,
+        "data_fiscal_year_min": int(candidates["fiscal_year"].min()),
+        "data_fiscal_year_max": int(candidates["fiscal_year"].max()),
+        "code_provenance": provenance,
+        "stable_tie_break_key": "candidate_id",
         "scope": config["scope"],
         "grain": "ministry x program x fiscal_year x account_type",
         "status": "independent_review_work_queue_primary_weighted_scenarios_advanced_only",
@@ -2203,17 +2336,19 @@ def _build_summary(
                 "repeated_signal_family_count_desc",
                 "independent_signal_family_count_desc",
                 "evidence_status",
-                "signal_score_desc",
+                "complete_case_signal_score_desc",
                 "account_original_budget_desc_tiebreak_only",
                 "candidate_id",
             ],
             "weighted_sum_used": False,
             "signal_score_used_in_work_queue": True,
+            "partial_signal_score_used_in_work_queue": False,
             "signal_score_method": SIGNAL_SCORE_METHOD,
             "signal_score_components": list(SIGNAL_SCORE_COMPONENTS),
             "fiscal_impact_in_signal_score": False,
             "size_role_in_work_queue": SIZE_ROLE_IN_WORK_QUEUE,
             "t1_t2_kept_separate": True,
+            "t1_t2_excluded_from_current_review_intensity": True,
             "performance_attributed_to_detailed_project": False,
             "account_type_kept_separate": True,
         },
@@ -2280,9 +2415,12 @@ def _build_summary(
             "policy_failure_label_generated": False,
             "weighted_scenarios_primary_work_order": False,
             "t1_t2_in_single_score": False,
+            "t1_t2_in_current_review_intensity": False,
         },
         "input_sha256": input_hashes,
+        "config_hash_included_in_input_sha256": True,
         "interpretation_limits": [
+            "회계연도 축 사후검토이며 실제 공개시점 당시 정보집합이나 실시간 판단을 재현하지 않음",
             "사업별 기대 성과시차·의무지출·성과지표 유형은 현재 미확정",
             "기존 가중 시나리오는 고급 민감도에만 보존하고 기본 업무순서에 사용하지 않음",
             "프로그램 성과를 세부사업 성과로 귀속하지 않음",
@@ -2316,6 +2454,8 @@ def run_priority_scenario_analysis(
             paths.config,
         )
     }
+    project_root = paths.config.resolve().parent.parent
+    provenance = _git_provenance(project_root)
     config = load_scenario_config(paths.config)
     scope = config["scope"]
     analysis = pd.read_csv(
@@ -2386,6 +2526,7 @@ def run_priority_scenario_analysis(
         top_k_overlap,
         config,
         input_hashes=input_hashes,
+        provenance=provenance,
     )
     summary["full_population_review_work_queue"] = work_queue_summary
     summary["drilldown"] = drilldown_summary

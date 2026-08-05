@@ -124,6 +124,12 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
             signal = "ALL_COMPARABLE_BELOW_TARGET"
         else:
             signal = "MIXED_COMPARABLE"
+        if comparable.empty:
+            indicator_coverage_status = "NO_COMPARABLE_REPORTED_RATE"
+        elif len(comparable) < len(part):
+            indicator_coverage_status = "PARTIAL_REPORTED_RATE_COVERAGE"
+        else:
+            indicator_coverage_status = "COMPLETE_REPORTED_RATE_COVERAGE"
         goal_numbers = sorted(part["program_goal_number"].dropna().astype(str).unique())
         rows.append(
             {
@@ -156,6 +162,13 @@ def aggregate_program_year_performance(indicators: pd.DataFrame) -> pd.DataFrame
                 "below_target_count": below_target_count,
                 "at_or_above_target_count": at_or_above_target_count,
                 "reported_performance_signal": signal,
+                "reported_target_status": signal,
+                "reported_target_status_interpretation": (
+                    "OFFICIAL_REPORTED_TARGET_STATUS_NOT_POLICY_EFFECT"
+                ),
+                "indicator_coverage_status": indicator_coverage_status,
+                "performance_effect_eligible": False,
+                "performance_peer_comparison_eligible": False,
                 "source_indicator_ids": json.dumps(
                     part["source_indicator_id"].astype(str).tolist(),
                     ensure_ascii=False,

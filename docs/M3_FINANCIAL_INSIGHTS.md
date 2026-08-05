@@ -71,9 +71,9 @@
 
 | 유형 | 사업-연도 | 고유 사업 | 본예산 비중 | 해석 |
 |---|---:|---:|---:|---|
-| REPEATED_STRONG_LOW_EXECUTION | 140 | 55 | 1.1% | 반복적으로 확인되는 강한 집행설명필요 신호 |
-| REPEATED_MODERATE_LOW_EXECUTION | 131 | 56 | 0.4% | 반복되는 중간 수준의 집행설명필요 신호 |
-| REPEATED_YEAR_END_CONCENTRATION | 218 | 109 | 3.7% | 지급·조달·정산 시점 설명이 필요한 반복 패턴 |
+| REPEATED_STRONG_LOW_EXECUTION | 85 | 55 | 0.4% | 반복적으로 확인되는 강한 집행설명필요 신호 |
+| REPEATED_MODERATE_LOW_EXECUTION | 75 | 56 | 0.2% | 반복되는 중간 수준의 집행설명필요 신호 |
+| REPEATED_YEAR_END_CONCENTRATION | 109 | 109 | 1.9% | 지급·조달·정산 시점 설명이 필요한 반복 패턴 |
 | ACCOUNTING_ADJUSTMENT_PATTERN | 162 | 135 | 1.8% | 회계조정·환입·분모 확인이 우선인 패턴 |
 | DENOMINATOR_OR_MATCHING_REVIEW | 16 | 16 | 4.2% | 정책 해석 전에 데이터 연결·분모 검증이 필요한 패턴 |
 | BUDGET_RAPID_INCREASE | 88 | 86 | 0.6% | 비교집단 대비 예산 확대 사유를 확인할 후보 |
@@ -99,7 +99,7 @@
 | strong_low_execution_flag | 108 | 1,408 | -3.0% | 0.0% | -3.0% |
 | moderate_low_execution_flag | 126 | 1,446 | 0.0% | 0.0% | 0.0% |
 | fixed_year_end_concentration_flag | 194 | 862 | -2.8% | 0.0% | -2.8% |
-| REPEATED_STRONG_LOW_EXECUTION | 69 | 1,293 | -1.2% | 0.1% | -1.3% |
+| REPEATED_STRONG_LOW_EXECUTION | 26 | 518 | -2.2% | 0.1% | -2.2% |
 
 ## 9. T+2 환류 결과
 
@@ -112,7 +112,7 @@ T+2 적격 표본은 1,083행으로 T+1보다 작아 부처·회계·규모 세�
 | strong_low_execution_flag | 53 | 547 | -1.4% | 4.6% | -5.9% |
 | moderate_low_execution_flag | 64 | 671 | -3.9% | 0.0% | -3.9% |
 | fixed_year_end_concentration_flag | 1 | 1 | -37.0% | 78.6% | -115.6% |
-| REPEATED_STRONG_LOW_EXECUTION | 31 | 525 | 0.0% | 4.6% | -4.6% |
+| REPEATED_STRONG_LOW_EXECUTION | 1 | 1 | 155.1% | -55.0% | 210.1% |
 
 ## 10. 부처·회계·사업규모별 차이
 
@@ -126,7 +126,7 @@ T+2 적격 표본은 1,083행으로 T+1보다 작아 부처·회계·규모 세�
 
 ## 11. 강건한 결과
 
-강건성 필터에서 표본이 충분한 60개 비교 중 56개가 전체 결과와 같은 방향을 유지했습니다. 방향 유지 여부와 효과크기를 함께 제공하며, 방향만 같다고 정책적으로 유의미하다고 판단하지 않습니다.
+강건성 필터에서 표본이 충분한 50개 비교 중 48개가 전체 결과와 같은 방향을 유지했습니다. 방향 유지 여부와 효과크기를 함께 제공하며, 방향만 같다고 정책적으로 유의미하다고 판단하지 않습니다.
 
 T+1에서는 80% 미만, 비교집단 하위 10%, 고정 연말집중의 예산변화 중앙값 차이가 대체로 음(-)의 방향을 유지했습니다. 다만 80% 미만 전체 비교의 부트스트랩 구간은 0을 포함하므로 일관된 인과효과가 아니라 추가 검토 신호로만 해석합니다.
 
@@ -138,7 +138,7 @@ T+1에서는 80% 미만, 비교집단 하위 10%, 고정 연말집중의 예산�
 
 ## 13. 대표 사례
 
-유형별 최대 10개, 총 84개 사례를 규모·반복·환류변화·복수신호·품질 사유로 추출했습니다.
+유형별 최대 10개, 총 80개 사례를 규모·반복·환류변화·복수신호·품질 사유로 추출했습니다.
 
 ![대표 사례 T+1·T+2](../artifacts/figures/m3/case_t1_t2_comparison.png)
 
@@ -148,16 +148,16 @@ T+1에서는 80% 미만, 비교집단 하위 10%, 고정 연말집중의 예산�
 
 | 부처 | 프로그램 | 세부사업 | 신호유형 | T+1 변화 |
 |---|---|---|---|---:|
-| 보건복지부 | 기초생활보장 | 생업자금 이차 및 손실보전금 | REPEATED_STRONG_LOW_EXECUTION | 250.0% |
-| 과학기술정보통신부 | 우체국예금 | 금융투자국사건립 | REPEATED_STRONG_LOW_EXECUTION | 248.5% |
-| 보건복지부 | 저출산대응및인구정책지원 | 저출산고령사회위원회 사무처지원 | REPEATED_MODERATE_LOW_EXECUTION | 90.4% |
+| 행정안전부 | 청사관리 | 정부서울청사 창성동 별관 재건축 | REPEATED_STRONG_LOW_EXECUTION | 121.6% |
+| 보건복지부 | 국립춘천병원 | 춘천병원 병원관리 및 운영(자본) | REPEATED_STRONG_LOW_EXECUTION | 99.8% |
 | 보건복지부 | 저출산대응및인구정책지원 | 모자보건사업 | REPEATED_MODERATE_LOW_EXECUTION | 82.5% |
-| 중소벤처기업부 | 중소기업인력지원 | 전남연수원 건립 | REPEATED_YEAR_END_CONCENTRATION | -85.9% |
-| 고용노동부 | 고용창출 | 고용영향평가사업 | REPEATED_YEAR_END_CONCENTRATION | -69.2% |
+| 행정안전부 | 정부혁신조직 | 정부혁신국제네트워크강화및대외신인도제고 | REPEATED_MODERATE_LOW_EXECUTION | 40.4% |
+| 고용노동부 | 고용창출 | 청년추가고용장려금 | ACCOUNTING_ADJUSTMENT_PATTERN | -92.6% |
 | 행정안전부 | 정부혁신조직 | 지식기반의행정구축(정보화) | ACCOUNTING_ADJUSTMENT_PATTERN | -79.1% |
-| 과학기술정보통신부 | 전파활용방송서비스산업 | 60Ghz 이하 대역 5G 전파 응용 서비스 활용 기반 조성(R&D) | ACCOUNTING_ADJUSTMENT_PATTERN | -63.4% |
 | 과학기술정보통신부 | 공공연구성과활성화 | 공공연구성과 가치창출 기술키움(R&D) | BUDGET_RAPID_INCREASE | -78.0% |
 | 과학기술정보통신부 | 미래유망원천기술개발 | 전통문화혁신성장융합연구(R&D) | BUDGET_RAPID_INCREASE | -76.6% |
+| 과학기술정보통신부 | 우체국예금 | 금융투자국사건립 | BUDGET_RAPID_DECREASE | 248.5% |
+| 보건복지부 | 공공보건의료확충 | 국가암빅데이터구축(정보화) | BUDGET_RAPID_DECREASE | 143.3% |
 
 반례는 신호와 다음 연도 예산변화가 기계적으로 연결되지 않음을 보여줍니다. 사업 종료, 정책 우선순위, 회계이관, 단계 전환 등 대안 설명을 원문에서 확인해야 합니다.
 

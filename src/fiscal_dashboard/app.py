@@ -26,7 +26,9 @@ from performance_pipeline.pdf_reconciliation import (
     load_manual_review_confirmations,
     upsert_manual_review_confirmation,
 )
+
 DATA_DIR = Path("data/analytics/multi_ministry_priority_scenarios")
+EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v2"
 CASE_REVIEW_DIR = Path("data/analytics/priority_case_evidence_review")
 MINISTRY_LABELS = {
     "019": "고용노동부",
@@ -66,15 +68,17 @@ SCENARIO_LABELS = {
     "fiscal_impact_adjusted": "재정영향 보정",
 }
 REASON_LABELS = {
-    "PERFORMANCE_BELOW_TARGET": "성과 목표 미달",
+    "PERFORMANCE_BELOW_TARGET": "보고된 목표 미달 (사업효과 판정 아님)",
     "EXECUTION_MANAGEMENT": "집행 설명 필요",
     "BUDGET_PERFORMANCE_MISMATCH": "성과·예산변화 불일치",
     "ACCOUNTING_ADJUSTMENT_CONTEXT": "회계조정 맥락",
     "PROGRAM_STRUCTURE_CONTEXT": "프로그램 구조 맥락",
-    "LOW_PERFORMANCE_BUDGET_INCREASE_T1": "성과 미달 뒤 프로그램 전체 T+1 예산 증가",
-    "LOW_PERFORMANCE_BUDGET_INCREASE_T2": "성과 미달 뒤 프로그램 전체 T+2 예산 증가",
-    "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT": "성과 양호 뒤 프로그램 전체 T+1 예산 감소 맥락",
-    "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT": "성과 양호 뒤 프로그램 전체 T+2 예산 감소 맥락",
+    "LOW_PERFORMANCE_BUDGET_INCREASE_T1": "보고 목표 미달 뒤 프로그램 전체 T+1 예산 증가",
+    "LOW_PERFORMANCE_BUDGET_INCREASE_T2": "보고 목표 미달 뒤 프로그램 전체 T+2 예산 증가",
+    "GOOD_PERFORMANCE_BUDGET_DECREASE_T1_CONTEXT": "보고 목표 달성 뒤 프로그램 전체 T+1 예산 감소 맥락",
+    "GOOD_PERFORMANCE_BUDGET_DECREASE_T2_CONTEXT": "보고 목표 달성 뒤 프로그램 전체 T+2 예산 감소 맥락",
+    "PROGRAM_ACCOUNT_TYPE_MISMATCH_T1": "T+1 프로그램 회계유형 구성 불일치",
+    "PROGRAM_ACCOUNT_TYPE_MISMATCH_T2": "T+2 프로그램 회계유형 구성 불일치",
     "DATA_VALIDATION": "데이터 검증",
     "FINANCIAL_LINKAGE_LIMITED": "재정 연결 제한",
     "PROGRAM_MATCH_REVIEW": "프로그램 매칭 검토",
@@ -176,6 +180,13 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     for name in ("candidates", "work_queue", "review_queue"):
         data[name]["account_type"] = data[name]["account_type"].fillna("NOT_AVAILABLE")
     data["summary"] = json.loads((base / "analysis_summary.json").read_text(encoding="utf-8"))
+    schema_version = data["summary"].get("output_schema_version")
+    if schema_version != EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION:
+        raise DashboardDataError(
+            "점검대기열 산출물 스키마가 현재 화면과 다릅니다. "
+            f"expected={EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION}, actual={schema_version or 'LEGACY'}; "
+            "분석 산출물을 최신 코드로 다시 생성하세요."
+        )
     case_base = root / CASE_REVIEW_DIR
     case_filenames = {
         "case_review": "selected_cases.csv",
@@ -210,6 +221,7 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "performance_program_name",
             "priority_tier",
             "priority_reason",
+            "retrospective_feedback_reason",
             "review_candidate",
             "scenario_ranking_eligible",
             "data_validation_signal",
@@ -233,11 +245,13 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "performance_program_name",
             "priority_tier",
             "priority_reason",
+            "retrospective_feedback_reason",
             "review_candidate",
             "scenario_ranking_eligible",
             "data_validation_signal",
             "account_original_budget",
             "signal_score",
+            "signal_score_status",
             "size_role_in_work_queue",
             "work_lane",
             "work_item_status",
@@ -291,6 +305,9 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "remaining_share_within_candidate",
             "project_financial_signal_types",
             "project_performance_attributed",
+            "program_level_reported_target_context_signal",
+            "program_context_grain",
+            "program_context_disclaimer",
         },
         "project_queue": {
             "candidate_id",
@@ -312,6 +329,9 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "remaining_share_within_candidate",
             "project_financial_signal_types",
             "project_performance_attributed",
+            "program_level_reported_target_context_signal",
+            "program_context_grain",
+            "program_context_disclaimer",
             "work_lane",
             "work_queue_order",
             "work_queue_order_within_ministry",
@@ -329,6 +349,12 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
         raise DashboardDataError(
             "전체 업무대기열이 후보 모집단 412행을 빠짐없이 보존하지 못했습니다."
         )
+    score = pd.to_numeric(data["work_queue"]["signal_score"], errors="coerce")
+    incomplete = data["work_queue"]["signal_score_status"].eq("INCOMPLETE_COMPONENTS")
+    if score.loc[incomplete].notna().any():
+        raise DashboardDataError("구성요소 불완전 행의 신호점수가 null이 아닙니다.")
+    if score.loc[data["work_queue"]["signal_score_status"].eq("COMPLETE")].isna().any():
+        raise DashboardDataError("COMPLETE 행의 신호점수가 누락되었습니다.")
     if data["stability"]["candidate_id"].duplicated().any():
         raise DashboardDataError("안정성표 candidate_id가 중복되었습니다.")
     if data["scores"].duplicated(["candidate_id", "scenario"]).any():
@@ -1024,7 +1050,7 @@ def _plain_lane_help(lane: object) -> str:
     return {
         "DATA_FIRST": "숫자 해석 전에 연결·분모·매칭을 먼저 확인해야 하는 행",
         "REPEATED_OR_MULTIPLE": "문제가 여러 해 또는 여러 종류로 겹침 → 우선 볼 후보",
-        "STRONG_SINGLE": "강한 단일 신호(집행 강신호 또는 성과미달+후속예산증가 등)",
+        "STRONG_SINGLE": "강한 단일 집행 신호",
         "SINGLE_REVIEW": "독립 신호가 하나 있어 근거를 확인할 후보",
         "CONTEXT_REVIEW": "회계조정·구조·예산방향 등 맥락 확인",
         "MONITOR": "지금 트리거가 거의 없음 (안전·정상 판정 아님)",
@@ -1040,15 +1066,17 @@ def _as_int(value: object) -> int | None:
 
 def _signal_composition_label(row: pd.Series | object) -> str:
     """대기열용: 점수% 대신 개수·유무로 구성을 보여 줍니다."""
-    getter = row.get if isinstance(row, pd.Series) else lambda key, default=None: getattr(
-        row, key, default
+    getter = (
+        row.get
+        if isinstance(row, pd.Series)
+        else lambda key, default=None: getattr(row, key, default)
     )
     below = _as_int(getter("below_target_count"))
     comparable = _as_int(getter("comparable_rate_count"))
     if below is None or comparable is None:
         perf = "성과 —"
     else:
-        perf = f"성과 미달 {below}/{comparable}개"
+        perf = f"보고 목표 미달 {below}/{comparable}개"
 
     rate = pd.to_numeric(pd.Series([getter("account_execution_rate")]), errors="coerce").iloc[0]
     if pd.isna(rate):
@@ -1061,9 +1089,7 @@ def _signal_composition_label(row: pd.Series | object) -> str:
     if bool(getter("budget_mismatch_signal")):
         mismatch = "불일치 있음"
     elif pd.isna(
-        pd.to_numeric(
-            pd.Series([getter("budget_performance_mismatch")]), errors="coerce"
-        ).iloc[0]
+        pd.to_numeric(pd.Series([getter("budget_performance_mismatch")]), errors="coerce").iloc[0]
     ):
         mismatch = "불일치 —"
     else:
@@ -1079,7 +1105,7 @@ def _plain_signal_cards(row: pd.Series) -> list[tuple[str, str, str]]:
         perf_value, perf_help = "자료 없음", "비교 가능한 성과지표 수를 확인하지 못함"
     else:
         perf_value = f"{below} / {comparable}개"
-        perf_help = "비교 가능한 성과지표 중 목표 미달 개수"
+        perf_help = "공식 보고 달성률이 비교 가능한 지표 중 목표 미달 개수 (사업효과 판정 아님)"
 
     rate = pd.to_numeric(row.get("account_execution_rate"), errors="coerce")
     review_projects = _as_int(row.get("account_execution_review_project_count"))
@@ -1099,28 +1125,19 @@ def _plain_signal_cards(row: pd.Series) -> list[tuple[str, str, str]]:
             exec_value = f"{float(rate):.0%} · 점검세부 {review_projects}/{total_projects}"
     exec_help = " · ".join(exec_bits) if exec_bits else "올해 집행률 (필요 시 반복·세부사업 수)"
 
-    mismatch_bits: list[str] = []
-    if bool(row.get("low_performance_budget_increase_t1")) or bool(
-        row.get("low_performance_budget_increase_t2")
-    ):
-        mismatch_bits.append("미달 뒤 예산↑")
-    if bool(row.get("good_performance_budget_decrease_t1")) or bool(
-        row.get("good_performance_budget_decrease_t2")
-    ):
-        mismatch_bits.append("양호 뒤 예산↓")
     if bool(row.get("budget_mismatch_signal")):
         mismatch_value = "있음"
-        mismatch_help = " · ".join(mismatch_bits) if mismatch_bits else "성과와 후속예산 방향이 어색함"
+        mismatch_help = "보고 목표 상태와 당해 예산변화 패턴 확인"
     else:
         mismatch_value = "없음"
-        mismatch_help = "성과·후속예산 불일치 신호 없음"
+        mismatch_help = "보고 목표 상태·당해 예산변화 불일치 신호 없음"
 
     independent = _as_int(row.get("independent_signal_family_count")) or 0
     repeated = _as_int(row.get("repeated_signal_family_count")) or 0
     return [
-        ("성과 미달 지표", perf_value, perf_help),
+        ("보고 목표 미달 지표", perf_value, perf_help),
         ("집행", exec_value, exec_help),
-        ("성과·예산 불일치", mismatch_value, mismatch_help),
+        ("보고 목표·당해 예산변화", mismatch_value, mismatch_help),
         ("독립 / 반복 신호", f"{independent} / {repeated}개", "켜진 신호 종류 수 · 반복 계열 수"),
     ]
 
@@ -1132,18 +1149,25 @@ def _queue_simple_table(frame: pd.DataFrame) -> pd.DataFrame:
     table["연도"] = table["fiscal_year"]
     table["프로그램"] = table["performance_program_name"]
     table["회계"] = table["account_type"].map(ACCOUNT_LABELS).fillna(table["account_type"])
+    table["분석단위"] = "프로그램×연도×회계"
     table["볼 단계"] = table["review_intensity"].map(REVIEW_INTENSITY_LABELS)
     table["왜 보나"] = table["priority_reason"].map(_reason_text)
-    table["신호 구성"] = [
-        _signal_composition_label(row) for _, row in table.iterrows()
-    ]
-    table["독립신호"] = pd.to_numeric(
-        table.get("independent_signal_family_count"), errors="coerce"
-    ).fillna(0).astype(int)
+    table["신호 구성"] = [_signal_composition_label(row) for _, row in table.iterrows()]
+    table["독립신호"] = (
+        pd.to_numeric(table.get("independent_signal_family_count"), errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    table["점수상태"] = table["signal_score_status"].map(
+        {
+            "COMPLETE": "계산 가능",
+            "INCOMPLETE_COMPONENTS": "판단 보류(구성요소 결측)",
+        }
+    )
     table["다음에 할 일"] = table["next_action"]
-    table["예산(억원·참고)"] = pd.to_numeric(
-        table["account_original_budget"], errors="coerce"
-    ).div(100_000_000)
+    table["예산(억원·참고)"] = pd.to_numeric(table["account_original_budget"], errors="coerce").div(
+        100_000_000
+    )
     return table[
         [
             "순서",
@@ -1151,10 +1175,12 @@ def _queue_simple_table(frame: pd.DataFrame) -> pd.DataFrame:
             "연도",
             "프로그램",
             "회계",
+            "분석단위",
             "볼 단계",
             "왜 보나",
             "신호 구성",
             "독립신호",
+            "점수상태",
             "다음에 할 일",
             "예산(억원·참고)",
         ]
@@ -1166,25 +1192,32 @@ def _signal_checklist(row: pd.Series) -> list[str]:
     if bool(row.get("data_validation_signal")):
         checks.append("데이터·연결 확인이 먼저 필요")
     if bool(row.get("performance_signal")):
-        checks.append("성과 목표 미달 신호")
+        checks.append("보고된 목표 미달 신호 (사업효과 판정 아님)")
     if bool(row.get("execution_signal")) or bool(row.get("execution_review_signal")):
         checks.append("집행 설명 필요 신호")
     if bool(row.get("budget_mismatch_signal")):
         checks.append("성과와 예산변화 불일치")
-    if bool(row.get("low_performance_budget_increase_t1")) or bool(
-        row.get("low_performance_budget_increase_t2")
-    ):
-        checks.append("성과 미달 뒤 후속 예산 증가 (T+1/T+2)")
-    if bool(row.get("good_performance_budget_decrease_t1")) or bool(
-        row.get("good_performance_budget_decrease_t2")
-    ):
-        checks.append("성과 양호 뒤 예산 감소 맥락 (구조변경 확인)")
     if bool(row.get("accounting_context_signal")):
         checks.append("회계조정 맥락")
     if bool(row.get("structure_context_signal")):
         checks.append("프로그램 구조·집중도 맥락")
     if not checks:
         checks.append("현재 표시할 독립 트리거가 거의 없음 (정상 판정 아님)")
+    return checks
+
+
+def _retrospective_feedback_checklist(row: pd.Series) -> list[str]:
+    checks: list[str] = []
+    if bool(row.get("low_performance_budget_increase_t1")) or bool(
+        row.get("low_performance_budget_increase_t2")
+    ):
+        checks.append("보고 목표 미달 뒤 후속 예산 증가")
+    if bool(row.get("good_performance_budget_decrease_t1")) or bool(
+        row.get("good_performance_budget_decrease_t2")
+    ):
+        checks.append("보고 목표 달성 뒤 후속 예산 감소")
+    if bool(row.get("retrospective_feedback_data_quality_signal")):
+        checks.append("후속연도 프로그램 회계유형 구성 확인 필요")
     return checks
 
 
@@ -1199,12 +1232,24 @@ def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> Non
         f"대기 순서 {int(row['work_queue_order'])} · "
         f"{REVIEW_INTENSITY_LABELS.get(lane, lane)}"
     )
-    st.info(_plain_lane_help(lane) + "  \n" + str(row.get("next_action") or ""), icon=":material/flag:")
+    st.info(
+        _plain_lane_help(lane) + "  \n" + str(row.get("next_action") or ""), icon=":material/flag:"
+    )
+    if row.get("signal_score_status") == "INCOMPLETE_COMPONENTS":
+        st.warning(
+            "신호 구성요소가 불완전하여 점수 계산을 보류했습니다. null을 0점이나 정상으로 대체하지 않습니다."
+        )
 
     st.markdown("**왜 이 대기열에 있나**")
     for item in _signal_checklist(row):
         st.markdown(f"- {item}")
     st.caption(f"점검 근거 코드: {_reason_text(row.get('priority_reason'))}")
+    retrospective = _retrospective_feedback_checklist(row)
+    if retrospective:
+        st.markdown("**사후 환류 맥락** (현재 대기레인·순서에는 사용하지 않음)")
+        for item in retrospective:
+            st.markdown(f"- {item}")
+        st.caption(f"사후 환류 코드: {_reason_text(row.get('retrospective_feedback_reason'))}")
 
     budget = pd.to_numeric(row.get("account_original_budget"), errors="coerce")
 
@@ -1225,13 +1270,13 @@ def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> Non
         column.caption(help_text)
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("후속예산 T+2 (주)", feedback_label("t2"))
-    m2.metric("후속예산 T+1 (보조)", feedback_label("t1"))
+    m1.metric("사후 환류 T+2", feedback_label("t2"))
+    m2.metric("사후 환류 T+1", feedback_label("t1"))
     m3.metric(
         "본예산 (참고)",
         "—" if pd.isna(budget) else f"{float(budget) / 100_000_000:,.1f}억",
     )
-    st.caption("환류는 T+2가 주, T+1은 보조 · 예산은 동률·파급 참고용 (위험 점수 아님)")
+    st.caption("환류는 회고 참고값이며 현재 대기레인·순서와 위험 점수에 사용하지 않습니다.")
     if str(row.get("account_type")) == "FUND":
         st.warning(
             "기금·융자는 일반회계와 같은 예산 크기로 서열 비교하지 않습니다.",
@@ -1260,9 +1305,7 @@ def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> Non
             st.caption("연결된 세부사업 검토행이 없습니다.")
     else:
         st.dataframe(
-            _project_table_view(
-                projects.sort_values("project_review_order_within_candidate")
-            ),
+            _project_table_view(projects.sort_values("project_review_order_within_candidate")),
             hide_index=True,
             width="stretch",
             height=360,
@@ -1322,8 +1365,7 @@ def _render_pdf_tab(selected_ministries: list[str], selected_years: list[int]) -
         return
 
     review_base = queue.loc[
-        queue["ministry_code"].isin(selected_ministries)
-        & queue["fiscal_year"].isin(selected_years)
+        queue["ministry_code"].isin(selected_ministries) & queue["fiscal_year"].isin(selected_years)
     ].copy()
     focus_program = st.session_state.get("review_program_filter")
     focus_ministry = st.session_state.get("review_ministry_filter")
@@ -1351,11 +1393,7 @@ def _render_pdf_tab(selected_ministries: list[str], selected_years: list[int]) -
     c2.metric("이 필터에서 완료", f"{len(done_base):,}")
     c3.metric(
         "불일치·모호(미완료)",
-        int(
-            open_base["overall_reconciliation_status"]
-            .isin(["VALUE_MISMATCH", "AMBIGUOUS"])
-            .sum()
-        ),
+        int(open_base["overall_reconciliation_status"].isin(["VALUE_MISMATCH", "AMBIGUOUS"]).sum()),
     )
     show_done = st.toggle("완료한 행도 다시 보기(수정용)", value=False)
     review_queue = review_base if show_done else open_base
@@ -1385,9 +1423,9 @@ def _render_pdf_tab(selected_ministries: list[str], selected_years: list[int]) -
         format_func=lambda value: labels[value],
         key="pdf_review_pick",
     )
-    review_row = review_queue.loc[
-        review_queue["source_indicator_id"].eq(selected_review_id)
-    ].iloc[0]
+    review_row = review_queue.loc[review_queue["source_indicator_id"].eq(selected_review_id)].iloc[
+        0
+    ]
     st.write(str(review_row.get("review_instruction") or "근거 페이지 안내 없음"))
     comparison = pd.DataFrame(
         {
@@ -1471,6 +1509,10 @@ def main() -> None:
     st.markdown(
         "이 화면은 **어디부터 원문을 보면 좋은지** 순서를 보여 줍니다.  "
         "실패·낭비·삭감 점수표가 아니며, 예산 크기로 순위를 매기지 않습니다."
+    )
+    st.caption(
+        "분석시점: 필요한 자료가 공개·구조화된 뒤 수행한 회계연도별 연례 사후검토입니다. "
+        "회계연도 말 당시의 정보집합이나 실시간 판단을 재현하지 않습니다."
     )
 
     try:
@@ -1610,7 +1652,9 @@ def main() -> None:
                 format_func=lambda value: labels[value],
                 key="queue_pick",
             )
-            if st.button("선택한 행 사업 카드 열기", type="primary", icon=":material/arrow_forward:"):
+            if st.button(
+                "선택한 행 사업 카드 열기", type="primary", icon=":material/arrow_forward:"
+            ):
                 st.session_state["selected_candidate"] = picked
                 _request_main_tab("사업 카드")
                 st.rerun()
@@ -1653,9 +1697,9 @@ def main() -> None:
             """
 - **한 행:** 부처 × 프로그램 × 연도 × 회계유형  
 - **본편:** 유형별 대기열 (가중 시나리오 없음)  
-- **신호 구성:** 성과·집행·불일치 세기(약~매우강). 대기 순서는 단계(레인)가 먼저  
-- **signal_score:** 위 세 요소 평균. 같은 단계 안 정렬용이며 1등 점수가 아님  
-- **환류:** T+2 주, T+1 보조  
+- **신호 구성:** 보고 목표 상태·집행·당해 예산변화 패턴. 대기 순서는 단계(레인)가 먼저
+- **signal_score:** 세 요소가 모두 있을 때만 계산. 같은 단계 안 탐색용이며 1등 점수가 아님
+- **환류:** T+1·T+2는 사후 맥락이며 현재 대기레인·순서에 사용하지 않음
 - **금지:** 실패·낭비·삭감 자동 판정  
 - 자세한 멘토링 반영: `docs/MENTORING_SESSION_3_2026-08-04.md`
 """

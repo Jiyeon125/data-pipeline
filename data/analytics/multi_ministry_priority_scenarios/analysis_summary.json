@@ -1,5 +1,17 @@
 {
-  "generated_at": "2026-08-04T09:44:23.819923+00:00",
+  "generated_at": "2026-08-05T14:02:59.509463+00:00",
+  "analysis_version": "review_workbench_v2_1",
+  "output_schema_version": "priority_review_outputs_v2",
+  "analysis_time_basis": "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES",
+  "availability_cutoff_enforced": false,
+  "real_time_or_historical_information_set_reconstructed": false,
+  "data_fiscal_year_min": 2022,
+  "data_fiscal_year_max": 2024,
+  "code_provenance": {
+    "commit_sha": "1b7da6779e8d13524f66a90052f63005250aad60",
+    "worktree_dirty": true
+  },
+  "stable_tie_break_key": "candidate_id",
   "scope": {
     "ministry_codes": [
       "019",
@@ -14,19 +26,20 @@
   "status": "independent_review_work_queue_primary_weighted_scenarios_advanced_only",
   "counts": {
     "analysis_rows": 412,
-    "joint_analysis_rows": 404,
+    "joint_analysis_rows": 403,
     "data_review_rows": 15,
-    "review_candidate_rows": 292,
-    "scenario_ranking_eligible_rows": 231,
-    "context_only_candidate_rows": 43,
-    "information_rows": 129,
+    "review_candidate_rows": 267,
+    "scenario_ranking_eligible_rows": 208,
+    "context_only_candidate_rows": 50,
+    "information_rows": 144,
     "scenario_count": 4,
     "review_intensity": {
-      "REPEATED_OR_MULTIPLE": 132,
-      "MONITOR": 105,
-      "CONTEXT_REVIEW": 84,
-      "SINGLE_REVIEW": 76,
-      "DATA_FIRST": 15
+      "MONITOR": 130,
+      "SINGLE_REVIEW": 102,
+      "CONTEXT_REVIEW": 87,
+      "REPEATED_OR_MULTIPLE": 76,
+      "DATA_FIRST": 15,
+      "STRONG_SINGLE": 2
     },
     "feedback_t1_complete_rows": 72,
     "feedback_t2_complete_rows": 34,
@@ -34,8 +47,8 @@
     "continuous_project_feedback_t2_complete_rows": 42
   },
   "stability": {
-    "minimum_off_diagonal_spearman": 0.6382383414392852,
-    "maximum_off_diagonal_spearman": 0.9150131707717446,
+    "minimum_off_diagonal_spearman": 0.6314246794369587,
+    "maximum_off_diagonal_spearman": 0.9122682789004914,
     "all_scenario_top_k": {
       "5": {
         "intersection_count": 0,
@@ -44,21 +57,21 @@
         "jaccard_overlap": 0.0
       },
       "10": {
-        "intersection_count": 0,
-        "intersection_unique_program_count": 0,
-        "union_count": 21,
-        "jaccard_overlap": 0.0
+        "intersection_count": 1,
+        "intersection_unique_program_count": 1,
+        "union_count": 22,
+        "jaccard_overlap": 0.045454545454545456
       }
     },
-    "rank_range_median": 55.0,
-    "rank_range_max": 147.0,
+    "rank_range_median": 51.0,
+    "rank_range_max": 135.0,
     "within_ministry": {
       "019": {
-        "eligible_rows": 40,
-        "minimum_off_diagonal_spearman": 0.7300187617260788,
-        "maximum_off_diagonal_spearman": 0.9545966228893059,
+        "eligible_rows": 38,
+        "minimum_off_diagonal_spearman": 0.7104716052084473,
+        "maximum_off_diagonal_spearman": 0.9505416347521611,
         "rank_range_median": 9.5,
-        "rank_range_max": 17.0,
+        "rank_range_max": 18.0,
         "all_scenario_top_k": {
           "5": {
             "intersection_count": 2,
@@ -67,35 +80,35 @@
           },
           "10": {
             "intersection_count": 4,
-            "union_count": 17,
-            "jaccard_overlap": 0.23529411764705882
+            "union_count": 18,
+            "jaccard_overlap": 0.2222222222222222
           }
         }
       },
       "075": {
-        "eligible_rows": 81,
-        "minimum_off_diagonal_spearman": 0.4266872932169514,
-        "maximum_off_diagonal_spearman": 0.8911498180427498,
-        "rank_range_median": 23.0,
-        "rank_range_max": 54.0,
+        "eligible_rows": 72,
+        "minimum_off_diagonal_spearman": 0.4022542186336165,
+        "maximum_off_diagonal_spearman": 0.8820124455865406,
+        "rank_range_median": 21.0,
+        "rank_range_max": 47.0,
         "all_scenario_top_k": {
           "5": {
             "intersection_count": 0,
-            "union_count": 11,
+            "union_count": 12,
             "jaccard_overlap": 0.0
           },
           "10": {
             "intersection_count": 1,
-            "union_count": 22,
-            "jaccard_overlap": 0.045454545454545456
+            "union_count": 24,
+            "jaccard_overlap": 0.041666666666666664
           }
         }
       },
       "102": {
-        "eligible_rows": 42,
-        "minimum_off_diagonal_spearman": 0.7221299191405616,
-        "maximum_off_diagonal_spearman": 0.9485329906337734,
-        "rank_range_median": 8.0,
+        "eligible_rows": 40,
+        "minimum_off_diagonal_spearman": 0.7011963413768907,
+        "maximum_off_diagonal_spearman": 0.9411654353154872,
+        "rank_range_median": 6.0,
         "rank_range_max": 29.0,
         "all_scenario_top_k": {
           "5": {
@@ -104,18 +117,18 @@
             "jaccard_overlap": 0.6666666666666666
           },
           "10": {
-            "intersection_count": 8,
-            "union_count": 13,
-            "jaccard_overlap": 0.6153846153846154
+            "intersection_count": 9,
+            "union_count": 12,
+            "jaccard_overlap": 0.75
           }
         }
       },
       "162": {
-        "eligible_rows": 68,
-        "minimum_off_diagonal_spearman": 0.6635492613658052,
-        "maximum_off_diagonal_spearman": 0.9505286864908195,
-        "rank_range_median": 16.0,
-        "rank_range_max": 50.0,
+        "eligible_rows": 58,
+        "minimum_off_diagonal_spearman": 0.618567166015565,
+        "maximum_off_diagonal_spearman": 0.9420468178043006,
+        "rank_range_median": 14.5,
+        "rank_range_max": 44.0,
         "all_scenario_top_k": {
           "5": {
             "intersection_count": 1,
@@ -123,9 +136,9 @@
             "jaccard_overlap": 0.1111111111111111
           },
           "10": {
-            "intersection_count": 3,
-            "union_count": 18,
-            "jaccard_overlap": 0.16666666666666666
+            "intersection_count": 4,
+            "union_count": 17,
+            "jaccard_overlap": 0.23529411764705882
           }
         }
       }
@@ -144,13 +157,14 @@
       "repeated_signal_family_count_desc",
       "independent_signal_family_count_desc",
       "evidence_status",
-      "signal_score_desc",
+      "complete_case_signal_score_desc",
       "account_original_budget_desc_tiebreak_only",
       "candidate_id"
     ],
     "weighted_sum_used": false,
     "signal_score_used_in_work_queue": true,
-    "signal_score_method": "equal_mean_of_three_signal_components",
+    "partial_signal_score_used_in_work_queue": false,
+    "signal_score_method": "complete_case_equal_mean_of_three_signal_components",
     "signal_score_components": [
       "performance_gap",
       "execution_management",
@@ -159,6 +173,7 @@
     "fiscal_impact_in_signal_score": false,
     "size_role_in_work_queue": "tiebreak_only",
     "t1_t2_kept_separate": true,
+    "t1_t2_excluded_from_current_review_intensity": true,
     "performance_attributed_to_detailed_project": false,
     "account_type_kept_separate": true
   },
@@ -201,7 +216,7 @@
     "analysis_key_unique": true,
     "candidate_id_unique": true,
     "m3_signal_missing_rows": 8,
-    "m3_account_budget_mismatch_rows": 4,
+    "m3_account_budget_mismatch_rows": 3,
     "joint_financial_signal_join_complete": true,
     "scenario_components_complete": true,
     "scenario_scores_between_zero_and_one": true,
@@ -211,16 +226,19 @@
     "final_overall_rank_generated": false,
     "policy_failure_label_generated": false,
     "weighted_scenarios_primary_work_order": false,
-    "t1_t2_in_single_score": false
+    "t1_t2_in_single_score": false,
+    "t1_t2_in_current_review_intensity": false
   },
   "input_sha256": {
-    "data/analytics/multi_ministry_same_year_budget_check/program_year_account_type_check.csv": "dd0e170fbb84600e5ac327ba115ff8342655a2e344e59fe8ec0ce0d3c36b296f",
-    "data/analytics/m3/financial_signal_features.parquet": "7a3090af81554a2e7872a84d359e037b86d8738d3859c8f3a3afd1af485a3f84",
-    "data/analytics/definition_validation/feedback_cohort_t1_t2.csv": "e49e278bc0d768f487163f60d9fb474a28ff7c8e35bafc13e2bd71815e2d8743",
-    "data/processed/masters/program_year_financial.parquet": "f139733a888c20d609c72f5a39592be2483336250a6550b2a5c88e4c570d3f84",
-    "configs/priority_scenarios.yaml": "74b5e86d27fb81e41122f5250b7213a13e0283bdc07f5da5abdacbe7e1547f9c"
+    "data\\analytics\\multi_ministry_same_year_budget_check\\program_year_account_type_check.csv": "f7275574e7c068f5c9909afce822ee7720c9ef427fa54bddeea3b41e27a1ad7d",
+    "data\\analytics\\m3\\financial_signal_features.parquet": "b975105eb47037505b3413a1ca363d4ad1ddf5790388ca486b746107af7e478a",
+    "data\\analytics\\definition_validation\\feedback_cohort_t1_t2.csv": "e49e278bc0d768f487163f60d9fb474a28ff7c8e35bafc13e2bd71815e2d8743",
+    "data\\processed\\masters\\program_year_financial.parquet": "6588f7e00d8a55642d31138a77e533e039a21d8c12c771e87edca0fe7fa851d0",
+    "configs\\priority_scenarios.yaml": "c1c56b9a31f8809f325a460e4daba753466faac1b9d64257b5ef608ecc86070e"
   },
+  "config_hash_included_in_input_sha256": true,
   "interpretation_limits": [
+    "회계연도 축 사후검토이며 실제 공개시점 당시 정보집합이나 실시간 판단을 재현하지 않음",
     "사업별 기대 성과시차·의무지출·성과지표 유형은 현재 미확정",
     "기존 가중 시나리오는 고급 민감도에만 보존하고 기본 업무순서에 사용하지 않음",
     "프로그램 성과를 세부사업 성과로 귀속하지 않음",
@@ -231,27 +249,81 @@
     "candidate_count": 412,
     "candidate_coverage_rate": 1.0,
     "lane_counts": {
-      "REPEATED_OR_MULTIPLE": 132,
-      "MONITOR": 105,
-      "CONTEXT_REVIEW": 84,
-      "SINGLE_REVIEW": 76,
-      "DATA_FIRST": 15
+      "MONITOR": 130,
+      "SINGLE_REVIEW": 102,
+      "CONTEXT_REVIEW": 87,
+      "REPEATED_OR_MULTIPLE": 76,
+      "DATA_FIRST": 15,
+      "STRONG_SINGLE": 2
     },
     "lane_original_budget": {
-      "CONTEXT_REVIEW": 54821099000000.0,
-      "DATA_FIRST": 48660658000000.0,
-      "MONITOR": 106359460000000.0,
-      "REPEATED_OR_MULTIPLE": 240570097300000.0,
-      "SINGLE_REVIEW": 114961712300000.0
+      "CONTEXT_REVIEW": 102965647000000.0,
+      "DATA_FIRST": 46740156000000.0,
+      "MONITOR": 134164280000000.0,
+      "REPEATED_OR_MULTIPLE": 131757527500000.0,
+      "SINGLE_REVIEW": 144926269100000.0,
+      "STRONG_SINGLE": 2898645000000.0
+    },
+    "signal_score_status_counts": {
+      "COMPLETE": 401,
+      "INCOMPLETE_COMPONENTS": 11
     },
     "resolved_context_count": 4,
-    "scenario_ranking_rows_preserved": 231,
+    "scenario_ranking_rows_preserved": 208,
     "work_queue_order_unique": true,
     "original_budget_reconciled": true,
+    "key_integrity": {
+      "candidate_rows_before": 412,
+      "candidate_rows_after": 412,
+      "candidate_id_cardinality": "one_to_one",
+      "candidate_id_left_only": 0,
+      "candidate_id_right_only": 0,
+      "immutable_field_diff_counts": {
+        "ministry_code": 0,
+        "field_name": 0,
+        "sector_name": 0,
+        "program_code": 0,
+        "fiscal_year": 0,
+        "account_type": 0,
+        "performance_program_name": 0,
+        "analysis_status": 0,
+        "priority_reason": 0,
+        "signal_score": 0,
+        "signal_score_status": 0,
+        "review_intensity": 0,
+        "account_original_budget": 0,
+        "account_current_budget": 0,
+        "account_settlement_expenditure": 0
+      },
+      "program_year_account_amount_diff_counts": {
+        "account_original_budget": 0,
+        "account_current_budget": 0,
+        "account_settlement_expenditure": 0
+      },
+      "intended_added_fields": [
+        "all_scenario_top_5",
+        "all_scenario_top_5_within_ministry",
+        "exploratory_consensus_order",
+        "mean_scenario_rank",
+        "mean_scenario_rank_within_ministry",
+        "safety_conclusion",
+        "scenario_rank_range",
+        "scenario_rank_range_within_ministry",
+        "work_item_status",
+        "work_lane",
+        "work_lane_interpretation",
+        "work_lane_order",
+        "work_lane_rank_overall",
+        "work_lane_rank_within_ministry",
+        "work_queue_order",
+        "work_queue_order_within_ministry",
+        "work_queue_role"
+      ]
+    },
     "safety_conclusion_generated": false,
     "final_policy_rank_generated": false,
     "signal_size_separation": {
-      "signal_score_method": "equal_mean_of_three_signal_components",
+      "signal_score_method": "complete_case_equal_mean_of_three_signal_components",
       "signal_score_components": [
         "performance_gap",
         "execution_management",
@@ -263,7 +335,7 @@
         "repeated_signal_family_count_desc",
         "independent_signal_family_count_desc",
         "evidence_status",
-        "signal_score_desc",
+        "complete_case_signal_score_desc",
         "account_original_budget_desc_tiebreak_only",
         "candidate_id"
       ]
@@ -290,9 +362,9 @@
     "unique_program_count": 78,
     "project_row_count": 3286,
     "project_review_group_counts": {
-      "LARGE_BUDGET_CONTEXT": 2400,
-      "PROJECT_FINANCIAL_SIGNAL": 444,
-      "PROGRAM_STRUCTURE_CONTEXT": 407,
+      "LARGE_BUDGET_CONTEXT": 2443,
+      "PROGRAM_STRUCTURE_CONTEXT": 468,
+      "PROJECT_FINANCIAL_SIGNAL": 340,
       "DATA_VALIDATION_FIRST": 35
     },
     "ministry_candidate_counts": {
@@ -307,10 +379,10 @@
       "019": 415,
       "102": 388
     },
-    "source_original_budget": 565373026600000.0,
+    "source_original_budget": 563452524600000.0,
     "reviewable_original_budget": 516712368600000.0,
-    "data_verification_blocked_original_budget": 48660658000000.0,
-    "reviewable_original_budget_share": 0.9139317659127957,
+    "data_verification_blocked_original_budget": 46740156000000.0,
+    "reviewable_original_budget_share": 0.917046860277747,
     "project_original_budget": 516712368600000.0,
     "project_current_budget": 517157687559235.0,
     "project_expenditure": 508217219654911.0,

@@ -459,7 +459,7 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 전체 412행 점검 업무대기열: `full_population_review_work_queue.csv`
 - 데이터 검증 15행을 제외한 세부사업 검토대기열:
   `full_population_project_review_queue.csv`
-- 성과·집행 신호 레인 235행에만 기존 네 시나리오 순위를 표시하며,
+- 시나리오 필수 변수가 완전한 208행에만 기존 네 시나리오 순위를 표시하며,
   신호 미검출 행을 안전하다고 판정하지 않음
 - 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
 

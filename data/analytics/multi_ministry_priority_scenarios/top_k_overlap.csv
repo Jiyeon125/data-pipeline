@@ -7,9 +7,9 @@ PAIR,5,performance_focus,fiscal_impact_adjusted,5,5,2,8,0.25,0.4
 PAIR,5,execution_focus,fiscal_impact_adjusted,5,5,2,8,0.25,0.4
 ALL_SCENARIOS,5,ALL,ALL,5,5,0,8,0.0,0.0
 PAIR,10,equal,performance_focus,10,10,5,15,0.3333333333333333,0.5
-PAIR,10,equal,execution_focus,10,10,5,15,0.3333333333333333,0.5
+PAIR,10,equal,execution_focus,10,10,6,14,0.42857142857142855,0.6
 PAIR,10,equal,fiscal_impact_adjusted,10,10,7,13,0.5384615384615384,0.7
-PAIR,10,performance_focus,execution_focus,10,10,5,15,0.3333333333333333,0.5
+PAIR,10,performance_focus,execution_focus,10,10,4,16,0.25,0.4
 PAIR,10,performance_focus,fiscal_impact_adjusted,10,10,2,18,0.1111111111111111,0.2
-PAIR,10,execution_focus,fiscal_impact_adjusted,10,10,2,18,0.1111111111111111,0.2
-ALL_SCENARIOS,10,ALL,ALL,10,10,0,21,0.0,0.0
+PAIR,10,execution_focus,fiscal_impact_adjusted,10,10,3,17,0.17647058823529413,0.3
+ALL_SCENARIOS,10,ALL,ALL,10,10,1,22,0.045454545454545456,0.1

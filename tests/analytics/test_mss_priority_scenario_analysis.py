@@ -1,11 +1,15 @@
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from analytics.mss_priority_scenario_analysis import (
     SIGNAL_FLAGS,
     SIGNAL_SCORE_COMPONENTS,
     PriorityScenarioPaths,
+    _build_priority_reason,
+    _build_retrospective_feedback_reason,
     aggregate_program_account_signals,
     apply_feedback_cutoff,
     attach_signal_size_separation,
@@ -19,6 +23,7 @@ from analytics.mss_priority_scenario_analysis import (
     build_top_k_overlap,
     load_scenario_config,
     score_scenarios,
+    validate_candidate_work_queue_integrity,
 )
 
 
@@ -79,6 +84,10 @@ def _manual_inputs() -> tuple[pd.DataFrame, pd.DataFrame]:
                 "formula_review_count": 0,
                 "reported_performance_signal": below > 0,
                 "account_original_budget": budget,
+                "account_current_budget": budget,
+                "account_settlement_expenditure": (
+                    budget * execution if pd.notna(execution) else pd.NA
+                ),
                 "account_execution_rate": execution,
                 "account_financial_linkage_status": "COMPLETE",
                 "account_financial_quality_level": "HIGH",
@@ -122,9 +131,37 @@ def test_manual_candidate_rules_and_budget_weighting() -> None:
     assert signals["project_signal_budget"].sum() == analysis["account_original_budget"].sum()
     assert "signal_score" in candidates.columns
     assert not bool(candidates["fiscal_impact_in_signal_score"].iloc[0])
-    assert candidates.loc["A", "signal_score"] == candidates.loc[
-        "A", list(SIGNAL_SCORE_COMPONENTS)
-    ].astype(float).mean()
+    assert (
+        candidates.loc["A", "signal_score"]
+        == candidates.loc["A", list(SIGNAL_SCORE_COMPONENTS)].astype(float).mean()
+    )
+    assert candidates.loc["E", "signal_score_status"] == "INCOMPLETE_COMPONENTS"
+    assert pd.isna(candidates.loc["E", "signal_score"])
+
+
+def test_retrospective_feedback_is_not_a_current_priority_reason() -> None:
+    row = pd.Series(
+        {
+            "analysis_status": "JOINT_ANALYSIS",
+            "data_validation_signal": False,
+            "performance_signal": False,
+            "execution_signal": False,
+            "budget_mismatch_signal": False,
+            "accounting_context_signal": False,
+            "structure_context_signal": False,
+            "low_performance_budget_increase_t1": True,
+            "low_performance_budget_increase_t2": False,
+            "good_performance_budget_decrease_t1": False,
+            "good_performance_budget_decrease_t2": False,
+            "program_total_account_type_mismatch_t1": True,
+            "program_total_account_type_mismatch_t2": False,
+        }
+    )
+
+    assert _build_priority_reason(row) == "NO_REVIEW_SIGNAL"
+    assert _build_retrospective_feedback_reason(row) == (
+        "LOW_PERFORMANCE_BUDGET_INCREASE_T1;PROGRAM_ACCOUNT_TYPE_MISMATCH_T1"
+    )
 
 
 def test_work_queue_orders_by_signal_score_before_budget() -> None:
@@ -150,6 +187,9 @@ def test_work_queue_orders_by_signal_score_before_budget() -> None:
                 "context_only_candidate": False,
                 "context_signal_family_count": 0,
                 "account_original_budget": budget,
+                "account_current_budget": budget,
+                "account_settlement_expenditure": budget * 0.9,
+                "priority_reason": "PERFORMANCE_BELOW_TARGET",
                 "performance_gap": gap,
                 "execution_management": gap,
                 "budget_performance_mismatch": gap,
@@ -241,6 +281,28 @@ def test_manual_scenario_rank_stability() -> None:
         "MONITOR",
     ]
     assert work_queue.set_index("program_code").loc["A", "review_intensity"] == "SINGLE_REVIEW"
+
+    rerun_queue, _ = build_full_population_review_work_queue(
+        candidates.sample(frac=1, random_state=7),
+        stability.sample(frac=1, random_state=11),
+    )
+    pd.testing.assert_frame_equal(work_queue, rerun_queue)
+
+    tampered = work_queue.copy()
+    left, right = tampered.index[:2]
+    tampered.loc[[left, right], "account_original_budget"] = tampered.loc[
+        [right, left], "account_original_budget"
+    ].to_numpy()
+    with pytest.raises(ValueError, match="불변 필드가 변경"):
+        validate_candidate_work_queue_integrity(candidates, tampered)
+
+    with pytest.raises(ValueError, match="anti-join"):
+        validate_candidate_work_queue_integrity(candidates, work_queue.iloc[:-1])
+
+    reloaded = pd.read_csv(StringIO(work_queue.to_csv(index=False)))
+    incomplete = reloaded["signal_score_status"].eq("INCOMPLETE_COMPONENTS")
+    assert incomplete.sum() == 1
+    assert reloaded.loc[incomplete, "signal_score"].isna().all()
 
 
 def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
@@ -352,6 +414,14 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     assert drilldown["budget_share_within_candidate"].sum() == 1
     assert drilldown["drilldown_selection_scope"].eq("OVERALL_AND_WITHIN_MINISTRY").all()
     assert not drilldown["project_performance_attributed"].any()
+    assert drilldown["program_context_grain"].eq("PROGRAM_YEAR_ACCOUNT").all()
+    assert (
+        drilldown["program_context_disclaimer"]
+        .eq("PROGRAM_LEVEL_REFERENCE_NOT_PROJECT_PERFORMANCE")
+        .all()
+    )
+    assert "priority_reason" not in drilldown
+    assert "program_performance_signal" not in drilldown
     assert summary["other_ministry_row_count"] == 0
 
     work_queue, _ = build_full_population_review_work_queue(
@@ -369,7 +439,19 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     assert queue["review_sequence_overall"].tolist() == [1, 2]
     assert queue_summary["reviewable_candidate_coverage_rate"] == 1
     assert queue_summary["project_performance_attribution_count"] == 0
+    for column in (
+        "performance_signal",
+        "low_performance_budget_increase_t1",
+        "low_performance_budget_increase_t2",
+        "good_performance_budget_decrease_t1",
+        "good_performance_budget_decrease_t2",
+    ):
+        assert column not in queue
     workbench = build_review_workbench_queue(work_queue, queue)
     assert len(workbench) == 2
     assert workbench["review_item_type"].eq("DETAILED_PROJECT_REVIEW").all()
     assert workbench["work_item_id"].is_unique
+    project_rows = workbench["review_item_type"].eq("DETAILED_PROJECT_REVIEW")
+    assert workbench.loc[project_rows, "performance_signal"].isna().all()
+    assert not workbench.loc[project_rows, "project_performance_attributed"].any()
+    assert workbench.loc[project_rows, "program_context_grain"].eq("PROGRAM_YEAR_ACCOUNT").all()

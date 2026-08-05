@@ -14,6 +14,7 @@ import pandas as pd
 from analytics.mss_priority_scenario_analysis import (
     add_program_total_feedback as _add_program_total_feedback,
 )
+from analytics.mss_priority_scenario_analysis import apply_feedback_cutoff
 
 T1_DIRECTION_SQL = """
 SELECT
@@ -44,9 +45,9 @@ SELECT
     case_order,
     CASE case_role
         WHEN 'DATA_BLOCKER' THEN '데이터 먼저'
-        WHEN 'MISS_THEN_T1_INCREASE' THEN '성과 미달 뒤 증액'
-        WHEN 'MISS_THEN_T1_DECREASE_COUNTEREXAMPLE' THEN '성과 미달 뒤 감액 반례'
-        WHEN 'ALL_MET_THEN_T1_INCREASE_CONTEXT' THEN '성과 양호 뒤 증액 맥락'
+        WHEN 'MISS_THEN_T1_INCREASE' THEN '보고 목표 미달 뒤 증액'
+        WHEN 'MISS_THEN_T1_DECREASE_COUNTEREXAMPLE' THEN '보고 목표 미달 뒤 감액 반례'
+        WHEN 'ALL_MET_THEN_T1_INCREASE_CONTEXT' THEN '보고 목표 달성 뒤 증액 맥락'
     END AS case_role,
     ministry_name,
     fiscal_year,
@@ -176,9 +177,13 @@ def _prepare_candidates(candidates: pd.DataFrame) -> pd.DataFrame:
 def add_program_total_feedback(
     candidates: pd.DataFrame,
     program_financial: pd.DataFrame,
+    *,
+    cutoff_year: int | None = None,
 ) -> pd.DataFrame:
     """공통 후보 산출기와 동일한 프로그램 전체금액 정의를 사용합니다."""
     result = _add_program_total_feedback(_prepare_candidates(candidates), program_financial)
+    if cutoff_year is not None:
+        result = apply_feedback_cutoff(result, cutoff_year)
     result["low_performance_program_total_budget_increase_t1"] = (
         result["performance_miss"]
         & result["program_total_feedback_complete_t1"]
@@ -242,7 +247,7 @@ def select_review_cases(candidates: pd.DataFrame) -> pd.DataFrame:
         selected,
         ministry_picks,
         role="MISS_THEN_T1_INCREASE",
-        reason="성과 미달 뒤 T+1 예산 증가가 확인된 부처별 대표 사례",
+        reason="보고 목표 미달 뒤 T+1 예산 증가가 확인된 부처별 대표 사례",
         limit=len(ministry_picks),
         exclude_ids=used,
     )
@@ -266,7 +271,7 @@ def select_review_cases(candidates: pd.DataFrame) -> pd.DataFrame:
         selected,
         decrease_counterexamples,
         role="MISS_THEN_T1_DECREASE_COUNTEREXAMPLE",
-        reason="성과 미달 뒤에도 T+1 예산이 감소한 확정근거 반례",
+        reason="보고 목표 미달 뒤에도 T+1 예산이 감소한 확정근거 반례",
         limit=4,
         exclude_ids=used,
     )
@@ -285,7 +290,7 @@ def select_review_cases(candidates: pd.DataFrame) -> pd.DataFrame:
         selected,
         met_increase_counterexamples,
         role="ALL_MET_THEN_T1_INCREASE_CONTEXT",
-        reason="성과지표가 모두 목표 이상이면서 T+1 예산이 증가한 해석 맥락 사례",
+        reason="보고된 지표가 모두 목표 이상이면서 T+1 예산이 증가한 해석 맥락 사례",
         limit=2,
         exclude_ids=used,
     )
@@ -449,6 +454,34 @@ def _load_project_drilldown(
             "subactivity_code": "string",
         },
     )
+    required = {
+        "candidate_id",
+        "project_id",
+        "project_original_budget",
+        "project_performance_attributed",
+        "program_context_grain",
+        "program_context_disclaimer",
+    }
+    missing = sorted(required - set(projects.columns))
+    if missing:
+        raise CaseEvidenceReviewError(
+            f"세부사업 대기열이 구버전이거나 필수 열이 누락되었습니다: {missing}"
+        )
+    deprecated = sorted(
+        {
+            "program_performance_signal",
+            "performance_signal",
+            "low_performance_budget_increase_t1",
+            "low_performance_budget_increase_t2",
+            "good_performance_budget_decrease_t1",
+            "good_performance_budget_decrease_t2",
+        }
+        & set(projects.columns)
+    )
+    if deprecated:
+        raise CaseEvidenceReviewError(
+            f"세부사업 대기열에 프로그램 수준 구버전 필드가 남아 있습니다: {deprecated}"
+        )
     selected = projects[projects["candidate_id"].isin(cases["candidate_id"])].copy()
     selected = selected.sort_values(
         ["candidate_id", "project_review_order_within_candidate", "project_id"]
@@ -538,9 +571,9 @@ def _report_markdown(
 ) -> str:
     role_labels = {
         "DATA_BLOCKER": "데이터 우선",
-        "MISS_THEN_T1_INCREASE": "성과 미달 뒤 증액",
-        "MISS_THEN_T1_DECREASE_COUNTEREXAMPLE": "성과 미달 뒤 감액 반례",
-        "ALL_MET_THEN_T1_INCREASE_CONTEXT": "성과 양호 뒤 증액 맥락",
+        "MISS_THEN_T1_INCREASE": "보고 목표 미달 뒤 증액",
+        "MISS_THEN_T1_DECREASE_COUNTEREXAMPLE": "보고 목표 미달 뒤 감액 반례",
+        "ALL_MET_THEN_T1_INCREASE_CONTEXT": "보고 목표 달성 뒤 증액 맥락",
     }
     lines = [
         "# 4개 부처 점검 후보 대표 사례·반례 검수",
@@ -548,7 +581,7 @@ def _report_markdown(
         "## Executive Summary",
         "",
         (
-            f"- **성과 미달은 다음 예산의 단일 방향을 설명하지 못했습니다.** "
+            f"- **보고 목표 미달은 다음 예산의 단일 방향을 설명하지 못했습니다.** "
             f"T+1 완전 연결 {summary['low_performance_t1_complete_rows']}행 중 "
             f"{summary['low_performance_t1_increase_rows']}행은 증가, "
             f"{summary['low_performance_t1_decrease_rows']}행은 감소했습니다."
@@ -562,7 +595,7 @@ def _report_markdown(
         ),
         (
             f"- **집행 신호와 성과 신호도 분리해야 합니다.** 반복 집행 신호 "
-            f"{summary['repeated_execution_rows']}행 중 성과 미달은 "
+            f"{summary['repeated_execution_rows']}행 중 보고 목표 미달은 "
             f"{summary['repeated_execution_with_performance_miss_rows']}행이었고, "
             f"{summary['repeated_execution_without_performance_miss_rows']}행은 "
             "보고된 지표가 모두 목표 이상이었습니다."
@@ -570,7 +603,7 @@ def _report_markdown(
         "",
         "## 선정된 사례",
         "",
-        "|구분|부처|연도|프로그램|회계|성과 미달|집행률|프로그램 전체 T+1|연속 분석사업 T+1|방향 일치|근거상태|",
+        "|구분|부처|연도|프로그램|회계|보고 목표 미달|집행률|프로그램 전체 T+1|연속 분석사업 T+1|방향 일치|근거상태|",
         "|---|---|---:|---|---|---:|---:|---:|---:|---|---|",
     ]
     for row in cases.itertuples(index=False):
@@ -585,14 +618,14 @@ def _report_markdown(
     lines.extend(
         [
             "",
-            "## 발견 1. 성과 미달 뒤 예산 반응은 증가와 감소가 함께 존재합니다",
+            "## 발견 1. 보고 목표 미달 뒤 예산 반응은 증가와 감소가 함께 존재합니다",
             "",
             (
-                f"성과 미달과 프로그램 전체 T+1 예산이 연결된 "
+                f"보고 목표 미달과 프로그램 전체 T+1 예산이 연결된 "
                 f"{summary['low_performance_t1_complete_rows']}행에서 증가 "
                 f"{summary['low_performance_t1_increase_rows']}행, 감소 "
                 f"{summary['low_performance_t1_decrease_rows']}행이 "
-                "확인됐습니다. 이는 성과 미달이 예산 증감의 원인이라는 뜻이 아니라, "
+                "확인됐습니다. 이는 보고 목표 미달이 예산 증감의 원인이라는 뜻이 아니라, "
                 "예산 변화 사유를 추가로 확인해야 하는 후보를 좁혀 준다는 뜻입니다."
             ),
             "",
@@ -606,8 +639,10 @@ def _report_markdown(
             "## 발견 2. 집행 신호와 성과 신호는 서로 대체할 수 없습니다",
             "",
             (
-                "반복 집행 신호 126행 가운데 성과 미달이 함께 관측된 행은 41행이고, "
-                "나머지 85행은 보고된 성과지표가 모두 목표 이상이었습니다. "
+                f"반복 집행 신호 {summary['repeated_execution_rows']}행 가운데 보고 목표 미달이 "
+                f"함께 관측된 행은 {summary['repeated_execution_with_performance_miss_rows']}행이고, "
+                f"나머지 {summary['repeated_execution_without_performance_miss_rows']}행은 보고된 "
+                "성과지표가 모두 목표 이상이었습니다. "
                 "따라서 낮은 집행·연말집중을 성과 부진으로 번역하지 않고 각각의 "
                 "원인과 설명을 따로 확인하는 현재 대시보드 구조가 타당합니다."
             ),
@@ -623,7 +658,7 @@ def _report_markdown(
             "",
             "## 권장 다음 단계",
             "",
-            "1. 성과 미달 뒤 T+1 증액 사례에는 증액 사유·사업 단계·의무지출 여부를 확인합니다.",
+            "1. 보고 목표 미달 뒤 T+1 증액 사례에는 증액 사유·사업 단계·의무지출 여부를 확인합니다.",
             "2. 동일 신호인데 감액된 반례를 함께 제시해 자동 삭감·증액 도구가 아님을 명시합니다.",
             "3. 기금은 공급·회수·순재정부담 자료가 확보될 때까지 별도 회계 맥락으로 유지합니다.",
             "4. `LIMITED` 사례는 발표 핵심 근거가 아니라 4개 부처 확장 가능성 사례로만 사용합니다.",
@@ -686,7 +721,7 @@ def _report_artifact(
             "label": "4개 부처 비가중 점검 후보",
             "path": "data/analytics/multi_ministry_priority_scenarios/candidate_population.csv",
             "query": {
-                "description": "성과 미달과 프로그램 전체 T+1 예산 연결이 모두 있는 행을 부처·예산방향별로 집계합니다.",
+                "description": "보고 목표 미달과 프로그램 전체 T+1 예산 연결이 모두 있는 행을 부처·예산방향별로 집계합니다.",
                 "sql": T1_DIRECTION_SQL,
             },
         },
@@ -727,7 +762,7 @@ def _report_artifact(
                     "sourceId": "priority_candidates",
                     "body": (
                         "## Executive Summary\n\n"
-                        f"- **성과 미달은 예산의 단일 방향을 설명하지 못했습니다.** "
+                        f"- **보고 목표 미달은 예산의 단일 방향을 설명하지 못했습니다.** "
                         f"T+1 완전 연결 {summary['low_performance_t1_complete_rows']}행 중 "
                         f"증가 {summary['low_performance_t1_increase_rows']}행, 감소 "
                         f"{summary['low_performance_t1_decrease_rows']}행입니다.\n"
@@ -744,8 +779,8 @@ def _report_artifact(
                     "type": "markdown",
                     "sourceId": "priority_candidates",
                     "body": (
-                        "## 같은 성과 미달 뒤에도 예산은 증가하거나 감소했습니다\n\n"
-                        "부처별로 증가와 감소가 모두 관측됩니다. 이 분포는 성과 미달이 "
+                        "## 같은 보고 목표 미달 뒤에도 예산은 증가하거나 감소했습니다\n\n"
+                        "부처별로 증가와 감소가 모두 관측됩니다. 이 분포는 보고 목표 미달이 "
                         "예산 증감의 원인임을 뜻하지 않으며, 예산 변화 사유를 추가로 "
                         "확인할 후보를 좁혀 줍니다."
                     ),
@@ -778,7 +813,7 @@ def _report_artifact(
                     "sourceId": "priority_candidates",
                     "body": (
                         "## 집행 신호와 성과 신호는 서로 대체할 수 없습니다\n\n"
-                        f"반복 집행 신호 {summary['repeated_execution_rows']}행 중 성과 "
+                        f"반복 집행 신호 {summary['repeated_execution_rows']}행 중 보고 목표 "
                         f"미달은 {summary['repeated_execution_with_performance_miss_rows']}행, "
                         "보고된 지표가 모두 목표 이상인 행은 "
                         f"{summary['repeated_execution_without_performance_miss_rows']}행입니다. "
@@ -790,7 +825,7 @@ def _report_artifact(
                     "type": "markdown",
                     "body": (
                         "## 권장 다음 단계\n\n"
-                        "1. 성과 미달 뒤 증액 사례의 증액 사유·사업 단계·의무지출 여부를 확인합니다.\n"
+                        "1. 보고 목표 미달 뒤 증액 사례의 증액 사유·사업 단계·의무지출 여부를 확인합니다.\n"
                         "2. 감액 반례를 함께 제시해 자동 삭감·증액 도구가 아님을 명시합니다.\n"
                         "3. 기금은 공급·회수·순재정부담 자료 확보 전까지 별도로 해석합니다."
                     ),
@@ -821,7 +856,7 @@ def _report_artifact(
             "charts": [
                 {
                     "id": "t1-direction-chart",
-                    "title": "성과 미달 뒤 프로그램 전체 T+1 예산변화 방향",
+                    "title": "보고 목표 미달 뒤 프로그램 전체 T+1 예산변화 방향",
                     "dataset": "t1_direction",
                     "type": "bar",
                     "encodings": {
@@ -904,9 +939,11 @@ def build_case_evidence_review(paths: CaseEvidencePaths) -> CaseEvidenceResult:
         paths.candidates,
         dtype={"ministry_code": "string", "program_code": "string"},
     )
+    data_cutoff_fiscal_year = int(pd.to_numeric(candidates["fiscal_year"], errors="raise").max())
     prepared = add_program_total_feedback(
         candidates,
         pd.read_parquet(paths.program_financial),
+        cutoff_year=data_cutoff_fiscal_year,
     )
     cases = select_review_cases(prepared)
     indicators = _load_indicator_evidence(paths, cases)
@@ -935,6 +972,7 @@ def build_case_evidence_review(paths: CaseEvidencePaths) -> CaseEvidenceResult:
 
     summary: dict[str, Any] = {
         "status": "share_with_caveats",
+        "data_cutoff_fiscal_year": data_cutoff_fiscal_year,
         "candidate_rows": len(prepared),
         "selected_case_rows": len(cases),
         "selected_case_role_counts": {
@@ -998,18 +1036,20 @@ def build_case_evidence_review(paths: CaseEvidencePaths) -> CaseEvidenceResult:
     output_paths: list[Path] = []
     for name, frame in outputs.items():
         path = paths.output_dir / name
-        frame.to_csv(path, index=False, encoding="utf-8-sig")
+        frame.to_csv(path, index=False, encoding="utf-8-sig", lineterminator="\n")
         output_paths.append(path)
     summary_path = paths.output_dir / "case_validation_summary.json"
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
+        newline="\n",
     )
     output_paths.append(summary_path)
 
     paths.report.write_text(
         _report_markdown(cases, direction, intensity, summary),
         encoding="utf-8",
+        newline="\n",
     )
     paths.report_artifact.parent.mkdir(parents=True, exist_ok=True)
     paths.report_artifact.write_text(
@@ -1019,6 +1059,7 @@ def build_case_evidence_review(paths: CaseEvidencePaths) -> CaseEvidenceResult:
             indent=2,
         ),
         encoding="utf-8",
+        newline="\n",
     )
     output_paths.append(paths.report_artifact)
     return CaseEvidenceResult(

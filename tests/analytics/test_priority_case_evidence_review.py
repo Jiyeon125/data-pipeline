@@ -1,14 +1,49 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
 from analytics.priority_case_evidence_review import (
+    CaseEvidenceReviewError,
+    _load_project_drilldown,
     add_program_total_feedback,
     review_intensity_summary,
     select_review_cases,
     t1_direction_summary,
 )
+
+
+def test_project_queue_schema_rejects_legacy_program_fields(tmp_path) -> None:
+    frame = pd.DataFrame(
+        {
+            "candidate_id": ["c1"],
+            "project_id": ["p1"],
+            "project_review_order_within_candidate": [1],
+            "project_original_budget": [100],
+            "project_performance_attributed": [False],
+            "program_context_grain": ["PROGRAM_YEAR_ACCOUNT"],
+            "program_context_disclaimer": ["PROGRAM_LEVEL_REFERENCE_NOT_PROJECT_PERFORMANCE"],
+            "performance_signal": [True],
+        }
+    )
+    path = tmp_path / "project_queue.csv"
+    frame.to_csv(path, index=False)
+
+    with pytest.raises(CaseEvidenceReviewError, match="구버전 필드"):
+        _load_project_drilldown(
+            SimpleNamespace(project_queue=path),
+            pd.DataFrame({"candidate_id": ["c1"]}),
+        )
+
+    frame.drop(columns="performance_signal").to_csv(path, index=False)
+    projects, reconciliation = _load_project_drilldown(
+        SimpleNamespace(project_queue=path),
+        pd.DataFrame({"candidate_id": ["c1"]}),
+    )
+    assert projects["project_id"].tolist() == ["p1"]
+    assert reconciliation["performance_attributed_rows"].tolist() == [0]
 
 
 def _candidates() -> pd.DataFrame:
@@ -148,3 +183,8 @@ def test_program_total_feedback_keeps_total_and_analysis_subset_separate() -> No
     assert result["program_total_budget_change_rate_t1"] == pytest.approx(21 / 220)
     assert result["feedback_budget_change_rate_t1"] == pytest.approx(-0.03)
     assert not bool(result["budget_direction_reconciled"])
+
+    cutoff_result = add_program_total_feedback(candidates, programs, cutoff_year=2023).iloc[0]
+    assert not bool(cutoff_result["program_total_feedback_complete_t1"])
+    assert pd.isna(cutoff_result["program_total_budget_change_rate_t1"])
+    assert not bool(cutoff_result["low_performance_program_total_budget_increase_t1"])

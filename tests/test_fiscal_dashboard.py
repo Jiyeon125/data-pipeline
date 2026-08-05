@@ -8,10 +8,10 @@ from fiscal_dashboard.app import (
     _component_summary,
     _data_review_table,
     _program_count,
+    _queue_simple_table,
     _review_worklist,
     filter_candidates,
     load_dashboard_data,
-    load_pdf_review_queue,
     review_page_specs,
     stable_program_summary,
 )
@@ -36,21 +36,21 @@ def test_dashboard_data_contract_and_filter() -> None:
     assert len(candidates) == 412
     assert candidates["candidate_id"].is_unique
     assert set(candidates["candidate_id"]) == set(data["candidates"]["candidate_id"])
-    assert len(filtered) == 231
+    assert len(filtered) == 208
     assert _program_count(candidates) == 79
     assert filtered["scenario_ranking_eligible"].all()
-    assert data["scores"].shape[0] == 924
+    assert data["scores"].shape[0] == 832
     assert data["drilldown"].shape[0] == 74
     assert not data["drilldown"]["project_performance_attributed"].any()
     assert data["work_queue"].shape[0] == 412
     assert data["work_queue"]["work_lane"].value_counts().to_dict() == {
-        "REPEATED_OR_MULTIPLE": 132,
-        "MONITOR": 105,
-        "CONTEXT_REVIEW": 84,
-        "SINGLE_REVIEW": 76,
+        "MONITOR": 130,
+        "SINGLE_REVIEW": 102,
+        "CONTEXT_REVIEW": 87,
+        "REPEATED_OR_MULTIPLE": 76,
         "DATA_FIRST": 15,
+        "STRONG_SINGLE": 2,
     }
-    assert "STRONG_SINGLE" not in data["work_queue"]["work_lane"].to_numpy()
     assert data["work_queue"]["program_total_feedback_complete_t1"].sum() == 72
     assert data["work_queue"]["program_total_feedback_complete_t2"].sum() == 34
     assert data["work_queue"]["continuous_project_feedback_complete_t1"].sum() == 108
@@ -59,13 +59,31 @@ def test_dashboard_data_contract_and_filter() -> None:
     assert data["work_queue"]["account_type"].eq("FUND").sum() == 131
     assert data["summary"]["review_workbench_method"]["weighted_sum_used"] is False
     assert data["summary"]["review_workbench_method"]["t1_t2_kept_separate"] is True
+    assert (
+        data["summary"]["review_workbench_method"]["t1_t2_excluded_from_current_review_intensity"]
+        is True
+    )
+    assert (
+        data["summary"]["review_workbench_method"]["partial_signal_score_used_in_work_queue"]
+        is False
+    )
     assert data["summary"]["review_workbench_method"]["signal_score_used_in_work_queue"] is True
+    assert data["summary"]["analysis_time_basis"] == (
+        "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
+    )
+    assert data["summary"]["output_schema_version"] == "priority_review_outputs_v2"
+    assert data["summary"]["real_time_or_historical_information_set_reconstructed"] is False
     assert data["summary"]["feedback_linkage"] == {
         "eligible_rows": 2896,
         "matched_rows": 2893,
         "unmatched_base_project_rows": 3,
     }
     assert data["work_queue"]["safety_conclusion"].eq("NOT_ASSESSED").all()
+    simple = _queue_simple_table(data["work_queue"])
+    assert simple["점수상태"].value_counts().to_dict() == {
+        "계산 가능": 401,
+        "판단 보류(구성요소 결측)": 11,
+    }
     assert data["project_queue"].shape[0] == 3286
     assert data["project_queue"]["candidate_id"].nunique() == 397
     assert not data["project_queue"]["project_performance_attributed"].any()
@@ -105,7 +123,7 @@ def test_dashboard_data_contract_and_filter() -> None:
         account_types=candidates["account_type"].dropna().unique().tolist(),
         tiers=candidates["review_intensity"].dropna().unique().tolist(),
     )
-    assert len(no_trigger) == 105
+    assert len(no_trigger) == 130
     assert no_trigger["safety_conclusion"].eq("NOT_ASSESSED").all()
 
     from fiscal_dashboard.app import get_pdf_review_queue
@@ -129,12 +147,12 @@ def test_dashboard_default_render() -> None:
     assert [title.value for title in app.title] == ["재정사업 점검 대기열"]
     assert app.segmented_control[0].options == list(MAIN_TABS)
     assert app.segmented_control[0].value == "대기열"
-    # 기본 필터: ‘신호 없음’(MONITOR) 숨김 → 412-105=307
+    # 기본 필터: ‘신호 없음’(MONITOR) 숨김 → 412-130=282
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
-        ("지금 표에 보이는 행", "307"),
-        ("우선(반복·복수)", "132"),
+        ("지금 표에 보이는 행", "282"),
+        ("우선(반복·복수)", "76"),
         ("데이터 먼저", "15"),
-        ("프로그램 수", "78"),
+        ("프로그램 수", "76"),
     ]
     assert app.multiselect[0].options == [
         "고용노동부",
@@ -147,9 +165,7 @@ def test_dashboard_default_render() -> None:
 def test_dashboard_open_card_and_pdf_review_navigation() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
-    open_card = next(
-        button for button in app.button if button.label == "선택한 행 사업 카드 열기"
-    )
+    open_card = next(button for button in app.button if button.label == "선택한 행 사업 카드 열기")
     open_card.click().run()
     assert not app.exception
     assert app.segmented_control[0].value == "사업 카드"
