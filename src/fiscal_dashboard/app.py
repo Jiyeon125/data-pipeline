@@ -416,7 +416,7 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
         raise DashboardDataError("전체 업무대기열 candidate_id가 중복되었습니다.")
     if set(data["work_queue"]["candidate_id"]) != set(data["candidates"]["candidate_id"]):
         raise DashboardDataError(
-            "전체 업무대기열이 후보 모집단 412행을 빠짐없이 보존하지 못했습니다."
+            "감사용 업무대기열이 프로그램-연도-회계유형 원시 분석행을 빠짐없이 보존하지 못했습니다."
         )
     if not data["work_queue"]["review_grade"].isin(REVIEW_GRADE_LABELS).all():
         raise DashboardDataError("질문형 점검등급에 정의되지 않은 값이 있습니다.")
@@ -1258,9 +1258,7 @@ def _queue_simple_table(frame: pd.DataFrame) -> pd.DataFrame:
         + table["context_effect"].astype(str)
     )
     table["근거강도"] = table["evidence_strength"]
-    table["예산(억원·참고)"] = pd.to_numeric(table[budget_column], errors="coerce").div(
-        100_000_000
-    )
+    table["예산(억원·참고)"] = pd.to_numeric(table[budget_column], errors="coerce").div(100_000_000)
     return table[
         [
             "순서",
@@ -1302,19 +1300,14 @@ def _render_program_year_detail(
         "보고 목표 상태는 프로그램 수준 참고 맥락이며 세부사업 성과로 귀속하지 않습니다."
     )
 
+    def amount_label(value: object) -> str:
+        numeric = pd.to_numeric(value, errors="coerce")
+        return "—" if pd.isna(numeric) else f"{float(numeric) / 100_000_000:,.1f}억"
+
     metrics = st.columns(4)
-    metrics[0].metric(
-        "본예산",
-        f"{float(row['program_original_budget']) / 100_000_000:,.1f}억",
-    )
-    metrics[1].metric(
-        "예산현액",
-        f"{float(row['program_current_budget']) / 100_000_000:,.1f}억",
-    )
-    metrics[2].metric(
-        "지출액",
-        f"{float(row['program_expenditure']) / 100_000_000:,.1f}억",
-    )
+    metrics[0].metric("본예산", amount_label(row["program_original_budget"]))
+    metrics[1].metric("예산현액", amount_label(row["program_current_budget"]))
+    metrics[2].metric("지출액", amount_label(row["program_expenditure"]))
     execution = pd.to_numeric(row.get("program_execution_rate"), errors="coerce")
     metrics[3].metric("총집행률", "—" if pd.isna(execution) else f"{float(execution):.1%}")
 
@@ -1382,8 +1375,8 @@ def _render_program_year_detail(
             "diagnostic_type": "원시행 진단",
         }
     )
-    account_view["회계유형"] = account_view["회계유형"].map(ACCOUNT_LABELS).fillna(
-        account_view["회계유형"]
+    account_view["회계유형"] = (
+        account_view["회계유형"].map(ACCOUNT_LABELS).fillna(account_view["회계유형"])
     )
     st.markdown("**선택 연도의 회계유형별 원시 분석행**")
     st.caption("아래 행은 감사·드릴다운용이며 최종 점검대상 수로 세지 않습니다.")
@@ -1795,8 +1788,7 @@ def main() -> None:
         )
 
     filtered = queue.loc[
-        queue["ministry_code"].isin(selected_ministries)
-        & queue["fiscal_year"].eq(selected_year)
+        queue["ministry_code"].isin(selected_ministries) & queue["fiscal_year"].eq(selected_year)
     ].copy()
     if hide_monitor:
         filtered = filtered.loc[filtered["review_grade"].ne("D")]
@@ -1814,8 +1806,7 @@ def main() -> None:
 
     # summary strip
     base_for_counts = queue.loc[
-        queue["ministry_code"].isin(selected_ministries)
-        & queue["fiscal_year"].eq(selected_year)
+        queue["ministry_code"].isin(selected_ministries) & queue["fiscal_year"].eq(selected_year)
     ]
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("선택연도 고유 프로그램", f"{len(base_for_counts):,}")
@@ -1830,7 +1821,9 @@ def main() -> None:
     s4.metric("현재 표 프로그램", f"{len(filtered):,}")
     grain_summary = summary.get("program_year_review_queue", {})
     st.caption(
-        f"전체 고유 프로그램 {grain_summary.get('unique_program_count', '—')}개 · "
+        f"식별 가능한 고유 프로그램 {grain_summary.get('unique_program_count', '—')}개 · "
+        f"연속성 보류 프로그램-연도 "
+        f"{grain_summary.get('unknown_continuity_program_year_count', '—')}행 · "
         f"프로그램-연도 {grain_summary.get('program_year_count', '—')}행 · "
         f"프로그램-연도-회계유형 원시 분석행 "
         f"{grain_summary.get('program_year_account_analysis_row_count', '—')}행"

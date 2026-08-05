@@ -58,6 +58,44 @@ def test_dashboard_data_contract_and_filter() -> None:
         "A": 22,
         "H": 15,
     }
+    program_queue = data["program_year_queue"]
+    assert program_queue.shape[0] == 236
+    assert program_queue["program_year_id"].is_unique
+    assert program_queue["fiscal_year"].value_counts().sort_index().to_dict() == {
+        2022: 79,
+        2023: 80,
+        2024: 77,
+    }
+    assert program_queue["review_grade"].value_counts().to_dict() == {
+        "C": 120,
+        "H": 64,
+        "D": 25,
+        "B": 14,
+        "A": 13,
+    }
+    assert not program_queue.duplicated(["fiscal_year", "program_year_id"]).any()
+    assert (
+        program_queue.loc[program_queue["fiscal_year"].eq(2024)]
+        .nsmallest(5, "review_queue_order_within_year")["program_year_id"]
+        .nunique()
+        == 5
+    )
+    program_summary = data["summary"]["program_year_review_queue"]
+    assert program_summary["program_year_amount_diff_counts"] == {
+        "program_original_budget": 0,
+        "program_current_budget": 0,
+        "program_expenditure": 0,
+    }
+    assert program_summary["low_execution_target_met"] == {
+        "raw_account_row_count": 40,
+        "unique_program_year_count": 38,
+        "unique_program_count": 29,
+        "program_year_c_grade_count": 12,
+    }
+    assert program_summary["preferred_key_conflict_group_count"] == 24
+    assert program_summary["unique_program_count"] == 80
+    assert program_summary["program_identity_count_including_unknown_continuity"] == 84
+    assert program_summary["unknown_continuity_program_year_count"] == 4
     assert data["work_queue"]["program_total_feedback_complete_t1"].sum() == 72
     assert data["work_queue"]["program_total_feedback_complete_t2"].sum() == 34
     assert data["work_queue"]["continuous_project_feedback_complete_t1"].sum() == 108
@@ -83,7 +121,7 @@ def test_dashboard_data_contract_and_filter() -> None:
         "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
     )
     assert data["summary"]["output_schema_version"] == (
-        "priority_review_outputs_v3_question_review_grade"
+        "priority_review_outputs_v4_program_year_queue"
     )
     assert data["summary"]["real_time_or_historical_information_set_reconstructed"] is False
     assert data["summary"]["feedback_linkage"] == {
@@ -107,7 +145,7 @@ def test_dashboard_data_contract_and_filter() -> None:
     assert blind["pair_id"].nunique() == 10
     assert "review_grade" not in blind
     simple = _queue_simple_table(data["work_queue"])
-    assert simple.columns.tolist()[6:12] == [
+    assert simple.columns.tolist()[3:9] == [
         "점검등급",
         "주 진단",
         "핵심 근거",
@@ -116,6 +154,9 @@ def test_dashboard_data_contract_and_filter() -> None:
         "근거강도",
     ]
     assert simple["점검등급"].str.contains("검토순서|판단 보류").all()
+    program_simple = _queue_simple_table(program_queue.loc[program_queue["fiscal_year"].eq(2024)])
+    assert "회계" not in program_simple
+    assert "관측기간" in program_simple
     assert data["project_queue"].shape[0] == 3286
     assert data["project_queue"]["candidate_id"].nunique() == 397
     assert not data["project_queue"]["project_performance_attributed"].any()
@@ -179,12 +220,12 @@ def test_dashboard_default_render() -> None:
     assert [title.value for title in app.title] == ["재정사업 점검 대기열"]
     assert app.segmented_control[0].options == list(MAIN_TABS)
     assert app.segmented_control[0].value == "대기열"
-    # 기본 필터: D(현재 정의상 신호 미검출) 숨김 → 412-130=282
+    # 기본값은 최신 공통연도 2024, 같은 프로그램은 한 행만 표시.
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
-        ("지금 표에 보이는 행", "282"),
-        ("검토순서 A", "22"),
-        ("H 판단 보류", "15"),
-        ("프로그램 수", "76"),
+        ("선택연도 고유 프로그램", "77"),
+        ("검토순서 A", "3"),
+        ("H 판단 보류", "19"),
+        ("현재 표 프로그램", "77"),
     ]
     assert app.multiselect[0].options == [
         "고용노동부",
@@ -192,12 +233,13 @@ def test_dashboard_default_render() -> None:
         "중소벤처기업부",
         "과학기술정보통신부",
     ]
+    assert next(box for box in app.selectbox if box.label == "기준연도").value == 2024
 
 
 def test_dashboard_open_card_and_pdf_review_navigation() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
-    open_card = next(button for button in app.button if button.label == "선택한 행 사업 카드 열기")
+    open_card = next(button for button in app.button if button.label == "선택한 프로그램 상세 열기")
     open_card.click().run()
     assert not app.exception
     assert app.segmented_control[0].value == "사업 카드"
@@ -220,7 +262,7 @@ def test_dashboard_pdf_review_mode() -> None:
 
     assert not app.exception
     review_metric = next(metric for metric in app.metric if metric.label == "남은 검수")
-    assert review_metric.value == "28"
+    assert review_metric.value == "5"
 
 
 def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
@@ -229,8 +271,11 @@ def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
     app.multiselect[0].set_value(["102"]).run()
     app.segmented_control[0].set_value("사업 카드").run()
     project_candidate = (
-        load_dashboard_data(Path("."))["project_queue"]
-        .loc[lambda frame: frame["ministry_code"].eq("102"), "candidate_id"]
+        load_dashboard_data(Path("."))["program_year_queue"]
+        .loc[
+            lambda frame: frame["ministry_code"].eq("102") & frame["fiscal_year"].eq(2024),
+            "program_year_id",
+        ]
         .iloc[0]
     )
     app.selectbox[0].set_value(project_candidate).run()

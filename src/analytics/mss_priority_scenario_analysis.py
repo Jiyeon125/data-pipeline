@@ -1279,8 +1279,18 @@ def build_current_execution_threshold_qa(
                 "질문형 등급 QA 집행 임계값의 순서 또는 범위가 잘못되었습니다."
             )
         changed = candidates.copy()
+        execution_column = (
+            "program_execution_rate"
+            if "program_execution_rate" in changed
+            else "account_execution_rate"
+        )
+        budget_column = (
+            "program_original_budget"
+            if "program_original_budget" in changed
+            else "account_original_budget"
+        )
         changed["current_execution_severity"] = _current_execution_severity(
-            changed["account_execution_rate"], strong=strong, moderate=moderate
+            changed[execution_column], strong=strong, moderate=moderate
         )
         changed = apply_question_review_grades(changed)
         transition = pd.DataFrame(
@@ -1289,7 +1299,7 @@ def build_current_execution_threshold_qa(
                 "baseline_review_grade": candidates["review_grade"],
                 "qa_review_grade": changed["review_grade"],
                 "account_original_budget": pd.to_numeric(
-                    candidates["account_original_budget"], errors="coerce"
+                    candidates[budget_column], errors="coerce"
                 ),
             }
         )
@@ -1321,7 +1331,9 @@ def build_blind_review_pilot(work_queue: pd.DataFrame, pair_count: int = 10) -> 
     """등급을 숨긴 결정론적 경계 사례 쌍을 만듭니다. 정확도 검증 표본은 아닙니다."""
     boundaries = [("A", "B"), ("B", "C"), ("C", "D"), ("H", "A"), ("B", "C")]
     pools = {
-        grade: part.sort_values("candidate_id").reset_index(drop=True)
+        grade: part.sort_values(
+            "program_year_id" if "program_year_id" in part else "candidate_id"
+        ).reset_index(drop=True)
         for grade, part in work_queue.groupby("review_grade")
     }
     cursors = {grade: 0 for grade in pools}
@@ -1337,7 +1349,7 @@ def build_blind_review_pilot(work_queue: pd.DataFrame, pair_count: int = 10) -> 
             cursors[grade] += 1
             selected.append(row)
         for side, row in zip(("LEFT", "RIGHT"), selected, strict=True):
-            candidate_id = str(row["candidate_id"])
+            candidate_id = str(row.get("program_year_id", row.get("candidate_id")))
             rows.append(
                 {
                     "pair_id": f"PAIR_{pair_index + 1:02d}",
@@ -1347,13 +1359,16 @@ def build_blind_review_pilot(work_queue: pd.DataFrame, pair_count: int = 10) -> 
                     ],
                     "ministry_code": row.get("ministry_code"),
                     "fiscal_year": row.get("fiscal_year"),
-                    "account_type": row.get("account_type"),
+                    "account_type": row.get("account_type", "PROGRAM_TOTAL"),
                     "performance_program_name": row.get("performance_program_name"),
-                    "account_execution_rate": row.get("account_execution_rate"),
+                    "account_execution_rate": row.get(
+                        "program_execution_rate", row.get("account_execution_rate")
+                    ),
                     "reported_target_status": row.get("reported_target_status"),
                     "reported_target_miss_consecutive": row.get("reported_target_miss_consecutive"),
                     "repeated_low_execution_observed": bool(
-                        pd.to_numeric(
+                        row.get("repeated_low_execution_signal", False)
+                        or pd.to_numeric(
                             pd.Series([row.get("type_repeated_strong_low_execution_budget_share")]),
                             errors="coerce",
                         )
@@ -1963,9 +1978,12 @@ def _program_year_group_map(candidates: pd.DataFrame) -> pd.DataFrame:
     result = candidates.copy()
     base_key = ["ministry_code", "fiscal_year", "program_code"]
     metadata = ["field_name", "sector_name", "performance_program_name"]
-    conflict = result.groupby(base_key, dropna=False)[metadata].transform(
-        lambda values: values.nunique(dropna=False)
-    ).gt(1).any(axis=1)
+    conflict = (
+        result.groupby(base_key, dropna=False)[metadata]
+        .transform(lambda values: values.nunique(dropna=False))
+        .gt(1)
+        .any(axis=1)
+    )
     result["base_program_year_key_conflict"] = conflict
 
     def token(value: object) -> str:
@@ -1994,9 +2012,11 @@ def _program_year_group_map(candidates: pd.DataFrame) -> pd.DataFrame:
     result["program_identity_id"] = identities
     result["program_year_id"] = year_ids
 
-    name_conflict = result.groupby("program_year_id", dropna=False)[
-        "performance_program_name"
-    ].transform(lambda values: values.nunique(dropna=False)).gt(1)
+    name_conflict = (
+        result.groupby("program_year_id", dropna=False)["performance_program_name"]
+        .transform(lambda values: values.nunique(dropna=False))
+        .gt(1)
+    )
     if name_conflict.any():
         result.loc[name_conflict, "program_identity_id"] += result.loc[name_conflict].apply(
             lambda row: ":" + stable_suffix([row["performance_program_name"]]), axis=1
@@ -2048,6 +2068,17 @@ def build_program_year_review_queue(
         "repeated_target_overachievement",
         "target_unchanged",
     ]
+    feedback_columns = [
+        "program_total_feedback_complete_t1",
+        "program_total_feedback_complete_t2",
+        "program_total_budget_change_rate_t1",
+        "program_total_budget_change_rate_t2",
+        "low_performance_budget_increase_t1",
+        "low_performance_budget_increase_t2",
+        "good_performance_budget_decrease_t1",
+        "good_performance_budget_decrease_t2",
+        "retrospective_feedback_data_quality_signal",
+    ]
     context_columns = [
         "context_type",
         "context_status",
@@ -2079,9 +2110,7 @@ def build_program_year_review_queue(
                 sorted(part["account_type"].fillna("NOT_AVAILABLE").astype(str).unique())
             ),
             "raw_candidate_ids": json.dumps(part["candidate_id"].tolist(), ensure_ascii=False),
-            "base_program_year_key_conflict": bool(
-                part["base_program_year_key_conflict"].any()
-            ),
+            "base_program_year_key_conflict": bool(part["base_program_year_key_conflict"].any()),
             "program_year_name_conflict": bool(part["program_year_name_conflict"].any()),
         }
         missing_amount = False
@@ -2102,6 +2131,16 @@ def build_program_year_review_queue(
                 row[column] = part[column].iloc[0]
         row["performance_status_conflict_fields"] = ";".join(performance_conflicts)
         row["program_performance_status_conflict"] = bool(performance_conflicts)
+        feedback_conflicts: list[str] = []
+        for column in feedback_columns:
+            if column not in part:
+                row[column] = pd.NA
+            elif part[column].nunique(dropna=False) > 1:
+                feedback_conflicts.append(column)
+                row[column] = pd.NA
+            else:
+                row[column] = part[column].iloc[0]
+        row["retrospective_feedback_conflict_fields"] = ";".join(feedback_conflicts)
         for column in context_columns:
             if column in part and part[column].nunique(dropna=False) == 1:
                 row[column] = part[column].iloc[0]
@@ -2170,9 +2209,9 @@ def build_program_year_review_queue(
         moderate=float(thresholds["execution_moderate"]),
     )
     comparable = pd.to_numeric(result["comparable_rate_count"], errors="coerce")
-    result["performance_gap"] = pd.to_numeric(
-        result["below_target_count"], errors="coerce"
-    ).div(comparable.where(comparable.gt(0)))
+    result["performance_gap"] = pd.to_numeric(result["below_target_count"], errors="coerce").div(
+        comparable.where(comparable.gt(0))
+    )
     result["performance_signal"] = result["performance_gap"].fillna(0).gt(0)
 
     result = result.sort_values(["program_identity_id", "fiscal_year", "program_year_id"])
@@ -2201,9 +2240,11 @@ def build_program_year_review_queue(
     )
 
     previous_budget = history["program_original_budget"].shift()
-    result["program_budget_change_rate"] = pd.to_numeric(
-        result["program_original_budget"], errors="coerce"
-    ).div(pd.to_numeric(previous_budget, errors="coerce").where(lambda s: s.gt(0))).sub(1)
+    result["program_budget_change_rate"] = (
+        pd.to_numeric(result["program_original_budget"], errors="coerce")
+        .div(pd.to_numeric(previous_budget, errors="coerce").where(lambda s: s.gt(0)))
+        .sub(1)
+    )
     result.loc[~consecutive, "program_budget_change_rate"] = pd.NA
     result["budget_increase_context_signal"] = pd.to_numeric(
         result["program_budget_change_rate"], errors="coerce"
@@ -2215,12 +2256,16 @@ def build_program_year_review_queue(
         result["performance_signal"] & result["budget_increase_context_signal"]
     ) | (target_met & result["budget_decrease_context_signal"])
     result["budget_performance_mismatch"] = result["budget_mismatch_signal"].astype(float)
-    result["accounting_context_signal"] = pd.to_numeric(
-        result["type_accounting_adjustment_pattern_budget_share"], errors="coerce"
-    ).fillna(0).gt(0)
-    result["structure_context_signal"] = pd.to_numeric(
-        result["type_program_budget_concentration_budget_share"], errors="coerce"
-    ).fillna(0).gt(0)
+    result["accounting_context_signal"] = (
+        pd.to_numeric(result["type_accounting_adjustment_pattern_budget_share"], errors="coerce")
+        .fillna(0)
+        .gt(0)
+    )
+    result["structure_context_signal"] = (
+        pd.to_numeric(result["type_program_budget_concentration_budget_share"], errors="coerce")
+        .fillna(0)
+        .gt(0)
+    )
     result["type_repeated_strong_low_execution_budget_share"] = 0.0
     result["type_repeated_moderate_low_execution_budget_share"] = 0.0
     result["execution_management"] = pd.concat(
@@ -2230,10 +2275,12 @@ def build_program_year_review_queue(
         ],
         axis=1,
     ).max(axis=1, skipna=False)
-    result["repeated_target_overachievement"] = result[
-        "repeated_target_overachievement"
-    ].fillna(False).astype(bool)
-    result["target_unchanged"] = result["target_unchanged"].fillna(False).astype(bool)
+    result["repeated_target_overachievement"] = (
+        result["repeated_target_overachievement"].astype("boolean").fillna(False).astype(bool)
+    )
+    result["target_unchanged"] = (
+        result["target_unchanged"].astype("boolean").fillna(False).astype(bool)
+    )
     context_defaults = {
         "context_type": "UNKNOWN_TYPE",
         "context_status": "CONFIRMED_STRUCTURED",
@@ -2261,14 +2308,15 @@ def build_program_year_review_queue(
     result["independent_signal_family_count"] = result["signal_families"].map(
         lambda value: 0 if value == "NONE" else len(str(value).split(";"))
     )
-    result["repeated_signal_family_count"] = (
-        result["repeated_low_execution_signal"].astype(int)
-        + result["reported_target_miss_consecutive"].astype(int)
-    )
+    result["repeated_signal_family_count"] = result["repeated_low_execution_signal"].astype(
+        int
+    ) + result["reported_target_miss_consecutive"].astype(int)
     strength_order = {"STRONG": 0, "MODERATE": 1, "AMBIGUOUS": 2, "NONE": 3, "NOT_ASSESSED": 4}
     result["_strength_order"] = result["signal_strength"].map(strength_order).fillna(5)
     result["_family_order"] = -result["independent_signal_family_count"]
-    result["_budget_order"] = -pd.to_numeric(result["program_original_budget"], errors="coerce").fillna(0)
+    result["_budget_order"] = -pd.to_numeric(
+        result["program_original_budget"], errors="coerce"
+    ).fillna(0)
     result = result.sort_values(
         [
             "fiscal_year",
@@ -2284,6 +2332,7 @@ def build_program_year_review_queue(
     result = result.drop(columns=["_strength_order", "_family_order", "_budget_order"])
 
     amount_diffs = {}
+    amount_group_diff_counts = {}
     for output, raw in amount_columns.items():
         amount_diffs[output] = float(
             abs(
@@ -2291,8 +2340,28 @@ def build_program_year_review_queue(
                 - pd.to_numeric(result[output], errors="coerce").sum()
             )
         )
+        before = (
+            source.assign(_amount=pd.to_numeric(source[raw], errors="coerce"))
+            .groupby("program_year_id", dropna=False)["_amount"]
+            .sum(min_count=1)
+            .sort_index()
+        )
+        after = result.set_index("program_year_id")[output].sort_index()
+        amount_group_diff_counts[output] = int(
+            pd.to_numeric(before, errors="coerce")
+            .sub(pd.to_numeric(after, errors="coerce"))
+            .abs()
+            .gt(0.5)
+            .sum()
+        )
     if any(value > 0.5 for value in amount_diffs.values()):
         raise PriorityScenarioError(f"프로그램-연도 집계 전후 금액이 다릅니다: {amount_diffs}")
+    if any(amount_group_diff_counts.values()):
+        raise PriorityScenarioError(
+            f"프로그램-연도별 집계 전후 금액이 다릅니다: {amount_group_diff_counts}"
+        )
+    if source["candidate_id"].duplicated().any():
+        raise PriorityScenarioError("원시 감사행 candidate_id가 중복되었습니다.")
     if result["program_year_id"].duplicated().any():
         raise PriorityScenarioError("프로그램-연도 대기열 기본키가 중복되었습니다.")
     if result.groupby(["fiscal_year", "program_year_id"]).size().gt(1).any():
@@ -2300,12 +2369,14 @@ def build_program_year_review_queue(
 
     raw_execution = (
         pd.to_numeric(source["current_execution_severity"], errors="coerce").fillna(0).gt(0)
-        | pd.to_numeric(
-            source["type_repeated_strong_low_execution_budget_share"], errors="coerce"
-        ).fillna(0).gt(0)
+        | pd.to_numeric(source["type_repeated_strong_low_execution_budget_share"], errors="coerce")
+        .fillna(0)
+        .gt(0)
         | pd.to_numeric(
             source["type_repeated_moderate_low_execution_budget_share"], errors="coerce"
-        ).fillna(0).gt(0)
+        )
+        .fillna(0)
+        .gt(0)
     )
     raw_target_met = source["reported_target_status"].isin(
         {"AT_OR_ABOVE", "ALL_COMPARABLE_AT_OR_ABOVE_TARGET"}
@@ -2314,9 +2385,19 @@ def build_program_year_review_queue(
         raw_execution & raw_target_met & ~source["performance_signal"].fillna(False).astype(bool)
     ]
     program_counterexample = result.loc[
-        result["diagnostic_type"].eq("LOW_EXECUTION_TARGET_MET")
-        & result["review_grade"].eq("C")
+        result["diagnostic_type"].eq("LOW_EXECUTION_TARGET_MET") & result["review_grade"].eq("C")
     ]
+    grade_audit = source[["candidate_id", "program_year_id", "review_grade"]].merge(
+        result[["program_year_id", "review_grade"]],
+        on="program_year_id",
+        how="left",
+        suffixes=("_account_row", "_program_year"),
+        validate="many_to_one",
+    )
+    transition = pd.crosstab(
+        grade_audit["review_grade_account_row"],
+        grade_audit["review_grade_program_year"],
+    )
     ministry_years = result.groupby("ministry_code")["fiscal_year"].agg(
         lambda values: set(values.astype(int))
     )
@@ -2326,12 +2407,21 @@ def build_program_year_review_queue(
         "primary_key": "program_year_id",
         "preferred_key_candidate": ["ministry_code", "fiscal_year", "program_code"],
         "preferred_key_conflict_group_count": int(
-            source.loc[source["base_program_year_key_conflict"], ["ministry_code", "fiscal_year", "program_code"]]
+            source.loc[
+                source["base_program_year_key_conflict"],
+                ["ministry_code", "fiscal_year", "program_code"],
+            ]
             .drop_duplicates()
             .shape[0]
         ),
         "program_year_key_unique": True,
-        "unique_program_count": int(result["program_identity_id"].nunique()),
+        "unique_program_count": int(
+            result.loc[result["program_code"].notna(), "program_identity_id"].nunique()
+        ),
+        "program_identity_count_including_unknown_continuity": int(
+            result["program_identity_id"].nunique()
+        ),
+        "unknown_continuity_program_year_count": int(result["program_code"].isna().sum()),
         "program_year_count": len(result),
         "program_year_account_analysis_row_count": len(source),
         "unique_program_count_by_year": {
@@ -2339,22 +2429,50 @@ def build_program_year_review_queue(
             for key, value in result.groupby("fiscal_year")["program_year_id"].nunique().items()
         },
         "account_type_count_distribution": {
-            str(int(key)): int(value) for key, value in result["account_type_count"].value_counts().sort_index().items()
+            str(int(key)): int(value)
+            for key, value in result["account_type_count"].value_counts().sort_index().items()
         },
         "grade_counts": {
             str(key): int(value) for key, value in result["review_grade"].value_counts().items()
         },
         "grade_original_budget": {
             str(key): float(value)
-            for key, value in result.groupby("review_grade")["program_original_budget"].sum().items()
+            for key, value in result.groupby("review_grade")["program_original_budget"]
+            .sum()
+            .items()
         },
+        "raw_account_grade_to_program_year_grade": {
+            str(raw_grade): {
+                str(program_grade): int(value)
+                for program_grade, value in row.items()
+                if int(value) > 0
+            }
+            for raw_grade, row in transition.iterrows()
+        },
+        "raw_account_rows_with_changed_grade": int(
+            grade_audit["review_grade_account_row"]
+            .ne(grade_audit["review_grade_program_year"])
+            .sum()
+        ),
+        "program_years_with_any_raw_grade_difference": int(
+            grade_audit.loc[
+                grade_audit["review_grade_account_row"].ne(
+                    grade_audit["review_grade_program_year"]
+                ),
+                "program_year_id",
+            ].nunique()
+        ),
         "latest_common_analysis_year": max(common_years) if common_years else None,
         "selected_year_unique_program_count": (
-            int(result.loc[result["fiscal_year"].eq(max(common_years)), "program_year_id"].nunique())
+            int(
+                result.loc[result["fiscal_year"].eq(max(common_years)), "program_year_id"].nunique()
+            )
             if common_years
             else 0
         ),
         "amount_reconciliation_absolute_differences": amount_diffs,
+        "program_year_amount_diff_counts": amount_group_diff_counts,
+        "raw_candidate_id_unique": True,
         "performance_status_conflict_program_year_count": int(
             result["program_performance_status_conflict"].sum()
         ),
@@ -3262,6 +3380,9 @@ def _build_summary(
         "stable_tie_break_key": "candidate_id",
         "scope": config["scope"],
         "grain": "ministry x program x fiscal_year x account_type",
+        "grain_role": "RAW_AUDIT_AND_ACCOUNT_TYPE_DRILLDOWN",
+        "decision_queue_grain": "ministry x program x fiscal_year",
+        "decision_queue_stable_tie_break_key": "program_year_id",
         "status": "independent_review_work_queue_primary_weighted_scenarios_advanced_only",
         "counts": {
             "analysis_rows": len(candidates),
@@ -3339,6 +3460,7 @@ def _build_summary(
             "t1_t2_excluded_from_current_review_intensity": True,
             "performance_attributed_to_detailed_project": False,
             "account_type_kept_separate": True,
+            "account_type_role": "RAW_AUDIT_DETAIL_NOT_DECISION_QUEUE_ROW",
             "question_review_grade_precedence": [
                 "H_HOLD",
                 "SPECIAL_C_CONFLICT_OR_MISSING_PERFORMANCE",
@@ -3503,8 +3625,8 @@ def run_priority_scenario_analysis(
         work_queue,
         config,
     )
-    threshold_qa = build_current_execution_threshold_qa(candidates, config)
-    blind_review_pilot = build_blind_review_pilot(work_queue)
+    threshold_qa = build_current_execution_threshold_qa(program_year_review_queue, config)
+    blind_review_pilot = build_blind_review_pilot(program_year_review_queue)
     drilldown, drilldown_summary = build_stable_top5_project_drilldown(
         candidates,
         stability,
@@ -3536,7 +3658,9 @@ def run_priority_scenario_analysis(
     summary["program_year_review_queue"] = program_year_review_summary
     summary["question_review_grade"] = {
         **work_queue_summary["question_review_grade"],
-        "retrospective_feedback_by_grade": summarize_retrospective_feedback_by_grade(work_queue),
+        "retrospective_feedback_by_grade": summarize_retrospective_feedback_by_grade(
+            program_year_review_queue
+        ),
         "threshold_qa_scope": "CURRENT_YEAR_EXECUTION_THRESHOLDS_ONLY_NOT_PRODUCTION_RULES",
         "threshold_qa_transition_rows": len(threshold_qa),
         "blind_pair_count": int(blind_review_pilot["pair_id"].nunique()),

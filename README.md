@@ -447,16 +447,18 @@ python -m streamlit run src/fiscal_dashboard/app.py
 
 - 기본 화면: H 판단 보류와 A~D 원문 검토순서를 분리한 질문형 작업대
 - 작업 순서: 시작 → 데이터 확인 → 후보 분석 → 기준 비교 → 원문 검수
-- 필터: 부처, 회계연도, 회계유형, 질문형 점검등급
+- 기본 대기열 필터: 부처, 기준연도(기본 최신 공통연도), 질문형 점검등급
 - 후보 연결: 선택 프로그램에서 해당 성과지표 PDF 검수 화면으로 바로 이동
 - 원문 검수: 수기값·PDF값·근거 페이지 이미지와 사람 검수 상태 연속 저장
 - 원문 검수 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
 - 우선순위 정책 초안: `docs/PRIORITY_POLICY_DECISION_DRAFT.md`
 - 기본 원문 검수 큐: 출처·페이지·원문 근거가 부족한 29행
 - 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
-- 다운로드: 현재 필터의 전체 점검 업무대기열 CSV
+- 다운로드: 현재 기준연도의 프로그램-연도 점검대기열 CSV
 - 정식 분석 입력: `data/analytics/multi_ministry_priority_scenarios/`
-- 전체 412행 점검 업무대기열: `full_population_review_work_queue.csv`
+- 최종 프로그램-연도 점검대기열: `program_year_review_queue.csv`
+- 감사·회계유형 드릴다운용 412개 프로그램-연도-회계유형 분석행:
+  `full_population_review_work_queue.csv`
 - 질문형 등급은 사업 성과·효율·감액 등급이 아니며, 기존 레인과 가중치
   시나리오는 감사·민감도 QA용으로 보존
 - 당해연도 집행 임계값 QA: `question_review_threshold_qa.csv`

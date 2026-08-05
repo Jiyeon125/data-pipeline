@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-08-05T15:08:59.149576+00:00",
-  "analysis_version": "review_workbench_v3_question_review_grade",
-  "output_schema_version": "priority_review_outputs_v3_question_review_grade",
+  "generated_at": "2026-08-05T15:46:05.663427+00:00",
+  "analysis_version": "review_workbench_v4_program_year_queue",
+  "output_schema_version": "priority_review_outputs_v4_program_year_queue",
   "analysis_time_basis": "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES",
   "availability_cutoff_enforced": false,
   "real_time_or_historical_information_set_reconstructed": false,
   "data_fiscal_year_min": 2022,
   "data_fiscal_year_max": 2024,
   "code_provenance": {
-    "commit_sha": "e6595fbac37007e5f1cd6d4d6a25155f1beb65a6",
+    "commit_sha": "d79d5cbff71420e336b3becbc71849d18cce4876",
     "worktree_dirty": true
   },
   "stable_tie_break_key": "candidate_id",
@@ -23,6 +23,9 @@
     "end_year": 2024
   },
   "grain": "ministry x program x fiscal_year x account_type",
+  "grain_role": "RAW_AUDIT_AND_ACCOUNT_TYPE_DRILLDOWN",
+  "decision_queue_grain": "ministry x program x fiscal_year",
+  "decision_queue_stable_tie_break_key": "program_year_id",
   "status": "independent_review_work_queue_primary_weighted_scenarios_advanced_only",
   "counts": {
     "analysis_rows": 412,
@@ -177,6 +180,7 @@
     "t1_t2_excluded_from_current_review_intensity": true,
     "performance_attributed_to_detailed_project": false,
     "account_type_kept_separate": true,
+    "account_type_role": "RAW_AUDIT_DETAIL_NOT_DECISION_QUEUE_ROW",
     "question_review_grade_precedence": [
       "H_HOLD",
       "SPECIAL_C_CONFLICT_OR_MISSING_PERFORMANCE",
@@ -437,6 +441,103 @@
       "legacy_work_queue_order_preserved": true
     }
   },
+  "program_year_review_queue": {
+    "grain": "ministry x program x fiscal_year",
+    "primary_key": "program_year_id",
+    "preferred_key_candidate": [
+      "ministry_code",
+      "fiscal_year",
+      "program_code"
+    ],
+    "preferred_key_conflict_group_count": 24,
+    "program_year_key_unique": true,
+    "unique_program_count": 80,
+    "program_identity_count_including_unknown_continuity": 84,
+    "unknown_continuity_program_year_count": 4,
+    "program_year_count": 236,
+    "program_year_account_analysis_row_count": 412,
+    "unique_program_count_by_year": {
+      "2022": 79,
+      "2023": 80,
+      "2024": 77
+    },
+    "account_type_count_distribution": {
+      "1": 114,
+      "2": 68,
+      "3": 54
+    },
+    "grade_counts": {
+      "C": 120,
+      "H": 64,
+      "D": 25,
+      "B": 14,
+      "A": 13
+    },
+    "grade_original_budget": {
+      "A": 24529558000000.0,
+      "B": 29617872000000.0,
+      "C": 383473666100000.0,
+      "D": 39108128000000.0,
+      "H": 86723300500000.0
+    },
+    "raw_account_grade_to_program_year_grade": {
+      "A": {
+        "A": 12,
+        "B": 7,
+        "C": 2,
+        "H": 1
+      },
+      "B": {
+        "A": 11,
+        "B": 18,
+        "C": 1,
+        "H": 4
+      },
+      "C": {
+        "A": 1,
+        "B": 2,
+        "C": 163,
+        "D": 1,
+        "H": 44
+      },
+      "D": {
+        "C": 51,
+        "D": 40,
+        "H": 39
+      },
+      "H": {
+        "H": 15
+      }
+    },
+    "raw_account_rows_with_changed_grade": 164,
+    "program_years_with_any_raw_grade_difference": 113,
+    "latest_common_analysis_year": 2024,
+    "selected_year_unique_program_count": 77,
+    "amount_reconciliation_absolute_differences": {
+      "program_original_budget": 0.0,
+      "program_current_budget": 0.0,
+      "program_expenditure": 0.0
+    },
+    "program_year_amount_diff_counts": {
+      "program_original_budget": 0,
+      "program_current_budget": 0,
+      "program_expenditure": 0
+    },
+    "raw_candidate_id_unique": true,
+    "performance_status_conflict_program_year_count": 0,
+    "program_performance_account_duplicate_counted_as_additional_performance": 0,
+    "low_execution_target_met": {
+      "raw_account_row_count": 40,
+      "unique_program_year_count": 38,
+      "unique_program_count": 29,
+      "program_year_c_grade_count": 12
+    },
+    "top5_unique_programs_by_year": {
+      "2022": true,
+      "2023": true,
+      "2024": true
+    }
+  },
   "question_review_grade": {
     "grade_counts_all_412": {
       "C": 211,
@@ -499,8 +600,8 @@
       {
         "review_grade": "A",
         "feedback_horizon": "T1",
-        "eligible_count": 7,
-        "reported_miss_then_budget_increase_count": 6,
+        "eligible_count": 4,
+        "reported_miss_then_budget_increase_count": 4,
         "reported_target_met_then_budget_decrease_count": 0
       },
       {
@@ -513,8 +614,8 @@
       {
         "review_grade": "B",
         "feedback_horizon": "T1",
-        "eligible_count": 8,
-        "reported_miss_then_budget_increase_count": 6,
+        "eligible_count": 6,
+        "reported_miss_then_budget_increase_count": 4,
         "reported_target_met_then_budget_decrease_count": 0
       },
       {
@@ -527,44 +628,44 @@
       {
         "review_grade": "C",
         "feedback_horizon": "T1",
-        "eligible_count": 23,
+        "eligible_count": 27,
         "reported_miss_then_budget_increase_count": 6,
-        "reported_target_met_then_budget_decrease_count": 6
+        "reported_target_met_then_budget_decrease_count": 8
       },
       {
         "review_grade": "C",
         "feedback_horizon": "T2",
+        "eligible_count": 8,
+        "reported_miss_then_budget_increase_count": 3,
+        "reported_target_met_then_budget_decrease_count": 2
+      },
+      {
+        "review_grade": "D",
+        "feedback_horizon": "T1",
+        "eligible_count": 13,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 2
+      },
+      {
+        "review_grade": "D",
+        "feedback_horizon": "T2",
         "eligible_count": 11,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 1
+      },
+      {
+        "review_grade": "H",
+        "feedback_horizon": "T1",
+        "eligible_count": 21,
         "reported_miss_then_budget_increase_count": 4,
+        "reported_target_met_then_budget_decrease_count": 6
+      },
+      {
+        "review_grade": "H",
+        "feedback_horizon": "T2",
+        "eligible_count": 11,
+        "reported_miss_then_budget_increase_count": 2,
         "reported_target_met_then_budget_decrease_count": 4
-      },
-      {
-        "review_grade": "D",
-        "feedback_horizon": "T1",
-        "eligible_count": 30,
-        "reported_miss_then_budget_increase_count": 0,
-        "reported_target_met_then_budget_decrease_count": 10
-      },
-      {
-        "review_grade": "D",
-        "feedback_horizon": "T2",
-        "eligible_count": 16,
-        "reported_miss_then_budget_increase_count": 0,
-        "reported_target_met_then_budget_decrease_count": 3
-      },
-      {
-        "review_grade": "H",
-        "feedback_horizon": "T1",
-        "eligible_count": 4,
-        "reported_miss_then_budget_increase_count": 1,
-        "reported_target_met_then_budget_decrease_count": 0
-      },
-      {
-        "review_grade": "H",
-        "feedback_horizon": "T2",
-        "eligible_count": 3,
-        "reported_miss_then_budget_increase_count": 1,
-        "reported_target_met_then_budget_decrease_count": 0
       }
     ],
     "threshold_qa_scope": "CURRENT_YEAR_EXECUTION_THRESHOLDS_ONLY_NOT_PRODUCTION_RULES",

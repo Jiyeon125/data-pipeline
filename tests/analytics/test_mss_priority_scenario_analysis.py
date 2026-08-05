@@ -212,11 +212,7 @@ def _program_account_row(
     status = (
         "NO_COMPARABLE_RATE"
         if not comparable
-        else (
-            "ALL_COMPARABLE_BELOW_TARGET"
-            if below
-            else "ALL_COMPARABLE_AT_OR_ABOVE_TARGET"
-        )
+        else ("ALL_COMPARABLE_BELOW_TARGET" if below else "ALL_COMPARABLE_AT_OR_ABOVE_TARGET")
     )
     row: dict[str, object] = {
         "candidate_id": f"102:{year}:{field_name}:{sector_name}:{program_code}:{account_type}",
@@ -232,7 +228,9 @@ def _program_account_row(
         "account_settlement_expenditure": expenditure,
         "account_execution_rate": expenditure / current if current else pd.NA,
         "below_target_count": below,
-        "at_or_above_target_count": (comparable - below) if comparable is not None and below is not None else pd.NA,
+        "at_or_above_target_count": (comparable - below)
+        if comparable is not None and below is not None
+        else pd.NA,
         "comparable_rate_count": comparable,
         "reported_target_status": status,
         "indicator_coverage_status": "COMPLETE_REPORTED_RATE_COVERAGE",
@@ -288,21 +286,30 @@ def test_program_year_queue_reaggregates_money_performance_and_grades() -> None:
         # 선호 키가 충돌하면 자동 병합하지 않고 각각 H.
         _program_account_row("COLLIDE", 2024, field_name="분야A", program_name="프로그램A"),
         _program_account_row("COLLIDE", 2024, field_name="분야B", program_name="프로그램B"),
+        _program_account_row("P9", 2024),
+        _program_account_row("P9", 2024, account_type="FUND", below=1),
+        # 고집행 + 반복 목표미달(예산 증가 없음)은 B.
+        _program_account_row("P10", 2023, below=1),
+        _program_account_row("P10", 2024, below=1),
     ]
     queue, summary = build_program_year_review_queue(
         pd.DataFrame(rows),
         {"thresholds": {"execution_strong": 0.8, "execution_moderate": 0.9}},
     )
+
     def pick(code: str, year: int) -> pd.Series:
-        return queue.loc[
-            queue["program_code"].eq(code) & queue["fiscal_year"].eq(year)
-        ].iloc[0]
+        return queue.loc[queue["program_code"].eq(code) & queue["fiscal_year"].eq(year)].iloc[0]
 
     assert queue["program_year_id"].is_unique
     assert summary["amount_reconciliation_absolute_differences"] == {
         "program_original_budget": 0.0,
         "program_current_budget": 0.0,
         "program_expenditure": 0.0,
+    }
+    assert summary["program_year_amount_diff_counts"] == {
+        "program_original_budget": 0,
+        "program_current_budget": 0,
+        "program_expenditure": 0,
     }
     assert pick("P1", 2024)["program_original_budget"] == 150
     assert pick("P1", 2024)["program_execution_rate"] == pytest.approx(0.6)
@@ -321,6 +328,9 @@ def test_program_year_queue_reaggregates_money_performance_and_grades() -> None:
     collision = queue.loc[queue["program_code"].eq("COLLIDE")]
     assert len(collision) == 2
     assert collision["review_grade"].eq("H").all()
+    assert pick("P9", 2024)["review_grade"] == "H"
+    assert bool(pick("P9", 2024)["program_performance_status_conflict"])
+    assert pick("P10", 2024)["review_grade"] == "B"
 
 
 def test_program_year_asof_is_unchanged_when_future_year_is_added() -> None:
