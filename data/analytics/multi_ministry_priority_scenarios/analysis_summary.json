@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-08-05T14:02:59.509463+00:00",
-  "analysis_version": "review_workbench_v2_1",
-  "output_schema_version": "priority_review_outputs_v2",
+  "generated_at": "2026-08-05T15:08:59.149576+00:00",
+  "analysis_version": "review_workbench_v3_question_review_grade",
+  "output_schema_version": "priority_review_outputs_v3_question_review_grade",
   "analysis_time_basis": "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES",
   "availability_cutoff_enforced": false,
   "real_time_or_historical_information_set_reconstructed": false,
   "data_fiscal_year_min": 2022,
   "data_fiscal_year_max": 2024,
   "code_provenance": {
-    "commit_sha": "1b7da6779e8d13524f66a90052f63005250aad60",
+    "commit_sha": "e6595fbac37007e5f1cd6d4d6a25155f1beb65a6",
     "worktree_dirty": true
   },
   "stable_tie_break_key": "candidate_id",
@@ -163,6 +163,7 @@
     ],
     "weighted_sum_used": false,
     "signal_score_used_in_work_queue": true,
+    "signal_score_used_in_default_grade_queue": false,
     "partial_signal_score_used_in_work_queue": false,
     "signal_score_method": "complete_case_equal_mean_of_three_signal_components",
     "signal_score_components": [
@@ -175,7 +176,17 @@
     "t1_t2_kept_separate": true,
     "t1_t2_excluded_from_current_review_intensity": true,
     "performance_attributed_to_detailed_project": false,
-    "account_type_kept_separate": true
+    "account_type_kept_separate": true,
+    "question_review_grade_precedence": [
+      "H_HOLD",
+      "SPECIAL_C_CONFLICT_OR_MISSING_PERFORMANCE",
+      "A_EXPLICIT_COMPOUND_RULES",
+      "B_STRONG_OR_REPEATED_SINGLE",
+      "C_CONTEXT_OR_SINGLE",
+      "D_NO_TRIGGER_DETECTED"
+    ],
+    "legacy_work_queue_order_preserved": true,
+    "default_ui_order": "grade_queue_order"
   },
   "legacy_scenario_components": {
     "performance_gap": "below_target_count / comparable_rate_count",
@@ -234,7 +245,7 @@
     "data\\analytics\\m3\\financial_signal_features.parquet": "b975105eb47037505b3413a1ca363d4ad1ddf5790388ca486b746107af7e478a",
     "data\\analytics\\definition_validation\\feedback_cohort_t1_t2.csv": "e49e278bc0d768f487163f60d9fb474a28ff7c8e35bafc13e2bd71815e2d8743",
     "data\\processed\\masters\\program_year_financial.parquet": "6588f7e00d8a55642d31138a77e533e039a21d8c12c771e87edca0fe7fa851d0",
-    "configs\\priority_scenarios.yaml": "c1c56b9a31f8809f325a460e4daba753466faac1b9d64257b5ef608ecc86070e"
+    "configs\\priority_scenarios.yaml": "d4e32d6e32bb2970aef401518b052a536936b78ab82b740e2572016656f017a2"
   },
   "config_hash_included_in_input_sha256": true,
   "interpretation_limits": [
@@ -291,6 +302,20 @@
         "signal_score": 0,
         "signal_score_status": 0,
         "review_intensity": 0,
+        "review_grade": 0,
+        "reviewability_status": 0,
+        "diagnostic_type": 0,
+        "signal_families": 0,
+        "signal_strength": 0,
+        "context_type": 0,
+        "context_status": 0,
+        "context_source": 0,
+        "context_evidence": 0,
+        "context_effect": 0,
+        "grade_cap_reason": 0,
+        "grade_reason_codes": 0,
+        "next_review_question": 0,
+        "evidence_strength": 0,
         "account_original_budget": 0,
         "account_current_budget": 0,
         "account_settlement_expenditure": 0
@@ -304,6 +329,9 @@
         "all_scenario_top_5",
         "all_scenario_top_5_within_ministry",
         "exploratory_consensus_order",
+        "grade_queue_order",
+        "grade_queue_order_within_ministry",
+        "grade_queue_rank_within_grade",
         "mean_scenario_rank",
         "mean_scenario_rank_within_ministry",
         "safety_conclusion",
@@ -319,6 +347,65 @@
         "work_queue_order_within_ministry",
         "work_queue_role"
       ]
+    },
+    "question_review_grade": {
+      "grade_counts_all_412": {
+        "C": 211,
+        "D": 130,
+        "B": 34,
+        "A": 22,
+        "H": 15
+      },
+      "grade_counts_reviewable_a_to_d": {
+        "C": 211,
+        "D": 130,
+        "B": 34,
+        "A": 22
+      },
+      "grade_original_budget": {
+        "A": 49090172000000.0,
+        "B": 31770014500000.0,
+        "C": 301687902100000.0,
+        "D": 134164280000000.0,
+        "H": 46740156000000.0
+      },
+      "legacy_lane_to_grade": {
+        "CONTEXT_REVIEW": {
+          "C": 87
+        },
+        "DATA_FIRST": {
+          "H": 15
+        },
+        "MONITOR": {
+          "D": 130
+        },
+        "REPEATED_OR_MULTIPLE": {
+          "A": 18,
+          "B": 10,
+          "C": 48
+        },
+        "SINGLE_REVIEW": {
+          "A": 4,
+          "B": 24,
+          "C": 74
+        },
+        "STRONG_SINGLE": {
+          "C": 2
+        }
+      },
+      "grade_reason_counts": {
+        "CONTEXT_OR_SINGLE_SIGNAL_REVIEW": 172,
+        "NO_STRUCTURED_SIGNAL_DETECTED": 130,
+        "LOW_EXECUTION_TARGET_MET": 39,
+        "STRONG_OR_REPEATED_SINGLE_SIGNAL": 34,
+        "REPEATED_LOW_EXECUTION_WITH_REPORTED_TARGET_MISS": 16,
+        "DATA_OR_COMPARABILITY_HOLD": 15,
+        "REPEATED_REPORTED_TARGET_MISS_WITH_BUDGET_INCREASE": 6
+      },
+      "qa_abnormal_transition_count": 0,
+      "qa_abnormal_candidate_ids": [],
+      "h_excluded_from_a_to_d_denominator": true,
+      "grade_is_program_review_order_not_policy_evaluation": true
     },
     "safety_conclusion_generated": false,
     "final_policy_rank_generated": false,
@@ -338,8 +425,153 @@
         "complete_case_signal_score_desc",
         "account_original_budget_desc_tiebreak_only",
         "candidate_id"
-      ]
+      ],
+      "grade_queue_order": [
+        "review_grade_H_hold_then_A_B_C_D",
+        "signal_strength",
+        "signal_family_count",
+        "evidence_strength",
+        "account_original_budget_desc_tiebreak_only",
+        "candidate_id"
+      ],
+      "legacy_work_queue_order_preserved": true
     }
+  },
+  "question_review_grade": {
+    "grade_counts_all_412": {
+      "C": 211,
+      "D": 130,
+      "B": 34,
+      "A": 22,
+      "H": 15
+    },
+    "grade_counts_reviewable_a_to_d": {
+      "C": 211,
+      "D": 130,
+      "B": 34,
+      "A": 22
+    },
+    "grade_original_budget": {
+      "A": 49090172000000.0,
+      "B": 31770014500000.0,
+      "C": 301687902100000.0,
+      "D": 134164280000000.0,
+      "H": 46740156000000.0
+    },
+    "legacy_lane_to_grade": {
+      "CONTEXT_REVIEW": {
+        "C": 87
+      },
+      "DATA_FIRST": {
+        "H": 15
+      },
+      "MONITOR": {
+        "D": 130
+      },
+      "REPEATED_OR_MULTIPLE": {
+        "A": 18,
+        "B": 10,
+        "C": 48
+      },
+      "SINGLE_REVIEW": {
+        "A": 4,
+        "B": 24,
+        "C": 74
+      },
+      "STRONG_SINGLE": {
+        "C": 2
+      }
+    },
+    "grade_reason_counts": {
+      "CONTEXT_OR_SINGLE_SIGNAL_REVIEW": 172,
+      "NO_STRUCTURED_SIGNAL_DETECTED": 130,
+      "LOW_EXECUTION_TARGET_MET": 39,
+      "STRONG_OR_REPEATED_SINGLE_SIGNAL": 34,
+      "REPEATED_LOW_EXECUTION_WITH_REPORTED_TARGET_MISS": 16,
+      "DATA_OR_COMPARABILITY_HOLD": 15,
+      "REPEATED_REPORTED_TARGET_MISS_WITH_BUDGET_INCREASE": 6
+    },
+    "qa_abnormal_transition_count": 0,
+    "qa_abnormal_candidate_ids": [],
+    "h_excluded_from_a_to_d_denominator": true,
+    "grade_is_program_review_order_not_policy_evaluation": true,
+    "retrospective_feedback_by_grade": [
+      {
+        "review_grade": "A",
+        "feedback_horizon": "T1",
+        "eligible_count": 7,
+        "reported_miss_then_budget_increase_count": 6,
+        "reported_target_met_then_budget_decrease_count": 0
+      },
+      {
+        "review_grade": "A",
+        "feedback_horizon": "T2",
+        "eligible_count": 0,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 0
+      },
+      {
+        "review_grade": "B",
+        "feedback_horizon": "T1",
+        "eligible_count": 8,
+        "reported_miss_then_budget_increase_count": 6,
+        "reported_target_met_then_budget_decrease_count": 0
+      },
+      {
+        "review_grade": "B",
+        "feedback_horizon": "T2",
+        "eligible_count": 4,
+        "reported_miss_then_budget_increase_count": 3,
+        "reported_target_met_then_budget_decrease_count": 0
+      },
+      {
+        "review_grade": "C",
+        "feedback_horizon": "T1",
+        "eligible_count": 23,
+        "reported_miss_then_budget_increase_count": 6,
+        "reported_target_met_then_budget_decrease_count": 6
+      },
+      {
+        "review_grade": "C",
+        "feedback_horizon": "T2",
+        "eligible_count": 11,
+        "reported_miss_then_budget_increase_count": 4,
+        "reported_target_met_then_budget_decrease_count": 4
+      },
+      {
+        "review_grade": "D",
+        "feedback_horizon": "T1",
+        "eligible_count": 30,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 10
+      },
+      {
+        "review_grade": "D",
+        "feedback_horizon": "T2",
+        "eligible_count": 16,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 3
+      },
+      {
+        "review_grade": "H",
+        "feedback_horizon": "T1",
+        "eligible_count": 4,
+        "reported_miss_then_budget_increase_count": 1,
+        "reported_target_met_then_budget_decrease_count": 0
+      },
+      {
+        "review_grade": "H",
+        "feedback_horizon": "T2",
+        "eligible_count": 3,
+        "reported_miss_then_budget_increase_count": 1,
+        "reported_target_met_then_budget_decrease_count": 0
+      }
+    ],
+    "threshold_qa_scope": "CURRENT_YEAR_EXECUTION_THRESHOLDS_ONLY_NOT_PRODUCTION_RULES",
+    "threshold_qa_transition_rows": 19,
+    "blind_pair_count": 10,
+    "blind_pair_role": "USABILITY_PILOT_NOT_ACCURACY_VALIDATION",
+    "t1_t2_used_in_review_grade": false
   },
   "drilldown": {
     "candidate_count": 7,

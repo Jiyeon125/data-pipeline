@@ -51,6 +51,13 @@ def test_dashboard_data_contract_and_filter() -> None:
         "DATA_FIRST": 15,
         "STRONG_SINGLE": 2,
     }
+    assert data["work_queue"]["review_grade"].value_counts().to_dict() == {
+        "C": 211,
+        "D": 130,
+        "B": 34,
+        "A": 22,
+        "H": 15,
+    }
     assert data["work_queue"]["program_total_feedback_complete_t1"].sum() == 72
     assert data["work_queue"]["program_total_feedback_complete_t2"].sum() == 34
     assert data["work_queue"]["continuous_project_feedback_complete_t1"].sum() == 108
@@ -68,10 +75,16 @@ def test_dashboard_data_contract_and_filter() -> None:
         is False
     )
     assert data["summary"]["review_workbench_method"]["signal_score_used_in_work_queue"] is True
+    assert (
+        data["summary"]["review_workbench_method"]["signal_score_used_in_default_grade_queue"]
+        is False
+    )
     assert data["summary"]["analysis_time_basis"] == (
         "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
     )
-    assert data["summary"]["output_schema_version"] == "priority_review_outputs_v2"
+    assert data["summary"]["output_schema_version"] == (
+        "priority_review_outputs_v3_question_review_grade"
+    )
     assert data["summary"]["real_time_or_historical_information_set_reconstructed"] is False
     assert data["summary"]["feedback_linkage"] == {
         "eligible_rows": 2896,
@@ -79,11 +92,30 @@ def test_dashboard_data_contract_and_filter() -> None:
         "unmatched_base_project_rows": 3,
     }
     assert data["work_queue"]["safety_conclusion"].eq("NOT_ASSESSED").all()
+    grade_summary = data["summary"]["question_review_grade"]
+    assert sum(grade_summary["grade_counts_all_412"].values()) == 412
+    assert "H" not in grade_summary["grade_counts_reviewable_a_to_d"]
+    assert grade_summary["t1_t2_used_in_review_grade"] is False
+    threshold_qa = pd.read_csv(
+        Path("data/analytics/multi_ministry_priority_scenarios/question_review_threshold_qa.csv")
+    )
+    production = threshold_qa.loc[threshold_qa["qa_variant"].eq("production_threshold")]
+    assert production["baseline_review_grade"].eq(production["qa_review_grade"]).all()
+    blind = pd.read_csv(
+        Path("data/analytics/multi_ministry_priority_scenarios/question_review_blind_pairs.csv")
+    )
+    assert blind["pair_id"].nunique() == 10
+    assert "review_grade" not in blind
     simple = _queue_simple_table(data["work_queue"])
-    assert simple["점수상태"].value_counts().to_dict() == {
-        "계산 가능": 401,
-        "판단 보류(구성요소 결측)": 11,
-    }
+    assert simple.columns.tolist()[6:12] == [
+        "점검등급",
+        "주 진단",
+        "핵심 근거",
+        "다음 확인질문",
+        "사업특성 상태",
+        "근거강도",
+    ]
+    assert simple["점검등급"].str.contains("검토순서|판단 보류").all()
     assert data["project_queue"].shape[0] == 3286
     assert data["project_queue"]["candidate_id"].nunique() == 397
     assert not data["project_queue"]["project_performance_attributed"].any()
@@ -147,11 +179,11 @@ def test_dashboard_default_render() -> None:
     assert [title.value for title in app.title] == ["재정사업 점검 대기열"]
     assert app.segmented_control[0].options == list(MAIN_TABS)
     assert app.segmented_control[0].value == "대기열"
-    # 기본 필터: ‘신호 없음’(MONITOR) 숨김 → 412-130=282
+    # 기본 필터: D(현재 정의상 신호 미검출) 숨김 → 412-130=282
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
         ("지금 표에 보이는 행", "282"),
-        ("우선(반복·복수)", "76"),
-        ("데이터 먼저", "15"),
+        ("검토순서 A", "22"),
+        ("H 판단 보류", "15"),
         ("프로그램 수", "76"),
     ]
     assert app.multiselect[0].options == [

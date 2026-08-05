@@ -28,7 +28,7 @@ from performance_pipeline.pdf_reconciliation import (
 )
 
 DATA_DIR = Path("data/analytics/multi_ministry_priority_scenarios")
-EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v2"
+EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v4_program_year_queue"
 CASE_REVIEW_DIR = Path("data/analytics/priority_case_evidence_review")
 MINISTRY_LABELS = {
     "019": "고용노동부",
@@ -60,6 +60,25 @@ REVIEW_INTENSITY_LABELS = {
     "SINGLE_REVIEW": "단일 신호",
     "CONTEXT_REVIEW": "맥락 검토",
     "MONITOR": "신호 미검출·모니터링",
+}
+REVIEW_GRADE_LABELS = {
+    "A": "검토순서 A · 우선 원문 확인",
+    "B": "검토순서 B · 원인 확인 권고",
+    "C": "검토순서 C · 맥락 확인",
+    "D": "검토순서 D · 현재 정의상 신호 미검출",
+    "H": "H 판단 보류 · 데이터·비교가능성 확인",
+}
+DIAGNOSTIC_LABELS = {
+    "DATA_OR_COMPARABILITY_HOLD": "데이터·비교가능성 확인 필요",
+    "REPEATED_LOW_EXECUTION_WITH_REPORTED_TARGET_MISS": "반복 저집행과 보고목표 미달 동시 관측",
+    "REPEATED_REPORTED_TARGET_MISS_WITH_BUDGET_INCREASE": "연속연도 보고목표 미달 관측과 당해 예산 증가",
+    "STRONG_OR_REPEATED_SINGLE_SIGNAL": "강한 또는 반복 단일 신호",
+    "LOW_EXECUTION_TARGET_MET": "저집행과 보고목표 달성 동시 관측",
+    "LOW_EXECUTION_PERFORMANCE_INFORMATION_MISSING": "저집행과 성과정보 결측 동시 관측",
+    "MULTIYEAR_CONTEXT_WITH_SINGLE_YEAR_LOW_EXECUTION": "다년도 맥락에서 단년도 저집행 관측",
+    "TARGET_ADEQUACY_REVIEW": "목표 적정성 원문 확인",
+    "CONTEXT_OR_SINGLE_SIGNAL_REVIEW": "단일·맥락 신호 확인",
+    "NO_STRUCTURED_SIGNAL_DETECTED": "현재 정의에서 구조화 신호 미검출",
 }
 SCENARIO_LABELS = {
     "equal": "균등가중",
@@ -151,6 +170,7 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
     filenames = {
         "candidates": "candidate_population.csv",
         "work_queue": "full_population_review_work_queue.csv",
+        "program_year_queue": "program_year_review_queue.csv",
         "scores": "scenario_scores.csv",
         "stability": "rank_stability.csv",
         "drilldown": "stable_top5_project_drilldown.csv",
@@ -265,6 +285,55 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "evidence_status",
             "independent_signal_family_count",
             "repeated_signal_family_count",
+            "review_grade",
+            "reviewability_status",
+            "diagnostic_type",
+            "signal_families",
+            "signal_strength",
+            "context_type",
+            "context_status",
+            "context_source",
+            "context_evidence",
+            "context_effect",
+            "grade_cap_reason",
+            "grade_reason_codes",
+            "next_review_question",
+            "evidence_strength",
+            "grade_queue_order",
+        },
+        "program_year_queue": {
+            "program_year_id",
+            "program_identity_id",
+            "ministry_code",
+            "field_name",
+            "sector_name",
+            "program_code",
+            "fiscal_year",
+            "performance_program_name",
+            "program_original_budget",
+            "program_current_budget",
+            "program_expenditure",
+            "program_execution_rate",
+            "program_budget_change_rate",
+            "reported_target_status",
+            "below_target_count",
+            "comparable_rate_count",
+            "review_grade",
+            "reviewability_status",
+            "diagnostic_type",
+            "signal_families",
+            "signal_strength",
+            "context_type",
+            "context_status",
+            "context_effect",
+            "next_review_question",
+            "evidence_strength",
+            "observed_start_year",
+            "observed_end_year",
+            "observed_year_count",
+            "continuity_status",
+            "raw_candidate_ids",
+            "review_queue_order_within_year",
         },
         "review_queue": {
             "work_item_id",
@@ -349,6 +418,16 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
         raise DashboardDataError(
             "전체 업무대기열이 후보 모집단 412행을 빠짐없이 보존하지 못했습니다."
         )
+    if not data["work_queue"]["review_grade"].isin(REVIEW_GRADE_LABELS).all():
+        raise DashboardDataError("질문형 점검등급에 정의되지 않은 값이 있습니다.")
+    if data["work_queue"]["grade_queue_order"].nunique() != len(data["work_queue"]):
+        raise DashboardDataError("질문형 점검등급 대기순서가 중복되었습니다.")
+    if data["program_year_queue"]["program_year_id"].duplicated().any():
+        raise DashboardDataError("프로그램-연도 대기열 기본키가 중복되었습니다.")
+    if data["program_year_queue"].duplicated(["fiscal_year", "program_year_id"]).any():
+        raise DashboardDataError("선택연도 대기열에 같은 프로그램이 중복되었습니다.")
+    if not data["program_year_queue"]["review_grade"].isin(REVIEW_GRADE_LABELS).all():
+        raise DashboardDataError("프로그램-연도 대기열에 정의되지 않은 점검등급이 있습니다.")
     score = pd.to_numeric(data["work_queue"]["signal_score"], errors="coerce")
     incomplete = data["work_queue"]["signal_score_status"].eq("INCOMPLETE_COMPONENTS")
     if score.loc[incomplete].notna().any():
@@ -1078,12 +1157,15 @@ def _signal_composition_label(row: pd.Series | object) -> str:
     else:
         perf = f"보고 목표 미달 {below}/{comparable}개"
 
-    rate = pd.to_numeric(pd.Series([getter("account_execution_rate")]), errors="coerce").iloc[0]
+    rate = pd.to_numeric(
+        pd.Series([getter("program_execution_rate", getter("account_execution_rate"))]),
+        errors="coerce",
+    ).iloc[0]
     if pd.isna(rate):
         exec_label = "집행률 —"
     else:
         exec_label = f"집행률 {float(rate):.0%}"
-    if bool(getter("repeated_execution_signal")):
+    if bool(getter("repeated_execution_signal", getter("repeated_low_execution_signal"))):
         exec_label += "·반복"
 
     if bool(getter("budget_mismatch_signal")):
@@ -1143,48 +1225,191 @@ def _plain_signal_cards(row: pd.Series) -> list[tuple[str, str, str]]:
 
 
 def _queue_simple_table(frame: pd.DataFrame) -> pd.DataFrame:
-    table = frame.sort_values("work_queue_order").copy()
-    table["순서"] = table["work_queue_order"]
+    if "program_year_id" in frame:
+        table = frame.sort_values("review_queue_order_within_year").copy()
+        table["순서"] = table["review_queue_order_within_year"]
+        table["관측기간"] = (
+            table["observed_start_year"].astype("Int64").astype("string")
+            + "–"
+            + table["observed_end_year"].astype("Int64").astype("string")
+            + " ("
+            + table["observed_year_count"].astype("Int64").astype("string")
+            + "개 연도)"
+        )
+        budget_column = "program_original_budget"
+    else:
+        table = frame.sort_values("grade_queue_order").copy()
+        table["순서"] = table["grade_queue_order"]
+        table["관측기간"] = table["fiscal_year"].astype("Int64").astype("string")
+        budget_column = "account_original_budget"
     table["부처"] = table["ministry_code"].map(MINISTRY_LABELS).fillna(table["ministry_code"])
-    table["연도"] = table["fiscal_year"]
     table["프로그램"] = table["performance_program_name"]
-    table["회계"] = table["account_type"].map(ACCOUNT_LABELS).fillna(table["account_type"])
-    table["분석단위"] = "프로그램×연도×회계"
-    table["볼 단계"] = table["review_intensity"].map(REVIEW_INTENSITY_LABELS)
-    table["왜 보나"] = table["priority_reason"].map(_reason_text)
-    table["신호 구성"] = [_signal_composition_label(row) for _, row in table.iterrows()]
-    table["독립신호"] = (
-        pd.to_numeric(table.get("independent_signal_family_count"), errors="coerce")
-        .fillna(0)
-        .astype(int)
+    table["점검등급"] = table["review_grade"].map(REVIEW_GRADE_LABELS)
+    table["주 진단"] = (
+        table["diagnostic_type"].map(DIAGNOSTIC_LABELS).fillna(table["diagnostic_type"])
     )
-    table["점수상태"] = table["signal_score_status"].map(
-        {
-            "COMPLETE": "계산 가능",
-            "INCOMPLETE_COMPONENTS": "판단 보류(구성요소 결측)",
-        }
+    table["핵심 근거"] = [_signal_composition_label(row) for _, row in table.iterrows()]
+    table["다음 확인질문"] = table["next_review_question"]
+    table["사업특성 상태"] = (
+        table["context_type"].astype(str)
+        + " / "
+        + table["context_status"].astype(str)
+        + " / "
+        + table["context_effect"].astype(str)
     )
-    table["다음에 할 일"] = table["next_action"]
-    table["예산(억원·참고)"] = pd.to_numeric(table["account_original_budget"], errors="coerce").div(
+    table["근거강도"] = table["evidence_strength"]
+    table["예산(억원·참고)"] = pd.to_numeric(table[budget_column], errors="coerce").div(
         100_000_000
     )
     return table[
         [
             "순서",
             "부처",
-            "연도",
             "프로그램",
-            "회계",
-            "분석단위",
-            "볼 단계",
-            "왜 보나",
-            "신호 구성",
-            "독립신호",
-            "점수상태",
-            "다음에 할 일",
+            "점검등급",
+            "주 진단",
+            "핵심 근거",
+            "다음 확인질문",
+            "사업특성 상태",
+            "근거강도",
+            "관측기간",
             "예산(억원·참고)",
         ]
     ]
+
+
+def _render_program_year_detail(
+    row: pd.Series,
+    program_queue: pd.DataFrame,
+    account_queue: pd.DataFrame,
+) -> None:
+    grade = str(row["review_grade"])
+    st.markdown(
+        f"### {MINISTRY_LABELS.get(str(row['ministry_code']), row['ministry_code'])} · "
+        f"{int(row['fiscal_year'])} · {row['performance_program_name']}"
+    )
+    st.caption(
+        f"프로그램×연도 검토행 · 순서 {int(row['review_queue_order_within_year'])} · "
+        f"{REVIEW_GRADE_LABELS.get(grade, grade)} · {row['continuity_status']}"
+    )
+    st.info(
+        f"{DIAGNOSTIC_LABELS.get(str(row.get('diagnostic_type')), row.get('diagnostic_type'))}  \n"
+        f"다음 확인질문: {row.get('next_review_question')}",
+        icon=":material/flag:",
+    )
+    st.caption(
+        "등급은 사업 성과평가·감액등급이 아니라 프로그램 원문 검토 순서입니다. "
+        "보고 목표 상태는 프로그램 수준 참고 맥락이며 세부사업 성과로 귀속하지 않습니다."
+    )
+
+    metrics = st.columns(4)
+    metrics[0].metric(
+        "본예산",
+        f"{float(row['program_original_budget']) / 100_000_000:,.1f}억",
+    )
+    metrics[1].metric(
+        "예산현액",
+        f"{float(row['program_current_budget']) / 100_000_000:,.1f}억",
+    )
+    metrics[2].metric(
+        "지출액",
+        f"{float(row['program_expenditure']) / 100_000_000:,.1f}억",
+    )
+    execution = pd.to_numeric(row.get("program_execution_rate"), errors="coerce")
+    metrics[3].metric("총집행률", "—" if pd.isna(execution) else f"{float(execution):.1%}")
+
+    history = program_queue.loc[
+        program_queue["program_identity_id"].eq(row["program_identity_id"])
+    ].sort_values("fiscal_year")
+    timeline = history[
+        [
+            "fiscal_year",
+            "review_grade",
+            "diagnostic_type",
+            "program_original_budget",
+            "program_current_budget",
+            "program_expenditure",
+            "program_execution_rate",
+            "reported_target_status",
+        ]
+    ].rename(
+        columns={
+            "fiscal_year": "연도",
+            "review_grade": "점검등급",
+            "diagnostic_type": "진단유형",
+            "program_original_budget": "본예산",
+            "program_current_budget": "예산현액",
+            "program_expenditure": "지출액",
+            "program_execution_rate": "집행률",
+            "reported_target_status": "보고목표 상태",
+        }
+    )
+    st.markdown("**연도별 프로그램 관측 타임라인**")
+    st.dataframe(
+        timeline,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "본예산": st.column_config.NumberColumn(format="%,.0f"),
+            "예산현액": st.column_config.NumberColumn(format="%,.0f"),
+            "지출액": st.column_config.NumberColumn(format="%,.0f"),
+            "집행률": st.column_config.NumberColumn(format="percent"),
+        },
+    )
+
+    raw_ids = set(json.loads(str(row["raw_candidate_ids"])))
+    accounts = account_queue.loc[account_queue["candidate_id"].isin(raw_ids)].copy()
+    account_view = accounts[
+        [
+            "candidate_id",
+            "account_type",
+            "account_original_budget",
+            "account_current_budget",
+            "account_settlement_expenditure",
+            "account_execution_rate",
+            "review_grade",
+            "diagnostic_type",
+        ]
+    ].rename(
+        columns={
+            "candidate_id": "원시행 ID",
+            "account_type": "회계유형",
+            "account_original_budget": "본예산",
+            "account_current_budget": "예산현액",
+            "account_settlement_expenditure": "지출액",
+            "account_execution_rate": "집행률",
+            "review_grade": "원시행 등급",
+            "diagnostic_type": "원시행 진단",
+        }
+    )
+    account_view["회계유형"] = account_view["회계유형"].map(ACCOUNT_LABELS).fillna(
+        account_view["회계유형"]
+    )
+    st.markdown("**선택 연도의 회계유형별 원시 분석행**")
+    st.caption("아래 행은 감사·드릴다운용이며 최종 점검대상 수로 세지 않습니다.")
+    st.dataframe(
+        account_view,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "본예산": st.column_config.NumberColumn(format="%,.0f"),
+            "예산현액": st.column_config.NumberColumn(format="%,.0f"),
+            "지출액": st.column_config.NumberColumn(format="%,.0f"),
+            "집행률": st.column_config.NumberColumn(format="percent"),
+        },
+    )
+    pdf_ok = str(row["ministry_code"]) in PDF_REVIEW_MINISTRY_CODES
+    if st.button(
+        "이 프로그램 원문(PDF) 검수로 이동",
+        icon=":material/description:",
+        disabled=not pdf_ok,
+        width="stretch",
+        key=f"goto_pdf_{row['program_year_id']}",
+    ):
+        st.session_state["review_program_filter"] = str(row["performance_program_name"])
+        st.session_state["review_ministry_filter"] = str(row["ministry_code"])
+        _request_main_tab("원문 검수")
+        st.rerun()
 
 
 def _signal_checklist(row: pd.Series) -> list[str]:
@@ -1223,17 +1448,24 @@ def _retrospective_feedback_checklist(row: pd.Series) -> list[str]:
 
 def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> None:
     lane = str(row["review_intensity"])
+    grade = str(row["review_grade"])
     st.markdown(
         f"### {MINISTRY_LABELS.get(str(row['ministry_code']), row['ministry_code'])} · "
         f"{int(row['fiscal_year'])} · {row['performance_program_name']}"
     )
     st.caption(
         f"{_format_account(row['account_type'])} · "
-        f"대기 순서 {int(row['work_queue_order'])} · "
-        f"{REVIEW_INTENSITY_LABELS.get(lane, lane)}"
+        f"검토 순서 {int(row['grade_queue_order'])} · "
+        f"{REVIEW_GRADE_LABELS.get(grade, grade)}"
     )
     st.info(
-        _plain_lane_help(lane) + "  \n" + str(row.get("next_action") or ""), icon=":material/flag:"
+        f"{DIAGNOSTIC_LABELS.get(str(row.get('diagnostic_type')), row.get('diagnostic_type'))}  \n"
+        f"다음 확인질문: {row.get('next_review_question')}",
+        icon=":material/flag:",
+    )
+    st.caption(
+        "이 등급은 사업 성과평가·감액등급이 아니라 프로그램 원문 검토 순서입니다. "
+        f"사업특성: {row.get('context_type')} / {row.get('context_status')} / {row.get('context_effect')}"
     )
     if row.get("signal_score_status") == "INCOMPLETE_COMPONENTS":
         st.warning(
@@ -1521,8 +1753,8 @@ def main() -> None:
         st.error(str(exc))
         st.stop()
 
-    queue = data["work_queue"]
-    project_queue = data["project_queue"]
+    queue = data["program_year_queue"]
+    account_queue = data["work_queue"]
     summary = data["summary"]
 
     st.sidebar.header("필터")
@@ -1535,46 +1767,41 @@ def main() -> None:
         key="global_ministries",
     )
     years = sorted(queue["fiscal_year"].dropna().astype(int).unique().tolist())
-    selected_years = st.sidebar.multiselect(
-        "회계연도",
-        years,
-        default=years,
-        key="global_years",
+    latest_common_year = int(
+        summary.get("program_year_review_queue", {}).get("latest_common_analysis_year")
+        or max(years)
     )
-    account_types = sorted(queue["account_type"].dropna().astype(str).unique())
-    selected_accounts = st.sidebar.multiselect(
-        "회계유형",
-        account_types,
-        default=account_types,
-        format_func=_format_account,
-        key="global_accounts",
+    selected_year = st.sidebar.selectbox(
+        "기준연도",
+        years,
+        index=years.index(latest_common_year),
+        key="global_year",
     )
     hide_monitor = st.sidebar.toggle(
-        "‘신호 없음’ 행 숨기기",
+        "D ‘현재 정의상 신호 미검출’ 숨기기",
         value=True,
-        help="모니터링(트리거 거의 없음) 행을 표에서 뺍니다.",
+        help="D는 정상 판정이 아니라 현재 정의에서 검토신호가 잡히지 않은 행입니다.",
     )
-    lane_options = ["전체"] + [
-        REVIEW_INTENSITY_LABELS[key]
-        for key in REVIEW_INTENSITY_LABELS
-        if key != "MONITOR" or not hide_monitor
+    grade_options = ["전체"] + [
+        REVIEW_GRADE_LABELS[key]
+        for key in ("H", "A", "B", "C", "D")
+        if key != "D" or not hide_monitor
     ]
-    selected_lane_label = st.sidebar.radio("볼 단계", lane_options, index=0)
-    lane_code = None
-    if selected_lane_label != "전체":
-        lane_code = next(
-            key for key, label in REVIEW_INTENSITY_LABELS.items() if label == selected_lane_label
+    selected_grade_label = st.sidebar.radio("검토등급", grade_options, index=0)
+    grade_code = None
+    if selected_grade_label != "전체":
+        grade_code = next(
+            key for key, label in REVIEW_GRADE_LABELS.items() if label == selected_grade_label
         )
 
     filtered = queue.loc[
         queue["ministry_code"].isin(selected_ministries)
-        & queue["fiscal_year"].isin(selected_years)
-        & queue["account_type"].isin(selected_accounts)
+        & queue["fiscal_year"].eq(selected_year)
     ].copy()
     if hide_monitor:
-        filtered = filtered.loc[filtered["review_intensity"].ne("MONITOR")]
-    if lane_code is not None:
-        filtered = filtered.loc[filtered["review_intensity"].eq(lane_code)]
+        filtered = filtered.loc[filtered["review_grade"].ne("D")]
+    if grade_code is not None:
+        filtered = filtered.loc[filtered["review_grade"].eq(grade_code)]
 
     tabs = list(MAIN_TABS)
     _apply_pending_main_tab()
@@ -1588,28 +1815,33 @@ def main() -> None:
     # summary strip
     base_for_counts = queue.loc[
         queue["ministry_code"].isin(selected_ministries)
-        & queue["fiscal_year"].isin(selected_years)
-        & queue["account_type"].isin(selected_accounts)
+        & queue["fiscal_year"].eq(selected_year)
     ]
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("지금 표에 보이는 행", f"{len(filtered):,}")
+    s1.metric("선택연도 고유 프로그램", f"{len(base_for_counts):,}")
     s2.metric(
-        "우선(반복·복수)",
-        f"{base_for_counts['review_intensity'].eq('REPEATED_OR_MULTIPLE').sum():,}",
+        "검토순서 A",
+        f"{base_for_counts['review_grade'].eq('A').sum():,}",
     )
     s3.metric(
-        "데이터 먼저",
-        f"{base_for_counts['review_intensity'].eq('DATA_FIRST').sum():,}",
+        "H 판단 보류",
+        f"{base_for_counts['review_grade'].eq('H').sum():,}",
     )
-    s4.metric("프로그램 수", f"{_program_count(filtered):,}")
+    s4.metric("현재 표 프로그램", f"{len(filtered):,}")
+    grain_summary = summary.get("program_year_review_queue", {})
+    st.caption(
+        f"전체 고유 프로그램 {grain_summary.get('unique_program_count', '—')}개 · "
+        f"프로그램-연도 {grain_summary.get('program_year_count', '—')}행 · "
+        f"프로그램-연도-회계유형 원시 분석행 "
+        f"{grain_summary.get('program_year_account_analysis_row_count', '—')}행"
+    )
 
     if tab == "대기열":
         st.markdown("### 위에서부터 보면 됩니다")
         st.caption(
-            "정렬: **볼 단계**가 먼저 "
-            "(데이터 먼저 → 반복·복수 → 단일 → 맥락 → 모니터링). "
-            "1번이 신호 구성이 약해도 됩니다 — 데이터 검증이 앞선 경우입니다. "
-            "같은 단계 안에서만 신호 구성 → 본예산(동률). "
+            "정렬: **H 판단 보류 → 검토순서 A → B → C → D**. "
+            "H는 고위험 등급이 아니라 데이터·비교가능성을 먼저 확인할 업무입니다. "
+            "같은 등급 안에서만 신호 강도·근거 → 본예산(동률)을 사용합니다. "
             "가중치 시나리오 순위표는 없습니다."
         )
         if filtered.empty:
@@ -1623,9 +1855,8 @@ def main() -> None:
                 height=480,
                 column_config={
                     "예산(억원·참고)": st.column_config.NumberColumn(format="%.1f"),
-                    "독립신호": st.column_config.NumberColumn(format="%d"),
-                    "신호 구성": st.column_config.TextColumn(
-                        help="성과·집행·불일치 각각의 세기. 대기 순서 자체가 아닙니다."
+                    "핵심 근거": st.column_config.TextColumn(
+                        help="성과·집행·예산 방향의 구조화 관측 사실입니다. 정책효과 판정이 아닙니다."
                     ),
                 },
             )
@@ -1637,46 +1868,49 @@ def main() -> None:
                 icon=":material/download:",
             )
             # pick for card
-            options = filtered.sort_values("work_queue_order")
+            options = filtered.sort_values("review_queue_order_within_year")
             labels = {
-                row.candidate_id: (
-                    f"{int(row.work_queue_order)}. "
+                row.program_year_id: (
+                    f"{int(row.review_queue_order_within_year)}. "
                     f"{MINISTRY_LABELS.get(str(row.ministry_code), row.ministry_code)} "
                     f"{int(row.fiscal_year)} {row.performance_program_name}"
                 )
                 for row in options.itertuples()
             }
             picked = st.selectbox(
-                "사업 카드로 열어볼 행",
-                options["candidate_id"].tolist(),
+                "프로그램 상세로 열어볼 행",
+                options["program_year_id"].tolist(),
                 format_func=lambda value: labels[value],
                 key="queue_pick",
             )
             if st.button(
-                "선택한 행 사업 카드 열기", type="primary", icon=":material/arrow_forward:"
+                "선택한 프로그램 상세 열기", type="primary", icon=":material/arrow_forward:"
             ):
-                st.session_state["selected_candidate"] = picked
+                st.session_state["selected_program_year"] = picked
                 _request_main_tab("사업 카드")
                 st.rerun()
 
-        with st.expander("단계가 무슨 뜻인가요?"):
-            for key, label in REVIEW_INTENSITY_LABELS.items():
-                st.markdown(f"- **{label}**: {_plain_lane_help(key)}")
+        with st.expander("등급이 무슨 뜻인가요?"):
+            st.markdown("- **H 판단 보류**: 데이터·비교가능성 확인 후 A–D를 판단합니다.")
+            st.markdown("- **검토순서 A**: 두 명시적 복합 관측 규칙에 해당합니다.")
+            st.markdown("- **검토순서 B**: 강한·반복 단일 또는 서로 다른 두 관측 영역입니다.")
+            st.markdown("- **검토순서 C**: 단일·모호·충돌·사업맥락 확인 질문입니다.")
+            st.markdown("- **검토순서 D**: 현재 정의에서 구조화 검토신호가 미검출됐습니다.")
+            st.caption("A–D는 사업 성과·효율·감액 등급이 아닙니다.")
 
     elif tab == "사업 카드":
         pool = filtered if not filtered.empty else queue
         if pool.empty:
             st.warning("볼 행이 없습니다. 사이드바 필터를 넓혀 보세요.")
         else:
-            options = pool.sort_values("work_queue_order")
-            ids = options["candidate_id"].tolist()
-            if st.session_state.get("selected_candidate") not in ids:
-                st.session_state["selected_candidate"] = ids[0]
+            options = pool.sort_values("review_queue_order_within_year")
+            ids = options["program_year_id"].tolist()
+            if st.session_state.get("selected_program_year") not in ids:
+                st.session_state["selected_program_year"] = ids[0]
             labels = {
-                row.candidate_id: (
+                row.program_year_id: (
                     f"{MINISTRY_LABELS.get(str(row.ministry_code), row.ministry_code)} · "
-                    f"{int(row.fiscal_year)} {row.performance_program_name} / "
-                    f"{_format_account(row.account_type)}"
+                    f"{int(row.fiscal_year)} {row.performance_program_name}"
                 )
                 for row in options.itertuples()
             }
@@ -1684,18 +1918,19 @@ def main() -> None:
                 "프로그램",
                 ids,
                 format_func=lambda value: labels[value],
-                key="selected_candidate",
+                key="selected_program_year",
             )
-            row = queue.loc[queue["candidate_id"].eq(selected_id)].iloc[0]
-            _render_candidate_detail(row, project_queue)
+            row = queue.loc[queue["program_year_id"].eq(selected_id)].iloc[0]
+            _render_program_year_detail(row, queue, account_queue)
 
     else:
-        _render_pdf_tab(selected_ministries, selected_years)
+        _render_pdf_tab(selected_ministries, [selected_year])
 
     with st.expander("분석 정의 (짧게)"):
         st.markdown(
             """
-- **한 행:** 부처 × 프로그램 × 연도 × 회계유형  
+- **기본 점검대기열 한 행:** 부처 × 프로그램 × 연도  
+- **원시 감사행:** 부처 × 프로그램 × 연도 × 회계유형  
 - **본편:** 유형별 대기열 (가중 시나리오 없음)  
 - **신호 구성:** 보고 목표 상태·집행·당해 예산변화 패턴. 대기 순서는 단계(레인)가 먼저
 - **signal_score:** 세 요소가 모두 있을 때만 계산. 같은 단계 안 탐색용이며 1등 점수가 아님

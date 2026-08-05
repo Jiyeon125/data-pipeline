@@ -30,8 +30,8 @@ SIGNAL_SCORE_COMPONENTS = (
 )
 SIGNAL_SCORE_METHOD = "complete_case_equal_mean_of_three_signal_components"
 SIZE_ROLE_IN_WORK_QUEUE = "tiebreak_only"
-ANALYSIS_VERSION = "review_workbench_v2_1"
-OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v2"
+ANALYSIS_VERSION = "review_workbench_v4_program_year_queue"
+OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v4_program_year_queue"
 ANALYSIS_TIME_BASIS = "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
 SIGNAL_FLAGS = (
     "type_repeated_strong_low_execution",
@@ -61,6 +61,23 @@ REVIEW_INTENSITY_ORDER = {
     "MONITOR": 5,
 }
 WORK_LANE_ORDER = {name: order + 1 for name, order in REVIEW_INTENSITY_ORDER.items()}
+REVIEW_GRADE_ORDER = {"H": 0, "A": 1, "B": 2, "C": 3, "D": 4}
+QUESTION_REVIEW_FIELDS = (
+    "review_grade",
+    "reviewability_status",
+    "diagnostic_type",
+    "signal_families",
+    "signal_strength",
+    "context_type",
+    "context_status",
+    "context_source",
+    "context_evidence",
+    "context_effect",
+    "grade_cap_reason",
+    "grade_reason_codes",
+    "next_review_question",
+    "evidence_strength",
+)
 
 
 class PriorityScenarioError(ValueError):
@@ -112,6 +129,7 @@ class PriorityScenarioPaths:
 class PriorityScenarioResult:
     candidates: pd.DataFrame
     work_queue: pd.DataFrame
+    program_year_review_queue: pd.DataFrame
     scenario_scores: pd.DataFrame
     stability: pd.DataFrame
     drilldown: pd.DataFrame
@@ -878,6 +896,7 @@ def validate_candidate_work_queue_integrity(
         "signal_score",
         "signal_score_status",
         "review_intensity",
+        *QUESTION_REVIEW_FIELDS,
         *amount_columns,
     ]
     required = {"candidate_id", *immutable_columns}
@@ -946,6 +965,8 @@ def build_full_population_review_work_queue(
     stability: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """모든 후보를 점검 업무레인과 레인 내부 순서에 빠짐없이 배정합니다."""
+    if set(QUESTION_REVIEW_FIELDS) - set(candidates.columns):
+        candidates = apply_question_review_grades(candidates)
     _require_columns(
         candidates,
         {
@@ -1083,6 +1104,49 @@ def build_full_population_review_work_queue(
     result["work_queue_order_within_ministry"] = (
         ministry_queue_order.groupby("ministry_code").cumcount().add(1).reindex(result.index)
     )
+    strength_order = {
+        "STRONG": 0,
+        "MODERATE": 1,
+        "AMBIGUOUS": 2,
+        "NONE": 3,
+        "NOT_ASSESSED": 4,
+    }
+    result["_grade_strength_order"] = result["signal_strength"].map(strength_order).fillna(5)
+    result["_grade_family_order"] = (
+        -result["signal_families"]
+        .astype("string")
+        .map(lambda value: 0 if value in {"NONE", "<NA>"} else len(str(value).split(";")))
+    )
+    grade_order = result.sort_values(
+        [
+            "review_grade_order",
+            "_grade_strength_order",
+            "_grade_family_order",
+            "_evidence_order",
+            "_budget_order",
+            "candidate_id",
+        ]
+    )
+    result["grade_queue_order"] = pd.Series(
+        range(1, len(result) + 1), index=grade_order.index
+    ).reindex(result.index)
+    result["grade_queue_rank_within_grade"] = (
+        grade_order.groupby("review_grade").cumcount().add(1).reindex(result.index)
+    )
+    ministry_grade_order = result.sort_values(
+        [
+            "ministry_code",
+            "review_grade_order",
+            "_grade_strength_order",
+            "_grade_family_order",
+            "_evidence_order",
+            "_budget_order",
+            "candidate_id",
+        ]
+    )
+    result["grade_queue_order_within_ministry"] = (
+        ministry_grade_order.groupby("ministry_code").cumcount().add(1).reindex(result.index)
+    )
     result = result.sort_values("work_queue_order", ignore_index=True)
     result = result.drop(
         columns=[
@@ -1093,6 +1157,8 @@ def build_full_population_review_work_queue(
             "_signal_score_missing_order",
             "_signal_score_order",
             "_budget_order",
+            "_grade_strength_order",
+            "_grade_family_order",
         ]
     ).convert_dtypes()
 
@@ -1122,6 +1188,15 @@ def build_full_population_review_work_queue(
     if abs(float(source_budget - result_budget)) > 0.5:
         raise PriorityScenarioError("전체 업무대기열에서 본예산 합계가 보존되지 않았습니다.")
     key_integrity = validate_candidate_work_queue_integrity(candidates, result)
+    grade_counts = result["review_grade"].value_counts()
+    grade_budget = result.groupby("review_grade", dropna=False)["account_original_budget"].sum()
+    lane_grade = pd.crosstab(result["work_lane"], result["review_grade"])
+    reason_counts = result["grade_reason_codes"].value_counts()
+    abnormal = (
+        (result["work_lane"].eq("REPEATED_OR_MULTIPLE") & result["review_grade"].eq("D"))
+        | (result["work_lane"].eq("MONITOR") & result["review_grade"].eq("A"))
+        | (result["work_lane"].eq("DATA_FIRST") & result["review_grade"].isin(["A", "B"]))
+    )
     summary = {
         "candidate_count": len(result),
         "candidate_coverage_rate": len(result) / len(candidates),
@@ -1141,6 +1216,25 @@ def build_full_population_review_work_queue(
         "work_queue_order_unique": True,
         "original_budget_reconciled": True,
         "key_integrity": key_integrity,
+        "question_review_grade": {
+            "grade_counts_all_412": {str(key): int(value) for key, value in grade_counts.items()},
+            "grade_counts_reviewable_a_to_d": {
+                str(key): int(value)
+                for key, value in grade_counts.loc[grade_counts.index != "H"].items()
+            },
+            "grade_original_budget": {
+                str(key): float(value) for key, value in grade_budget.items()
+            },
+            "legacy_lane_to_grade": {
+                str(lane): {str(grade): int(count) for grade, count in row.items() if count}
+                for lane, row in lane_grade.to_dict(orient="index").items()
+            },
+            "grade_reason_counts": {str(key): int(value) for key, value in reason_counts.items()},
+            "qa_abnormal_transition_count": int(abnormal.sum()),
+            "qa_abnormal_candidate_ids": result.loc[abnormal, "candidate_id"].astype(str).tolist(),
+            "h_excluded_from_a_to_d_denominator": True,
+            "grade_is_program_review_order_not_policy_evaluation": True,
+        },
         "safety_conclusion_generated": False,
         "final_policy_rank_generated": False,
         "signal_size_separation": {
@@ -1156,9 +1250,159 @@ def build_full_population_review_work_queue(
                 "account_original_budget_desc_tiebreak_only",
                 "candidate_id",
             ],
+            "grade_queue_order": [
+                "review_grade_H_hold_then_A_B_C_D",
+                "signal_strength",
+                "signal_family_count",
+                "evidence_strength",
+                "account_original_budget_desc_tiebreak_only",
+                "candidate_id",
+            ],
+            "legacy_work_queue_order_preserved": True,
         },
     }
     return result, summary
+
+
+def build_current_execution_threshold_qa(
+    candidates: pd.DataFrame,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    """현재연도 집행 임계값만 바꾼 비생산 QA 전환표를 만듭니다."""
+    variants = config.get("question_review", {}).get("current_execution_threshold_qa", [])
+    rows: list[pd.DataFrame] = []
+    for variant in variants:
+        strong = float(variant["execution_strong"])
+        moderate = float(variant["execution_moderate"])
+        if not 0 <= strong < moderate <= 1:
+            raise PriorityScenarioError(
+                "질문형 등급 QA 집행 임계값의 순서 또는 범위가 잘못되었습니다."
+            )
+        changed = candidates.copy()
+        changed["current_execution_severity"] = _current_execution_severity(
+            changed["account_execution_rate"], strong=strong, moderate=moderate
+        )
+        changed = apply_question_review_grades(changed)
+        transition = pd.DataFrame(
+            {
+                "qa_variant": str(variant["name"]),
+                "baseline_review_grade": candidates["review_grade"],
+                "qa_review_grade": changed["review_grade"],
+                "account_original_budget": pd.to_numeric(
+                    candidates["account_original_budget"], errors="coerce"
+                ),
+            }
+        )
+        rows.append(
+            transition.groupby(
+                ["qa_variant", "baseline_review_grade", "qa_review_grade"],
+                dropna=False,
+            )
+            .agg(
+                candidate_count=("account_original_budget", "size"),
+                account_original_budget=("account_original_budget", "sum"),
+            )
+            .reset_index()
+        )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "qa_variant",
+                "baseline_review_grade",
+                "qa_review_grade",
+                "candidate_count",
+                "account_original_budget",
+            ]
+        )
+    return pd.concat(rows, ignore_index=True).convert_dtypes()
+
+
+def build_blind_review_pilot(work_queue: pd.DataFrame, pair_count: int = 10) -> pd.DataFrame:
+    """등급을 숨긴 결정론적 경계 사례 쌍을 만듭니다. 정확도 검증 표본은 아닙니다."""
+    boundaries = [("A", "B"), ("B", "C"), ("C", "D"), ("H", "A"), ("B", "C")]
+    pools = {
+        grade: part.sort_values("candidate_id").reset_index(drop=True)
+        for grade, part in work_queue.groupby("review_grade")
+    }
+    cursors = {grade: 0 for grade in pools}
+    rows: list[dict[str, Any]] = []
+    for pair_index in range(pair_count):
+        left_grade, right_grade = boundaries[pair_index % len(boundaries)]
+        if left_grade not in pools or right_grade not in pools:
+            continue
+        selected = []
+        for grade in (left_grade, right_grade):
+            pool = pools[grade]
+            row = pool.iloc[cursors[grade] % len(pool)]
+            cursors[grade] += 1
+            selected.append(row)
+        for side, row in zip(("LEFT", "RIGHT"), selected, strict=True):
+            candidate_id = str(row["candidate_id"])
+            rows.append(
+                {
+                    "pair_id": f"PAIR_{pair_index + 1:02d}",
+                    "case_side": side,
+                    "anonymous_case_id": hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[
+                        :12
+                    ],
+                    "ministry_code": row.get("ministry_code"),
+                    "fiscal_year": row.get("fiscal_year"),
+                    "account_type": row.get("account_type"),
+                    "performance_program_name": row.get("performance_program_name"),
+                    "account_execution_rate": row.get("account_execution_rate"),
+                    "reported_target_status": row.get("reported_target_status"),
+                    "reported_target_miss_consecutive": row.get("reported_target_miss_consecutive"),
+                    "repeated_low_execution_observed": bool(
+                        pd.to_numeric(
+                            pd.Series([row.get("type_repeated_strong_low_execution_budget_share")]),
+                            errors="coerce",
+                        )
+                        .fillna(0)
+                        .iloc[0]
+                        > 0
+                        or pd.to_numeric(
+                            pd.Series(
+                                [row.get("type_repeated_moderate_low_execution_budget_share")]
+                            ),
+                            errors="coerce",
+                        )
+                        .fillna(0)
+                        .iloc[0]
+                        > 0
+                    ),
+                    "same_year_rapid_budget_increase": row.get("budget_increase_context_signal"),
+                    "evidence_strength": row.get("evidence_strength"),
+                    "reviewer_first_case": pd.NA,
+                    "reviewer_reason": pd.NA,
+                }
+            )
+    result = pd.DataFrame(rows).convert_dtypes()
+    if result["pair_id"].nunique() != pair_count or len(result) != pair_count * 2:
+        raise PriorityScenarioError("블라인드 쌍대비교 파일럿 10쌍을 구성하지 못했습니다.")
+    return result
+
+
+def summarize_retrospective_feedback_by_grade(work_queue: pd.DataFrame) -> list[dict[str, Any]]:
+    """현재 등급에 사용하지 않은 T+1·T+2 결과를 회고용으로만 요약합니다."""
+    rows: list[dict[str, Any]] = []
+    for grade, part in work_queue.groupby("review_grade"):
+        for horizon in ("t1", "t2"):
+            rows.append(
+                {
+                    "review_grade": str(grade),
+                    "feedback_horizon": horizon.upper(),
+                    "eligible_count": int(
+                        part[f"program_total_feedback_complete_{horizon}"].fillna(False).sum()
+                    ),
+                    "reported_miss_then_budget_increase_count": int(
+                        part[f"low_performance_budget_increase_{horizon}"].fillna(False).sum()
+                    ),
+                    "reported_target_met_then_budget_decrease_count": int(
+                        part[f"good_performance_budget_decrease_{horizon}"].fillna(False).sum()
+                    ),
+                }
+            )
+    return rows
 
 
 def build_project_review_work_queue(
@@ -1188,6 +1432,13 @@ def build_project_review_work_queue(
         "independent_signal_family_count",
         "repeated_signal_family_count",
         "execution_review_signal",
+        "review_grade",
+        "diagnostic_type",
+        "next_review_question",
+        "context_type",
+        "context_status",
+        "context_effect",
+        "grade_queue_order",
     ]
     _require_columns(work_queue, set(work_columns), "전체 업무대기열")
     reviewable_ids = candidates.loc[
@@ -1201,6 +1452,17 @@ def build_project_review_work_queue(
     queue, validation = build_stable_top5_project_drilldown(candidates, selection, features)
     queue = queue.drop(columns=["all_scenario_top_5", "all_scenario_top_5_within_ministry"])
     queue = queue.merge(work_queue[work_columns], on="candidate_id", validate="many_to_one")
+    queue = queue.rename(
+        columns={
+            "review_grade": "program_level_review_grade_context",
+            "diagnostic_type": "program_level_diagnostic_type_context",
+            "next_review_question": "program_level_next_review_question_context",
+            "context_type": "program_level_context_type",
+            "context_status": "program_level_context_status",
+            "context_effect": "program_level_context_effect",
+            "grade_queue_order": "program_level_grade_queue_order",
+        }
+    )
     for column in ("all_scenario_top_5", "all_scenario_top_5_within_ministry"):
         queue[column] = queue[column].fillna(False)
     queue["drilldown_selection_scope"] = "FULL_POPULATION_REVIEWABLE"
@@ -1314,6 +1576,15 @@ def build_review_workbench_queue(
     program_tasks["program_context_disclaimer"] = pd.NA
     program_tasks["program_level_priority_reason_context"] = pd.NA
     program_tasks["program_level_reported_target_context_signal"] = pd.NA
+    program_tasks["program_level_review_grade_context"] = program_tasks["review_grade"]
+    program_tasks["program_level_diagnostic_type_context"] = program_tasks["diagnostic_type"]
+    program_tasks["program_level_next_review_question_context"] = program_tasks[
+        "next_review_question"
+    ]
+    program_tasks["program_level_context_type"] = program_tasks["context_type"]
+    program_tasks["program_level_context_status"] = program_tasks["context_status"]
+    program_tasks["program_level_context_effect"] = program_tasks["context_effect"]
+    program_tasks["program_level_grade_queue_order"] = program_tasks["grade_queue_order"]
     program_tasks["project_performance_attributed"] = pd.NA
 
     project_tasks = project_queue.copy()
@@ -1350,6 +1621,13 @@ def build_review_workbench_queue(
         "good_performance_budget_decrease_t2",
         "program_level_priority_reason_context",
         "program_level_reported_target_context_signal",
+        "program_level_review_grade_context",
+        "program_level_diagnostic_type_context",
+        "program_level_next_review_question_context",
+        "program_level_context_type",
+        "program_level_context_status",
+        "program_level_context_effect",
+        "program_level_grade_queue_order",
         "program_context_grain",
         "program_context_disclaimer",
         "project_performance_attributed",
@@ -1389,6 +1667,713 @@ def _current_execution_severity(
     result.loc[numeric.lt(moderate)] = 0.5
     result.loc[numeric.lt(strong)] = 1.0
     return result
+
+
+def attach_reported_target_history(candidates: pd.DataFrame) -> pd.DataFrame:
+    """프로그램-연도 성과 상태를 중복 제거한 뒤 과거 방향으로만 반복 여부를 붙입니다."""
+    _require_columns(
+        candidates,
+        {*PROGRAM_ID_KEY, "fiscal_year", "below_target_count", "comparable_rate_count"},
+        "성과 반복 입력",
+    )
+    result = candidates.copy()
+    valid_key = result[PROGRAM_ID_KEY].notna().all(axis=1)
+    result["_history_fiscal_year"] = pd.to_numeric(result["fiscal_year"], errors="coerce")
+    source = result.loc[
+        valid_key,
+        [
+            *PROGRAM_ID_KEY,
+            "_history_fiscal_year",
+            "below_target_count",
+            "comparable_rate_count",
+        ],
+    ].copy()
+    source["below_target_count"] = pd.to_numeric(source["below_target_count"], errors="coerce")
+    source["comparable_rate_count"] = pd.to_numeric(
+        source["comparable_rate_count"], errors="coerce"
+    )
+    year_key = [*PROGRAM_ID_KEY, "_history_fiscal_year"]
+    inconsistent = source.groupby(year_key, dropna=False)[
+        ["below_target_count", "comparable_rate_count"]
+    ].nunique(dropna=False)
+    if inconsistent.gt(1).any(axis=None):
+        raise PriorityScenarioError(
+            "회계유형별로 복제된 프로그램-연도 성과 상태가 일치하지 않습니다."
+        )
+    history = source.drop_duplicates(year_key).sort_values(year_key)
+    history["_target_miss"] = history["comparable_rate_count"].gt(0) & history[
+        "below_target_count"
+    ].gt(0)
+    history["_target_met"] = history["comparable_rate_count"].gt(0) & history[
+        "below_target_count"
+    ].eq(0)
+    grouped = history.groupby(PROGRAM_ID_KEY, dropna=False, sort=False)
+    previous_year = grouped["_history_fiscal_year"].shift()
+    consecutive = history["_history_fiscal_year"].sub(previous_year).eq(1)
+    history["reported_target_miss_consecutive"] = (
+        history["_target_miss"] & grouped["_target_miss"].shift(fill_value=False) & consecutive
+    )
+    history["reported_target_met_consecutive"] = (
+        history["_target_met"] & grouped["_target_met"].shift(fill_value=False) & consecutive
+    )
+    history["reported_target_history_status"] = "LEFT_CENSORED_OR_FIRST_OBSERVATION"
+    history.loc[previous_year.notna() & ~consecutive, "reported_target_history_status"] = (
+        "NON_CONSECUTIVE_GAP"
+    )
+    history.loc[consecutive, "reported_target_history_status"] = "CONSECUTIVE_PRIOR_YEAR"
+    attach = history[
+        [
+            *year_key,
+            "reported_target_miss_consecutive",
+            "reported_target_met_consecutive",
+            "reported_target_history_status",
+        ]
+    ]
+    before = len(result)
+    result = result.merge(attach, on=year_key, how="left", validate="many_to_one")
+    if len(result) != before:
+        raise PriorityScenarioError("성과 반복 이력 결합에서 후보행이 증식했습니다.")
+    result.loc[~valid_key, "reported_target_miss_consecutive"] = False
+    result.loc[~valid_key, "reported_target_met_consecutive"] = False
+    result.loc[~valid_key, "reported_target_history_status"] = "PROGRAM_KEY_INCOMPLETE"
+    return result.drop(columns="_history_fiscal_year").convert_dtypes()
+
+
+def _bool_column(frame: pd.DataFrame, name: str) -> pd.Series:
+    if name not in frame:
+        return pd.Series(False, index=frame.index, dtype="boolean")
+    return frame[name].fillna(False).astype(bool)
+
+
+def apply_question_review_grades(candidates: pd.DataFrame) -> pd.DataFrame:
+    """기존 신호를 정책평가가 아닌 질문형 원문 검토순서로 변환합니다."""
+    result = candidates.copy()
+    index = result.index
+
+    def numeric(name: str) -> pd.Series:
+        if name not in result:
+            return pd.Series(pd.NA, index=index, dtype="Float64")
+        return pd.to_numeric(result[name], errors="coerce")
+
+    data_blocked = _bool_column(result, "data_validation_signal")
+    current_severity = numeric("current_execution_severity")
+    current_execution = current_severity.fillna(0).gt(0)
+    repeated_low_execution = (
+        numeric("type_repeated_strong_low_execution_budget_share").fillna(0).gt(0)
+        | numeric("type_repeated_moderate_low_execution_budget_share").fillna(0).gt(0)
+        | _bool_column(result, "repeated_low_execution_signal")
+    )
+    performance_miss = _bool_column(result, "performance_signal")
+    repeated_performance_miss = _bool_column(result, "reported_target_miss_consecutive")
+    rapid_budget_increase = _bool_column(result, "budget_increase_context_signal")
+    budget_mismatch = _bool_column(result, "budget_mismatch_signal")
+    accounting_context = _bool_column(result, "accounting_context_signal")
+    structure_context = _bool_column(result, "structure_context_signal")
+    rapid_budget_decrease = _bool_column(result, "budget_decrease_context_signal")
+    repeated_year_end = numeric("type_repeated_year_end_concentration_budget_share").fillna(0).gt(0)
+    execution_signal = current_execution | repeated_low_execution
+    comparable = numeric("comparable_rate_count")
+    performance_missing = (
+        comparable.isna() | comparable.le(0)
+        if "comparable_rate_count" in result
+        else pd.Series(False, index=index, dtype="boolean")
+    )
+    target_status = result.get(
+        "reported_target_status", pd.Series(pd.NA, index=index, dtype="string")
+    ).astype("string")
+    target_met = target_status.isin({"AT_OR_ABOVE", "ALL_COMPARABLE_AT_OR_ABOVE_TARGET"}) | (
+        comparable.gt(0) & numeric("below_target_count").fillna(0).eq(0)
+    )
+    target_adequacy = _bool_column(result, "repeated_target_overachievement") & _bool_column(
+        result, "target_unchanged"
+    )
+
+    if "context_type" not in result:
+        result["context_type"] = "UNKNOWN_TYPE"
+    if "context_status" not in result:
+        result["context_status"] = "CONFIRMED_STRUCTURED"
+    if "context_source" not in result:
+        result["context_source"] = "STRUCTURED_CONTEXT_INVENTORY"
+    if "context_evidence" not in result:
+        result["context_evidence"] = "NO_CONFIRMED_CONTEXT_TAG"
+    if "context_effect" not in result:
+        result["context_effect"] = "NO_GRADE_CHANGE"
+    result.loc[repeated_year_end, "context_type"] = "YEAR_END_CONCENTRATED"
+    result.loc[repeated_year_end, "context_status"] = "PATTERN_CANDIDATE"
+    result.loc[repeated_year_end, "context_source"] = "M3_MONTHLY_PATTERN"
+    result.loc[repeated_year_end, "context_evidence"] = "REPEATED_YEAR_END_CONCENTRATION_PATTERN"
+    result.loc[repeated_year_end, "context_effect"] = "DISPLAY_ONLY"
+    confirmed_multiyear = result["context_type"].eq("MULTIYEAR_CAPITAL") & result[
+        "context_status"
+    ].isin({"CONFIRMED_STRUCTURED", "HUMAN_CONFIRMED"})
+
+    key_incomplete = (
+        result[PROGRAM_ID_KEY].isna().any(axis=1) if set(PROGRAM_ID_KEY) <= set(result) else False
+    )
+    hold = data_blocked | (performance_missing & ~execution_signal) | key_incomplete
+    low_execution_target_met = execution_signal & target_met & ~performance_miss
+    low_execution_performance_missing = execution_signal & performance_missing & ~data_blocked
+    multiyear_relaxation = (
+        confirmed_multiyear
+        & current_execution
+        & ~repeated_low_execution
+        & ~performance_miss
+        & ~rapid_budget_increase
+    )
+    special_c = ~hold & (
+        low_execution_target_met | low_execution_performance_missing | multiyear_relaxation
+    )
+    repeated_execution_with_miss = repeated_low_execution & performance_miss
+    repeated_miss_with_budget_increase = repeated_performance_miss & rapid_budget_increase
+    explicit_a = (
+        ~hold & ~special_c & (repeated_execution_with_miss | repeated_miss_with_budget_increase)
+    )
+    two_domains = performance_miss & execution_signal
+    strong_or_repeated_single = (
+        current_severity.fillna(0).ge(1) | repeated_low_execution | repeated_performance_miss
+    )
+    grade_b = ~hold & ~special_c & ~explicit_a & (two_domains | strong_or_repeated_single)
+    general_context = (
+        performance_miss
+        | execution_signal
+        | budget_mismatch
+        | rapid_budget_increase
+        | rapid_budget_decrease
+        | accounting_context
+        | structure_context
+        | repeated_year_end
+        | target_adequacy
+    )
+    grade_c = ~hold & ~special_c & ~explicit_a & ~grade_b & general_context
+
+    result["review_grade"] = "D"
+    result.loc[grade_c | special_c, "review_grade"] = "C"
+    result.loc[grade_b, "review_grade"] = "B"
+    result.loc[explicit_a, "review_grade"] = "A"
+    result.loc[hold, "review_grade"] = "H"
+    result["reviewability_status"] = "REVIEWABLE"
+    result.loc[result["review_grade"].eq("C"), "reviewability_status"] = "LIMITED"
+    result.loc[hold, "reviewability_status"] = "HOLD"
+    result["signal_strength"] = "NONE"
+    result.loc[result["review_grade"].eq("C"), "signal_strength"] = "AMBIGUOUS"
+    result.loc[result["review_grade"].eq("B"), "signal_strength"] = "MODERATE"
+    result.loc[result["review_grade"].eq("A"), "signal_strength"] = "STRONG"
+    result.loc[hold, "signal_strength"] = "NOT_ASSESSED"
+    result["diagnostic_type"] = "NO_STRUCTURED_SIGNAL_DETECTED"
+    result.loc[grade_c, "diagnostic_type"] = "CONTEXT_OR_SINGLE_SIGNAL_REVIEW"
+    result.loc[grade_b, "diagnostic_type"] = "STRONG_OR_REPEATED_SINGLE_SIGNAL"
+    result.loc[repeated_execution_with_miss & explicit_a, "diagnostic_type"] = (
+        "REPEATED_LOW_EXECUTION_WITH_REPORTED_TARGET_MISS"
+    )
+    result.loc[repeated_miss_with_budget_increase & explicit_a, "diagnostic_type"] = (
+        "REPEATED_REPORTED_TARGET_MISS_WITH_BUDGET_INCREASE"
+    )
+    result.loc[low_execution_target_met & special_c, "diagnostic_type"] = "LOW_EXECUTION_TARGET_MET"
+    result.loc[low_execution_performance_missing & special_c, "diagnostic_type"] = (
+        "LOW_EXECUTION_PERFORMANCE_INFORMATION_MISSING"
+    )
+    result.loc[multiyear_relaxation & special_c, "diagnostic_type"] = (
+        "MULTIYEAR_CONTEXT_WITH_SINGLE_YEAR_LOW_EXECUTION"
+    )
+    result.loc[target_adequacy & grade_c, "diagnostic_type"] = "TARGET_ADEQUACY_REVIEW"
+    result.loc[hold, "diagnostic_type"] = "DATA_OR_COMPARABILITY_HOLD"
+
+    families: list[str] = []
+    for row_index in index:
+        active: list[str] = []
+        if bool(data_blocked.loc[row_index]) or bool(hold.loc[row_index]):
+            active.append("data_quality")
+        if bool(execution_signal.loc[row_index]):
+            active.append("execution")
+        if bool(performance_miss.loc[row_index]):
+            active.append("reported_performance")
+        if bool(budget_mismatch.loc[row_index]) or bool(
+            repeated_miss_with_budget_increase.loc[row_index]
+        ):
+            active.append("budget_performance_mismatch")
+        if bool(target_adequacy.loc[row_index]):
+            active.append("target_or_trend")
+        families.append(";".join(active) or "NONE")
+    result["signal_families"] = families
+    result["grade_cap_reason"] = "NOT_APPLICABLE"
+    result.loc[low_execution_target_met & special_c, "grade_cap_reason"] = (
+        "LOW_EXECUTION_WITH_REPORTED_TARGET_MET"
+    )
+    result.loc[low_execution_performance_missing & special_c, "grade_cap_reason"] = (
+        "PERFORMANCE_INFORMATION_MISSING"
+    )
+    result.loc[multiyear_relaxation & special_c, "grade_cap_reason"] = "CONFIRMED_MULTIYEAR_CONTEXT"
+    result.loc[multiyear_relaxation & special_c, "context_effect"] = "GRADE_RELAXED_TO_C"
+    result["grade_reason_codes"] = result["diagnostic_type"]
+    result["next_review_question"] = "현재 구조화 신호가 없다는 판단의 입력 범위가 충분한가?"
+    result.loc[grade_c, "next_review_question"] = (
+        "원문에 이 신호의 예외 사유나 비교가능성 제한을 설명하는 근거가 있는가?"
+    )
+    result.loc[grade_b, "next_review_question"] = (
+        "반복 또는 강한 단일 신호를 설명하는 공식 근거와 지표 변경이 있는가?"
+    )
+    result.loc[explicit_a, "next_review_question"] = (
+        "겹친 관측 사실이 같은 사업 범위에서 발생했는지 원문과 연도별 근거로 확인할 수 있는가?"
+    )
+    result.loc[low_execution_target_met & special_c, "next_review_question"] = (
+        "집행률 분모와 성과지표 비교가능성을 확인한 뒤, 원문에 목표 적정성·수요 변화·비용 절감·측정 시차를 설명하는 근거가 있는가?"
+    )
+    result.loc[low_execution_performance_missing & special_c, "next_review_question"] = (
+        "성과정보가 없는 이유와 집행률 분모를 원문에서 확인할 수 있는가?"
+    )
+    result.loc[multiyear_relaxation & special_c, "next_review_question"] = (
+        "다년도 일정상 해당 연도 집행 수준이 계획된 단계와 일치하는가?"
+    )
+    result.loc[target_adequacy & grade_c, "next_review_question"] = (
+        "반복 초과달성이 목표 난이도 또는 지표 정의 변경 없이 관측됐는가?"
+    )
+    result.loc[hold, "next_review_question"] = (
+        "프로그램 연결키·금액 단위·성과 비교가능성을 먼저 확정할 수 있는가?"
+    )
+    result["evidence_strength"] = "STRONG"
+    limited = result.get("evidence_status", pd.Series("CONFIRMED", index=index)).astype(
+        "string"
+    ).eq("LIMITED") | result.get("indicator_coverage_status", pd.Series("", index=index)).astype(
+        "string"
+    ).str.startswith("PARTIAL")
+    result.loc[limited | special_c, "evidence_strength"] = "LIMITED"
+    result.loc[hold, "evidence_strength"] = "BLOCKED"
+    result["review_grade_order"] = result["review_grade"].map(REVIEW_GRADE_ORDER)
+    if result["review_grade"].isna().any() or not set(result["review_grade"]).issubset(
+        REVIEW_GRADE_ORDER
+    ):
+        raise PriorityScenarioError(
+            "질문형 점검등급이 모든 후보에 상호배타적으로 배정되지 않았습니다."
+        )
+    return result.convert_dtypes()
+
+
+def _program_year_group_map(candidates: pd.DataFrame) -> pd.DataFrame:
+    """원시 회계행에 충돌을 숨기지 않는 프로그램-연도 ID를 붙입니다."""
+    required = {
+        "candidate_id",
+        "ministry_code",
+        "fiscal_year",
+        "program_code",
+        "field_name",
+        "sector_name",
+        "performance_program_name",
+    }
+    _require_columns(candidates, required, "프로그램-연도 집계 입력")
+    result = candidates.copy()
+    base_key = ["ministry_code", "fiscal_year", "program_code"]
+    metadata = ["field_name", "sector_name", "performance_program_name"]
+    conflict = result.groupby(base_key, dropna=False)[metadata].transform(
+        lambda values: values.nunique(dropna=False)
+    ).gt(1).any(axis=1)
+    result["base_program_year_key_conflict"] = conflict
+
+    def token(value: object) -> str:
+        return "<NA>" if pd.isna(value) else str(value).strip()
+
+    def stable_suffix(values: list[object]) -> str:
+        raw = "|".join(token(value) for value in values)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+    identities: list[str] = []
+    year_ids: list[str] = []
+    for row in result.itertuples(index=False):
+        ministry = token(row.ministry_code)
+        year = token(row.fiscal_year)
+        code = token(row.program_code)
+        if code != "<NA>":
+            identity = f"{ministry}:{code}"
+            if bool(row.base_program_year_key_conflict):
+                identity += ":" + stable_suffix([row.field_name, row.sector_name])
+        else:
+            identity = f"{ministry}:UNKNOWN_CONTINUITY:" + stable_suffix(
+                [year, row.field_name, row.sector_name, row.performance_program_name]
+            )
+        identities.append(identity)
+        year_ids.append(f"{identity}:{year}")
+    result["program_identity_id"] = identities
+    result["program_year_id"] = year_ids
+
+    name_conflict = result.groupby("program_year_id", dropna=False)[
+        "performance_program_name"
+    ].transform(lambda values: values.nunique(dropna=False)).gt(1)
+    if name_conflict.any():
+        result.loc[name_conflict, "program_identity_id"] += result.loc[name_conflict].apply(
+            lambda row: ":" + stable_suffix([row["performance_program_name"]]), axis=1
+        )
+        result.loc[name_conflict, "program_year_id"] = (
+            result.loc[name_conflict, "program_identity_id"]
+            + ":"
+            + result.loc[name_conflict, "fiscal_year"].astype("string")
+        )
+    result["program_year_name_conflict"] = name_conflict
+    return result
+
+
+def build_program_year_review_queue(
+    account_queue: pd.DataFrame,
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """회계유형 원시행을 보존하면서 최종 프로그램-연도 대기열을 만듭니다."""
+    required = {
+        "candidate_id",
+        *KEY,
+        "performance_program_name",
+        "account_original_budget",
+        "account_current_budget",
+        "account_settlement_expenditure",
+        "below_target_count",
+        "comparable_rate_count",
+        "reported_target_status",
+        "data_validation_signal",
+        "analysis_status",
+    }
+    _require_columns(account_queue, required, "회계유형 감사 대기열")
+    source = _program_year_group_map(account_queue)
+    source["_fiscal_year_numeric"] = pd.to_numeric(source["fiscal_year"], errors="coerce")
+    if source["_fiscal_year_numeric"].isna().any():
+        raise PriorityScenarioError("프로그램-연도 집계 입력의 회계연도가 숫자가 아닙니다.")
+
+    amount_columns = {
+        "program_original_budget": "account_original_budget",
+        "program_current_budget": "account_current_budget",
+        "program_expenditure": "account_settlement_expenditure",
+    }
+    performance_columns = [
+        "below_target_count",
+        "at_or_above_target_count",
+        "comparable_rate_count",
+        "reported_target_status",
+        "indicator_coverage_status",
+        "repeated_target_overachievement",
+        "target_unchanged",
+    ]
+    context_columns = [
+        "context_type",
+        "context_status",
+        "context_source",
+        "context_evidence",
+        "context_effect",
+    ]
+    weighted_signal_columns = [
+        "type_repeated_year_end_concentration_budget_share",
+        "type_accounting_adjustment_pattern_budget_share",
+        "type_program_budget_concentration_budget_share",
+    ]
+    rows: list[dict[str, Any]] = []
+    for program_year_id, part in source.groupby("program_year_id", sort=True, dropna=False):
+        part = part.sort_values("candidate_id")
+        first = part.iloc[0]
+        row: dict[str, Any] = {
+            "program_year_id": program_year_id,
+            "program_identity_id": first["program_identity_id"],
+            "ministry_code": first["ministry_code"],
+            "fiscal_year": int(first["_fiscal_year_numeric"]),
+            "program_code": first["program_code"],
+            "field_name": first["field_name"],
+            "sector_name": first["sector_name"],
+            "performance_program_name": first["performance_program_name"],
+            "raw_account_row_count": len(part),
+            "account_type_count": int(part["account_type"].nunique(dropna=False)),
+            "account_types": ";".join(
+                sorted(part["account_type"].fillna("NOT_AVAILABLE").astype(str).unique())
+            ),
+            "raw_candidate_ids": json.dumps(part["candidate_id"].tolist(), ensure_ascii=False),
+            "base_program_year_key_conflict": bool(
+                part["base_program_year_key_conflict"].any()
+            ),
+            "program_year_name_conflict": bool(part["program_year_name_conflict"].any()),
+        }
+        missing_amount = False
+        for output, raw in amount_columns.items():
+            values = pd.to_numeric(part[raw], errors="coerce")
+            row[output] = values.sum(min_count=1)
+            missing_amount |= values.isna().any()
+
+        performance_conflicts: list[str] = []
+        for column in performance_columns:
+            if column not in part:
+                row[column] = pd.NA
+                continue
+            if part[column].nunique(dropna=False) > 1:
+                performance_conflicts.append(column)
+                row[column] = pd.NA
+            else:
+                row[column] = part[column].iloc[0]
+        row["performance_status_conflict_fields"] = ";".join(performance_conflicts)
+        row["program_performance_status_conflict"] = bool(performance_conflicts)
+        for column in context_columns:
+            if column in part and part[column].nunique(dropna=False) == 1:
+                row[column] = part[column].iloc[0]
+
+        weights = pd.to_numeric(part["account_original_budget"], errors="coerce")
+        for column in weighted_signal_columns:
+            values = pd.to_numeric(part.get(column), errors="coerce")
+            valid = values.notna() & weights.notna()
+            denominator = weights.loc[valid].sum()
+            row[column] = (
+                float((values.loc[valid] * weights.loc[valid]).sum() / denominator)
+                if valid.any() and denominator > 0
+                else pd.NA
+            )
+        row["account_type_signal_details"] = json.dumps(
+            [
+                {
+                    "candidate_id": item.candidate_id,
+                    "account_type": (
+                        "NOT_AVAILABLE" if pd.isna(item.account_type) else str(item.account_type)
+                    ),
+                    "review_grade": item.review_grade,
+                    "diagnostic_type": item.diagnostic_type,
+                    "execution_rate": (
+                        None
+                        if pd.isna(item.account_execution_rate)
+                        else float(item.account_execution_rate)
+                    ),
+                }
+                for item in part.itertuples()
+            ],
+            ensure_ascii=False,
+        )
+        row["evidence_status"] = (
+            "DATA_BLOCKED"
+            if part["data_validation_signal"].fillna(False).astype(bool).any()
+            else (
+                "LIMITED"
+                if "evidence_status" in part
+                and part["evidence_status"].astype("string").eq("LIMITED").any()
+                else "CONFIRMED"
+            )
+        )
+        row["data_validation_signal"] = bool(
+            part["data_validation_signal"].fillna(False).astype(bool).any()
+            or part["analysis_status"].astype("string").ne("JOINT_ANALYSIS").any()
+            or row["base_program_year_key_conflict"]
+            or row["program_year_name_conflict"]
+            or row["program_performance_status_conflict"]
+            or pd.isna(row["program_code"])
+            or missing_amount
+        )
+        row["analysis_status"] = (
+            "DATA_QUALITY_HOLD" if row["data_validation_signal"] else "PROGRAM_YEAR_REVIEW"
+        )
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+    result["program_execution_rate"] = pd.to_numeric(
+        result["program_expenditure"], errors="coerce"
+    ).div(pd.to_numeric(result["program_current_budget"], errors="coerce").where(lambda s: s.gt(0)))
+    thresholds = config["thresholds"]
+    result["current_execution_severity"] = _current_execution_severity(
+        result["program_execution_rate"],
+        strong=float(thresholds["execution_strong"]),
+        moderate=float(thresholds["execution_moderate"]),
+    )
+    comparable = pd.to_numeric(result["comparable_rate_count"], errors="coerce")
+    result["performance_gap"] = pd.to_numeric(
+        result["below_target_count"], errors="coerce"
+    ).div(comparable.where(comparable.gt(0)))
+    result["performance_signal"] = result["performance_gap"].fillna(0).gt(0)
+
+    result = result.sort_values(["program_identity_id", "fiscal_year", "program_year_id"])
+    history = result.groupby("program_identity_id", sort=False, dropna=False)
+    previous_year = history["fiscal_year"].shift()
+    consecutive = result["fiscal_year"].sub(previous_year).eq(1)
+    previous_low = history["current_execution_severity"].shift().fillna(0).gt(0)
+    current_low = result["current_execution_severity"].fillna(0).gt(0)
+    result["repeated_low_execution_signal"] = current_low & previous_low & consecutive
+    previous_miss = history["performance_signal"].shift(fill_value=False)
+    result["reported_target_miss_consecutive"] = (
+        result["performance_signal"] & previous_miss & consecutive
+    )
+    target_met = comparable.gt(0) & ~result["performance_signal"]
+    previous_met = target_met.groupby(result["program_identity_id"], sort=False).shift(
+        fill_value=False
+    )
+    result["reported_target_met_consecutive"] = target_met & previous_met & consecutive
+    result["reported_target_history_status"] = "LEFT_CENSORED_OR_FIRST_OBSERVATION"
+    result.loc[previous_year.notna() & ~consecutive, "reported_target_history_status"] = (
+        "NON_CONSECUTIVE_GAP"
+    )
+    result.loc[consecutive, "reported_target_history_status"] = "CONSECUTIVE_PRIOR_YEAR"
+    result.loc[result["program_code"].isna(), "reported_target_history_status"] = (
+        "UNKNOWN_CONTINUITY"
+    )
+
+    previous_budget = history["program_original_budget"].shift()
+    result["program_budget_change_rate"] = pd.to_numeric(
+        result["program_original_budget"], errors="coerce"
+    ).div(pd.to_numeric(previous_budget, errors="coerce").where(lambda s: s.gt(0))).sub(1)
+    result.loc[~consecutive, "program_budget_change_rate"] = pd.NA
+    result["budget_increase_context_signal"] = pd.to_numeric(
+        result["program_budget_change_rate"], errors="coerce"
+    ).gt(0)
+    result["budget_decrease_context_signal"] = pd.to_numeric(
+        result["program_budget_change_rate"], errors="coerce"
+    ).lt(0)
+    result["budget_mismatch_signal"] = (
+        result["performance_signal"] & result["budget_increase_context_signal"]
+    ) | (target_met & result["budget_decrease_context_signal"])
+    result["budget_performance_mismatch"] = result["budget_mismatch_signal"].astype(float)
+    result["accounting_context_signal"] = pd.to_numeric(
+        result["type_accounting_adjustment_pattern_budget_share"], errors="coerce"
+    ).fillna(0).gt(0)
+    result["structure_context_signal"] = pd.to_numeric(
+        result["type_program_budget_concentration_budget_share"], errors="coerce"
+    ).fillna(0).gt(0)
+    result["type_repeated_strong_low_execution_budget_share"] = 0.0
+    result["type_repeated_moderate_low_execution_budget_share"] = 0.0
+    result["execution_management"] = pd.concat(
+        [
+            result["current_execution_severity"],
+            result["repeated_low_execution_signal"].astype(float),
+        ],
+        axis=1,
+    ).max(axis=1, skipna=False)
+    result["repeated_target_overachievement"] = result[
+        "repeated_target_overachievement"
+    ].fillna(False).astype(bool)
+    result["target_unchanged"] = result["target_unchanged"].fillna(False).astype(bool)
+    context_defaults = {
+        "context_type": "UNKNOWN_TYPE",
+        "context_status": "CONFIRMED_STRUCTURED",
+        "context_source": "PROGRAM_YEAR_STRUCTURED_AGGREGATION",
+        "context_evidence": "NO_CONFIRMED_CONTEXT_TAG",
+        "context_effect": "NO_GRADE_CHANGE",
+    }
+    for column, default in context_defaults.items():
+        if column not in result:
+            result[column] = default
+        else:
+            result[column] = result[column].fillna(default)
+
+    observed = result.groupby("program_identity_id", dropna=False)["fiscal_year"]
+    result["observed_start_year"] = observed.transform("min")
+    result["observed_end_year"] = observed.transform("max")
+    result["observed_year_count"] = observed.transform("nunique")
+    result["continuity_status"] = "EXACT_PROGRAM_KEY"
+    result.loc[result["base_program_year_key_conflict"], "continuity_status"] = (
+        "EXACT_METADATA_DISAMBIGUATION_DATA_HOLD"
+    )
+    result.loc[result["program_code"].isna(), "continuity_status"] = "UNKNOWN_CONTINUITY"
+
+    result = apply_question_review_grades(result)
+    result["independent_signal_family_count"] = result["signal_families"].map(
+        lambda value: 0 if value == "NONE" else len(str(value).split(";"))
+    )
+    result["repeated_signal_family_count"] = (
+        result["repeated_low_execution_signal"].astype(int)
+        + result["reported_target_miss_consecutive"].astype(int)
+    )
+    strength_order = {"STRONG": 0, "MODERATE": 1, "AMBIGUOUS": 2, "NONE": 3, "NOT_ASSESSED": 4}
+    result["_strength_order"] = result["signal_strength"].map(strength_order).fillna(5)
+    result["_family_order"] = -result["independent_signal_family_count"]
+    result["_budget_order"] = -pd.to_numeric(result["program_original_budget"], errors="coerce").fillna(0)
+    result = result.sort_values(
+        [
+            "fiscal_year",
+            "review_grade_order",
+            "_strength_order",
+            "_family_order",
+            "_budget_order",
+            "program_year_id",
+        ]
+    )
+    result["program_year_queue_order"] = range(1, len(result) + 1)
+    result["review_queue_order_within_year"] = result.groupby("fiscal_year").cumcount() + 1
+    result = result.drop(columns=["_strength_order", "_family_order", "_budget_order"])
+
+    amount_diffs = {}
+    for output, raw in amount_columns.items():
+        amount_diffs[output] = float(
+            abs(
+                pd.to_numeric(source[raw], errors="coerce").sum()
+                - pd.to_numeric(result[output], errors="coerce").sum()
+            )
+        )
+    if any(value > 0.5 for value in amount_diffs.values()):
+        raise PriorityScenarioError(f"프로그램-연도 집계 전후 금액이 다릅니다: {amount_diffs}")
+    if result["program_year_id"].duplicated().any():
+        raise PriorityScenarioError("프로그램-연도 대기열 기본키가 중복되었습니다.")
+    if result.groupby(["fiscal_year", "program_year_id"]).size().gt(1).any():
+        raise PriorityScenarioError("선택연도 대기열에 프로그램이 중복되었습니다.")
+
+    raw_execution = (
+        pd.to_numeric(source["current_execution_severity"], errors="coerce").fillna(0).gt(0)
+        | pd.to_numeric(
+            source["type_repeated_strong_low_execution_budget_share"], errors="coerce"
+        ).fillna(0).gt(0)
+        | pd.to_numeric(
+            source["type_repeated_moderate_low_execution_budget_share"], errors="coerce"
+        ).fillna(0).gt(0)
+    )
+    raw_target_met = source["reported_target_status"].isin(
+        {"AT_OR_ABOVE", "ALL_COMPARABLE_AT_OR_ABOVE_TARGET"}
+    )
+    raw_counterexample = source.loc[
+        raw_execution & raw_target_met & ~source["performance_signal"].fillna(False).astype(bool)
+    ]
+    program_counterexample = result.loc[
+        result["diagnostic_type"].eq("LOW_EXECUTION_TARGET_MET")
+        & result["review_grade"].eq("C")
+    ]
+    ministry_years = result.groupby("ministry_code")["fiscal_year"].agg(
+        lambda values: set(values.astype(int))
+    )
+    common_years = set.intersection(*ministry_years.tolist()) if len(ministry_years) else set()
+    summary = {
+        "grain": "ministry x program x fiscal_year",
+        "primary_key": "program_year_id",
+        "preferred_key_candidate": ["ministry_code", "fiscal_year", "program_code"],
+        "preferred_key_conflict_group_count": int(
+            source.loc[source["base_program_year_key_conflict"], ["ministry_code", "fiscal_year", "program_code"]]
+            .drop_duplicates()
+            .shape[0]
+        ),
+        "program_year_key_unique": True,
+        "unique_program_count": int(result["program_identity_id"].nunique()),
+        "program_year_count": len(result),
+        "program_year_account_analysis_row_count": len(source),
+        "unique_program_count_by_year": {
+            str(int(key)): int(value)
+            for key, value in result.groupby("fiscal_year")["program_year_id"].nunique().items()
+        },
+        "account_type_count_distribution": {
+            str(int(key)): int(value) for key, value in result["account_type_count"].value_counts().sort_index().items()
+        },
+        "grade_counts": {
+            str(key): int(value) for key, value in result["review_grade"].value_counts().items()
+        },
+        "grade_original_budget": {
+            str(key): float(value)
+            for key, value in result.groupby("review_grade")["program_original_budget"].sum().items()
+        },
+        "latest_common_analysis_year": max(common_years) if common_years else None,
+        "selected_year_unique_program_count": (
+            int(result.loc[result["fiscal_year"].eq(max(common_years)), "program_year_id"].nunique())
+            if common_years
+            else 0
+        ),
+        "amount_reconciliation_absolute_differences": amount_diffs,
+        "performance_status_conflict_program_year_count": int(
+            result["program_performance_status_conflict"].sum()
+        ),
+        "program_performance_account_duplicate_counted_as_additional_performance": 0,
+        "low_execution_target_met": {
+            "raw_account_row_count": len(raw_counterexample),
+            "unique_program_year_count": int(raw_counterexample["program_year_id"].nunique()),
+            "unique_program_count": int(raw_counterexample["program_identity_id"].nunique()),
+            "program_year_c_grade_count": len(program_counterexample),
+        },
+        "top5_unique_programs_by_year": {
+            str(int(year)): bool(
+                part.nsmallest(5, "review_queue_order_within_year")["program_year_id"].nunique()
+                == min(5, len(part))
+            )
+            for year, part in result.groupby("fiscal_year")
+        },
+    }
+    return result.convert_dtypes(), summary
 
 
 def _build_priority_reason(row: pd.Series) -> str:
@@ -1799,6 +2784,8 @@ def build_candidate_population(
         + ":"
         + merged["account_type"].fillna("NA").astype(str)
     )
+    merged = attach_reported_target_history(merged)
+    merged = apply_question_review_grades(merged)
     merged["priority_tier_order"] = merged["priority_tier"].map(TIER_ORDER)
     result = merged.sort_values(
         [
@@ -2342,6 +3329,7 @@ def _build_summary(
             ],
             "weighted_sum_used": False,
             "signal_score_used_in_work_queue": True,
+            "signal_score_used_in_default_grade_queue": False,
             "partial_signal_score_used_in_work_queue": False,
             "signal_score_method": SIGNAL_SCORE_METHOD,
             "signal_score_components": list(SIGNAL_SCORE_COMPONENTS),
@@ -2351,6 +3339,16 @@ def _build_summary(
             "t1_t2_excluded_from_current_review_intensity": True,
             "performance_attributed_to_detailed_project": False,
             "account_type_kept_separate": True,
+            "question_review_grade_precedence": [
+                "H_HOLD",
+                "SPECIAL_C_CONFLICT_OR_MISSING_PERFORMANCE",
+                "A_EXPLICIT_COMPOUND_RULES",
+                "B_STRONG_OR_REPEATED_SINGLE",
+                "C_CONTEXT_OR_SINGLE",
+                "D_NO_TRIGGER_DETECTED",
+            ],
+            "legacy_work_queue_order_preserved": True,
+            "default_ui_order": "grade_queue_order",
         },
         "legacy_scenario_components": {
             "performance_gap": "below_target_count / comparable_rate_count",
@@ -2501,6 +3499,12 @@ def run_priority_scenario_analysis(
         candidates,
         stability,
     )
+    program_year_review_queue, program_year_review_summary = build_program_year_review_queue(
+        work_queue,
+        config,
+    )
+    threshold_qa = build_current_execution_threshold_qa(candidates, config)
+    blind_review_pilot = build_blind_review_pilot(work_queue)
     drilldown, drilldown_summary = build_stable_top5_project_drilldown(
         candidates,
         stability,
@@ -2529,6 +3533,16 @@ def run_priority_scenario_analysis(
         provenance=provenance,
     )
     summary["full_population_review_work_queue"] = work_queue_summary
+    summary["program_year_review_queue"] = program_year_review_summary
+    summary["question_review_grade"] = {
+        **work_queue_summary["question_review_grade"],
+        "retrospective_feedback_by_grade": summarize_retrospective_feedback_by_grade(work_queue),
+        "threshold_qa_scope": "CURRENT_YEAR_EXECUTION_THRESHOLDS_ONLY_NOT_PRODUCTION_RULES",
+        "threshold_qa_transition_rows": len(threshold_qa),
+        "blind_pair_count": int(blind_review_pilot["pair_id"].nunique()),
+        "blind_pair_role": "USABILITY_PILOT_NOT_ACCURACY_VALIDATION",
+        "t1_t2_used_in_review_grade": False,
+    }
     summary["drilldown"] = drilldown_summary
     summary["project_review_queue"] = project_review_summary
     summary["review_workbench_queue"] = {
@@ -2560,6 +3574,7 @@ def run_priority_scenario_analysis(
     output_map = {
         "candidate_population.csv": candidates,
         "full_population_review_work_queue.csv": work_queue,
+        "program_year_review_queue.csv": program_year_review_queue,
         "scenario_scores.csv": scenario_scores,
         "rank_stability.csv": stability,
         "stable_top5_project_drilldown.csv": drilldown,
@@ -2567,6 +3582,8 @@ def run_priority_scenario_analysis(
         "review_workbench_queue.csv": review_workbench_queue,
         "scenario_spearman.csv": spearman,
         "top_k_overlap.csv": top_k_overlap,
+        "question_review_threshold_qa.csv": threshold_qa,
+        "question_review_blind_pairs.csv": blind_review_pilot,
     }
     output_paths = tuple(paths.output_dir / name for name in output_map)
     summary_path = paths.output_dir / "analysis_summary.json"
@@ -2590,6 +3607,7 @@ def run_priority_scenario_analysis(
     return PriorityScenarioResult(
         candidates=candidates,
         work_queue=work_queue,
+        program_year_review_queue=program_year_review_queue,
         scenario_scores=scenario_scores,
         stability=stability,
         drilldown=drilldown,

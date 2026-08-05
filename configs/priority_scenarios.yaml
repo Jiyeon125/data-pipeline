@@ -14,6 +14,19 @@ thresholds:
   repeated_moderate_weight: 0.50
   repeated_year_end_weight: 0.50
 
+question_review:
+  # 생산 등급 기준이 아니라 현재연도 집행 임계값에 대한 QA 전환만 확인한다.
+  current_execution_threshold_qa:
+    - name: lenient_qa_only
+      execution_strong: 0.75
+      execution_moderate: 0.85
+    - name: production_threshold
+      execution_strong: 0.80
+      execution_moderate: 0.90
+    - name: strict_qa_only
+      execution_strong: 0.85
+      execution_moderate: 0.95
+
 top_k:
   - 5
   - 10

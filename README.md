@@ -436,7 +436,7 @@ fiscal-analytics analyze-mss-priority-scenarios --root . --overwrite
 - 발표용 그림: `artifacts/figures/presentation/mss_priority_scenario_*.png`
 - 탐색 순위이며 최종 복합점수·정책 우선순위는 생성하지 않음
 
-## 다부처 탐색 순위와 Streamlit 대시보드
+## 다부처 질문형 점검등급과 Streamlit 대시보드
 
 후보·시나리오 분석을 재생성한 뒤 대시보드를 실행합니다.
 
@@ -445,9 +445,9 @@ fiscal-analytics analyze-priority-scenarios --root . --overwrite
 python -m streamlit run src/fiscal_dashboard/app.py
 ```
 
-- 기본 화면: 결합 현황과 다음 작업을 보여주는 단계형 작업대
+- 기본 화면: H 판단 보류와 A~D 원문 검토순서를 분리한 질문형 작업대
 - 작업 순서: 시작 → 데이터 확인 → 후보 분석 → 기준 비교 → 원문 검수
-- 필터: 부처, 후보 분석 범위, 회계연도, 회계유형, 점검단계
+- 필터: 부처, 회계연도, 회계유형, 질문형 점검등급
 - 후보 연결: 선택 프로그램에서 해당 성과지표 PDF 검수 화면으로 바로 이동
 - 원문 검수: 수기값·PDF값·근거 페이지 이미지와 사람 검수 상태 연속 저장
 - 원문 검수 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
@@ -457,6 +457,10 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 다운로드: 현재 필터의 전체 점검 업무대기열 CSV
 - 정식 분석 입력: `data/analytics/multi_ministry_priority_scenarios/`
 - 전체 412행 점검 업무대기열: `full_population_review_work_queue.csv`
+- 질문형 등급은 사업 성과·효율·감액 등급이 아니며, 기존 레인과 가중치
+  시나리오는 감사·민감도 QA용으로 보존
+- 당해연도 집행 임계값 QA: `question_review_threshold_qa.csv`
+- 등급을 숨긴 10쌍 사용성 파일럿: `question_review_blind_pairs.csv`
 - 데이터 검증 15행을 제외한 세부사업 검토대기열:
   `full_population_project_review_queue.csv`
 - 시나리오 필수 변수가 완전한 208행에만 기존 네 시나리오 순위를 표시하며,

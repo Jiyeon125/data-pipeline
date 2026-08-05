@@ -12,9 +12,12 @@ from analytics.mss_priority_scenario_analysis import (
     _build_retrospective_feedback_reason,
     aggregate_program_account_signals,
     apply_feedback_cutoff,
+    apply_question_review_grades,
+    attach_reported_target_history,
     attach_signal_size_separation,
     build_candidate_population,
     build_full_population_review_work_queue,
+    build_program_year_review_queue,
     build_project_review_work_queue,
     build_rank_stability,
     build_review_workbench_queue,
@@ -25,6 +28,330 @@ from analytics.mss_priority_scenario_analysis import (
     score_scenarios,
     validate_candidate_work_queue_integrity,
 )
+
+
+def _question_grade_row(**changes: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "ministry_code": "102",
+        "field_name": "f",
+        "sector_name": "s",
+        "program_code": "p",
+        "fiscal_year": 2024,
+        "data_validation_signal": False,
+        "comparable_rate_count": 1,
+        "below_target_count": 0,
+        "reported_target_status": "ALL_COMPARABLE_AT_OR_ABOVE_TARGET",
+        "performance_signal": False,
+        "current_execution_severity": 0.0,
+        "type_repeated_strong_low_execution_budget_share": 0.0,
+        "type_repeated_moderate_low_execution_budget_share": 0.0,
+        "type_repeated_year_end_concentration_budget_share": 0.0,
+        "reported_target_miss_consecutive": False,
+        "budget_increase_context_signal": False,
+        "budget_decrease_context_signal": False,
+        "budget_mismatch_signal": False,
+        "accounting_context_signal": False,
+        "structure_context_signal": False,
+        "evidence_status": "CONFIRMED",
+        "indicator_coverage_status": "COMPLETE_REPORTED_RATE_COVERAGE",
+    }
+    row.update(changes)
+    return row
+
+
+@pytest.mark.parametrize(
+    ("changes", "grade", "diagnostic"),
+    [
+        (
+            {"current_execution_severity": 1.0, "budget_increase_context_signal": True},
+            "C",
+            "LOW_EXECUTION_TARGET_MET",
+        ),
+        (
+            {
+                "reported_target_status": "ALL_COMPARABLE_BELOW_TARGET",
+                "below_target_count": 1,
+                "performance_signal": True,
+                "reported_target_miss_consecutive": True,
+            },
+            "B",
+            "STRONG_OR_REPEATED_SINGLE_SIGNAL",
+        ),
+        (
+            {
+                "current_execution_severity": 0.5,
+                "comparable_rate_count": 0,
+                "reported_target_status": "NO_COMPARABLE_RATE",
+            },
+            "C",
+            "LOW_EXECUTION_PERFORMANCE_INFORMATION_MISSING",
+        ),
+        (
+            {"repeated_target_overachievement": True, "target_unchanged": True},
+            "C",
+            "TARGET_ADEQUACY_REVIEW",
+        ),
+        (
+            {
+                "reported_target_status": "ALL_COMPARABLE_BELOW_TARGET",
+                "below_target_count": 1,
+                "performance_signal": True,
+                "reported_target_miss_consecutive": True,
+                "budget_increase_context_signal": True,
+                "budget_mismatch_signal": True,
+            },
+            "A",
+            "REPEATED_REPORTED_TARGET_MISS_WITH_BUDGET_INCREASE",
+        ),
+        (
+            {
+                "current_execution_severity": 1.0,
+                "context_type": "MULTIYEAR_CAPITAL",
+                "context_status": "CONFIRMED_STRUCTURED",
+                "context_source": "STRUCTURED_FIELD",
+                "context_evidence": "CONFIRMED_MULTIYEAR",
+            },
+            "C",
+            "MULTIYEAR_CONTEXT_WITH_SINGLE_YEAR_LOW_EXECUTION",
+        ),
+        (
+            {"data_validation_signal": True},
+            "H",
+            "DATA_OR_COMPARABILITY_HOLD",
+        ),
+        ({}, "D", "NO_STRUCTURED_SIGNAL_DETECTED"),
+    ],
+)
+def test_question_review_grade_counterexamples(
+    changes: dict[str, object], grade: str, diagnostic: str
+) -> None:
+    result = apply_question_review_grades(pd.DataFrame([_question_grade_row(**changes)]))
+
+    assert result.loc[0, "review_grade"] == grade
+    assert result.loc[0, "diagnostic_type"] == diagnostic
+    if changes.get("current_execution_severity") and not changes.get("performance_signal"):
+        assert result.loc[0, "review_grade"] != "A"
+
+
+def test_reported_target_history_is_consecutive_asof_and_deduplicated() -> None:
+    rows = []
+    for year, account in (("2022", "GENERAL"), ("2022", "FUND"), ("2024", "GENERAL")):
+        rows.append(
+            _question_grade_row(
+                fiscal_year=year,
+                account_type=account,
+                below_target_count=1,
+                reported_target_status="ALL_COMPARABLE_BELOW_TARGET",
+                performance_signal=True,
+            )
+        )
+    gap = attach_reported_target_history(pd.DataFrame(rows))
+    assert not gap["reported_target_miss_consecutive"].any()
+    assert (
+        gap.loc[gap["fiscal_year"].eq("2024"), "reported_target_history_status"]
+        .eq("NON_CONSECUTIVE_GAP")
+        .all()
+    )
+
+    with_middle = pd.concat(
+        [
+            pd.DataFrame(rows),
+            pd.DataFrame(
+                [
+                    _question_grade_row(
+                        fiscal_year="2023",
+                        account_type="GENERAL",
+                        below_target_count=1,
+                        reported_target_status="ALL_COMPARABLE_BELOW_TARGET",
+                        performance_signal=True,
+                    )
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    history = attach_reported_target_history(with_middle.sample(frac=1, random_state=5))
+    assert (
+        history.loc[history["fiscal_year"].eq("2022"), "reported_target_miss_consecutive"]
+        .eq(False)
+        .all()
+    )
+    assert history.loc[
+        history["fiscal_year"].isin(["2023", "2024"]), "reported_target_miss_consecutive"
+    ].all()
+
+
+def test_t1_t2_values_do_not_change_question_review_grade() -> None:
+    row = _question_grade_row(current_execution_severity=1.0)
+    before = apply_question_review_grades(
+        pd.DataFrame([{**row, "low_performance_budget_increase_t1": False}])
+    )
+    after = apply_question_review_grades(
+        pd.DataFrame([{**row, "low_performance_budget_increase_t1": True}])
+    )
+
+    assert before.loc[0, "review_grade"] == after.loc[0, "review_grade"]
+
+
+def _program_account_row(
+    program_code: str,
+    year: int,
+    *,
+    account_type: str = "GENERAL_ACCOUNT",
+    original: float = 100.0,
+    current: float = 100.0,
+    expenditure: float = 100.0,
+    below: int | None = 0,
+    comparable: int | None = 1,
+    field_name: str = "분야",
+    sector_name: str = "부문",
+    program_name: str | None = None,
+    data_validation: bool = False,
+    **extra: object,
+) -> dict[str, object]:
+    status = (
+        "NO_COMPARABLE_RATE"
+        if not comparable
+        else (
+            "ALL_COMPARABLE_BELOW_TARGET"
+            if below
+            else "ALL_COMPARABLE_AT_OR_ABOVE_TARGET"
+        )
+    )
+    row: dict[str, object] = {
+        "candidate_id": f"102:{year}:{field_name}:{sector_name}:{program_code}:{account_type}",
+        "ministry_code": "102",
+        "field_name": field_name,
+        "sector_name": sector_name,
+        "program_code": program_code,
+        "fiscal_year": year,
+        "account_type": account_type,
+        "performance_program_name": program_name or f"프로그램 {program_code}",
+        "account_original_budget": original,
+        "account_current_budget": current,
+        "account_settlement_expenditure": expenditure,
+        "account_execution_rate": expenditure / current if current else pd.NA,
+        "below_target_count": below,
+        "at_or_above_target_count": (comparable - below) if comparable is not None and below is not None else pd.NA,
+        "comparable_rate_count": comparable,
+        "reported_target_status": status,
+        "indicator_coverage_status": "COMPLETE_REPORTED_RATE_COVERAGE",
+        "data_validation_signal": data_validation,
+        "analysis_status": "DATA_REVIEW" if data_validation else "JOINT_ANALYSIS",
+        "evidence_status": "DATA_BLOCKED" if data_validation else "CONFIRMED",
+        "review_grade": "D",
+        "diagnostic_type": "NO_STRUCTURED_SIGNAL_DETECTED",
+        "type_repeated_year_end_concentration_budget_share": 0.0,
+        "type_accounting_adjustment_pattern_budget_share": 0.0,
+        "type_program_budget_concentration_budget_share": 0.0,
+        "current_execution_severity": 0.0,
+        "type_repeated_strong_low_execution_budget_share": 0.0,
+        "type_repeated_moderate_low_execution_budget_share": 0.0,
+        "performance_signal": bool(below),
+    }
+    row.update(extra)
+    return row
+
+
+def test_program_year_queue_reaggregates_money_performance_and_grades() -> None:
+    rows = [
+        # 저집행 + 목표달성: 두 회계 합산 후에도 C, 성과 개수는 합산하지 않음.
+        _program_account_row("P1", 2024, current=100, expenditure=60),
+        _program_account_row(
+            "P1", 2024, account_type="FUND", original=50, current=50, expenditure=30
+        ),
+        # 연속 목표미달 + 프로그램 총예산 증가: 2024 A.
+        _program_account_row("P2", 2023, original=100, below=1),
+        _program_account_row("P2", 2024, original=120, below=1),
+        # 중간연도 누락은 반복으로 세지 않음.
+        _program_account_row("P3", 2022, current=100, expenditure=70),
+        _program_account_row("P3", 2024, current=100, expenditure=70),
+        # 성과정보 없음 + 저집행은 C, 데이터 불확실은 H, 신호 없음은 D.
+        _program_account_row("P4", 2024, current=100, expenditure=70, below=None, comparable=None),
+        _program_account_row("P5", 2024, data_validation=True),
+        _program_account_row("P6", 2024),
+        # 반복 초과달성 + 목표 불변, 확인된 다년도 맥락.
+        _program_account_row(
+            "P7", 2024, repeated_target_overachievement=True, target_unchanged=True
+        ),
+        _program_account_row(
+            "P8",
+            2024,
+            current=100,
+            expenditure=70,
+            context_type="MULTIYEAR_CAPITAL",
+            context_status="CONFIRMED_STRUCTURED",
+            context_source="STRUCTURED_FIELD",
+            context_evidence="CONFIRMED_MULTIYEAR",
+            context_effect="NO_GRADE_CHANGE",
+        ),
+        # 선호 키가 충돌하면 자동 병합하지 않고 각각 H.
+        _program_account_row("COLLIDE", 2024, field_name="분야A", program_name="프로그램A"),
+        _program_account_row("COLLIDE", 2024, field_name="분야B", program_name="프로그램B"),
+    ]
+    queue, summary = build_program_year_review_queue(
+        pd.DataFrame(rows),
+        {"thresholds": {"execution_strong": 0.8, "execution_moderate": 0.9}},
+    )
+    def pick(code: str, year: int) -> pd.Series:
+        return queue.loc[
+            queue["program_code"].eq(code) & queue["fiscal_year"].eq(year)
+        ].iloc[0]
+
+    assert queue["program_year_id"].is_unique
+    assert summary["amount_reconciliation_absolute_differences"] == {
+        "program_original_budget": 0.0,
+        "program_current_budget": 0.0,
+        "program_expenditure": 0.0,
+    }
+    assert pick("P1", 2024)["program_original_budget"] == 150
+    assert pick("P1", 2024)["program_execution_rate"] == pytest.approx(0.6)
+    assert pick("P1", 2024)["comparable_rate_count"] == 1
+    assert pick("P1", 2024)["review_grade"] == "C"
+    assert pick("P1", 2024)["diagnostic_type"] == "LOW_EXECUTION_TARGET_MET"
+    assert pick("P2", 2024)["review_grade"] == "A"
+    assert not bool(pick("P3", 2024)["repeated_low_execution_signal"])
+    assert pick("P4", 2024)["review_grade"] == "C"
+    assert pick("P5", 2024)["review_grade"] == "H"
+    assert pick("P6", 2024)["review_grade"] == "D"
+    assert pick("P7", 2024)["diagnostic_type"] == "TARGET_ADEQUACY_REVIEW"
+    assert pick("P8", 2024)["diagnostic_type"] == (
+        "MULTIYEAR_CONTEXT_WITH_SINGLE_YEAR_LOW_EXECUTION"
+    )
+    collision = queue.loc[queue["program_code"].eq("COLLIDE")]
+    assert len(collision) == 2
+    assert collision["review_grade"].eq("H").all()
+
+
+def test_program_year_asof_is_unchanged_when_future_year_is_added() -> None:
+    base = pd.DataFrame(
+        [
+            _program_account_row("P", 2022, below=1),
+            _program_account_row("P", 2023, below=1),
+            _program_account_row("P", 2024, below=1),
+        ]
+    )
+    config = {"thresholds": {"execution_strong": 0.8, "execution_moderate": 0.9}}
+    before, _ = build_program_year_review_queue(base, config)
+    after, _ = build_program_year_review_queue(
+        pd.concat([base, pd.DataFrame([_program_account_row("P", 2025)])], ignore_index=True),
+        config,
+    )
+
+    columns = [
+        "program_year_id",
+        "review_grade",
+        "diagnostic_type",
+        "reported_target_miss_consecutive",
+        "program_budget_change_rate",
+    ]
+    pd.testing.assert_frame_equal(
+        before[columns].sort_values("program_year_id").reset_index(drop=True),
+        after.loc[after["fiscal_year"].le(2024), columns]
+        .sort_values("program_year_id")
+        .reset_index(drop=True),
+        check_dtype=False,
+    )
 
 
 def test_feedback_cutoff_blocks_outcomes_after_analysis_end_year() -> None:
@@ -439,6 +766,8 @@ def test_stable_drilldown_uses_ministry_program_year_account_key() -> None:
     assert queue["review_sequence_overall"].tolist() == [1, 2]
     assert queue_summary["reviewable_candidate_coverage_rate"] == 1
     assert queue_summary["project_performance_attribution_count"] == 0
+    assert "review_grade" not in queue
+    assert queue["program_level_review_grade_context"].eq("C").all()
     for column in (
         "performance_signal",
         "low_performance_budget_increase_t1",
