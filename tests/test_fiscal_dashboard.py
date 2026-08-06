@@ -8,6 +8,7 @@ from fiscal_dashboard.app import (
     MAIN_TABS,
     _component_summary,
     _data_review_table,
+    _multiple_reason_facts,
     _program_count,
     _queue_simple_table,
     _review_worklist,
@@ -183,13 +184,28 @@ def test_dashboard_data_contract_and_filter() -> None:
         "프로그램",
         "왜 확인하나",
         "핵심 근거",
+        "안정성",
         "다음 확인",
         "본예산(억원·참고)",
     ]
-    assert simple["등급"].str.contains("우선 확인|원인 확인|맥락 확인|모니터링|판단 보류").all()
+    priority_2024 = data["priority_stability"]
+    assert len(priority_2024) == 6
+    assert int(priority_2024["threshold_stable_ab"].sum()) == 5
+    assert int(priority_2024["exact_grade_stable"].sum()) == 2
+    assert priority_2024.loc[
+        priority_2024["threshold_boundary"], "performance_program_name"
+    ].tolist() == ["소록도병원"]
+    affected = program_queue.loc[
+        program_queue["program_year_id"].isin(
+            ["075:3800:2023", "075:4100:2023", "075:4000:2023"]
+        )
+    ]
+    assert len(affected) == 3
+    assert all(len(_multiple_reason_facts(row)) == 2 for _, row in affected.iterrows())
+    assert simple["등급"].str.contains("우선 확인|원인 확인|맥락 확인|모니터링|데이터 보완").all()
     program_simple = _queue_simple_table(program_queue.loc[program_queue["fiscal_year"].eq(2024)])
     assert "회계" not in program_simple
-    assert len(program_simple.columns) == 7
+    assert len(program_simple.columns) == 8
     assert data["project_queue"].shape[0] == 3286
     assert data["project_queue"]["candidate_id"].nunique() == 397
     assert not data["project_queue"]["project_performance_attributed"].any()
@@ -254,12 +270,17 @@ def test_dashboard_default_render() -> None:
     assert app.segmented_control[0].options == list(MAIN_TABS)
     assert app.segmented_control[0].value == "개요"
     # 기본값은 최신 공통연도 2024, 같은 프로그램은 한 행만 표시.
-    assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
+    assert [(metric.label, metric.value) for metric in app.metric[:5]] == [
         ("분석 프로그램", "77"),
         ("우선 확인 A+B", "6"),
         ("맥락 확인 C", "35"),
-        ("판단 보류 H", "8"),
+        ("데이터 보완 H", "8"),
+        ("모니터링 D", "28"),
     ]
+    rendered = " ".join(element.value for element in [*app.markdown, *app.info])
+    assert "프로그램 **7.79%**" in rendered
+    assert "본예산 **3.91%**" in rendered
+    assert "본예산의 **81.84%**" in rendered
     assert app.multiselect[0].options == [
         "고용노동부",
         "보건복지부",
@@ -271,7 +292,7 @@ def test_dashboard_default_render() -> None:
     assert next(toggle for toggle in app.toggle if toggle.label == "검수자 모드").value is False
     assert "성과지표 원문 검수" not in " ".join(item.value for item in app.markdown)
 
-    app.segmented_control[0].set_value("방법론·검증").run()
+    app.segmented_control[0].set_value("분석·검증").run()
     assert not app.exception
     metrics = {(metric.label, metric.value) for metric in app.metric}
     assert {("부합", "8건"), ("반박", "2건"), ("근거 부족", "2건")} <= metrics
@@ -289,10 +310,12 @@ def test_dashboard_queue_and_detail_information_architecture() -> None:
         "프로그램",
         "왜 확인하나",
         "핵심 근거",
+        "안정성",
         "다음 확인",
         "본예산(억원·참고)",
     ]
-    assert len(table.columns) == 7
+    assert table["안정성"].value_counts().to_dict() == {"임계값 안정": 5, "경계 사례": 1}
+    assert len(table.columns) == 8
     rendered = table.to_string() + " " + " ".join(item.value for item in app.markdown)
     assert not any(
         code in rendered
@@ -353,15 +376,50 @@ def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
     app.segmented_control[0].set_value("점검 대기열").run()
     app.multiselect[0].set_value(["019", "075", "102", "162"]).run()
     next(box for box in app.selectbox if box.label == "대기열 구분").set_value(
-        "판단 보류 H"
+        "데이터 보완 H"
     ).run()
     assert not app.exception
     hold_table = app.dataframe[0].value
-    assert hold_table["등급"].eq("H 판단 보류").all()
+    assert hold_table["등급"].eq("H 데이터 보완").all()
     assert not hold_table["등급"].str.contains("A |B |C |D ", regex=True).any()
 
     next(box for box in app.selectbox if box.label == "대기열 구분").set_value("전체").run()
     assert not app.exception
     assert len(app.dataframe) == 2
-    assert not app.dataframe[0].value["등급"].eq("H 판단 보류").any()
-    assert app.dataframe[1].value["등급"].eq("H 판단 보류").all()
+    assert not app.dataframe[0].value["등급"].eq("H 데이터 보완").any()
+    assert app.dataframe[1].value["등급"].eq("H 데이터 보완").all()
+
+
+def test_dashboard_analysis_validation_numbers_and_labels() -> None:
+    app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
+    app.segmented_control[0].set_value("분석·검증").run()
+
+    assert not app.exception
+    rendered = " ".join(
+        str(element.value)
+        for element in [*app.markdown, *app.info, *app.warning, *app.caption]
+    )
+    assert "성과 앵커형 질문형 점검등급" in rendered
+    assert "93.78%~100.00%" in rendered
+    assert "0.8824~1.0000" in rendered
+    assert "소록도병원" in rendered
+    assert "77 → 6, 7.79%" in rendered
+    assert "1,080 → 74, 6.85%" in rendered
+    assert "예측 성능이 아니라" in rendered
+    assert "472개 지표행" in rendered
+    assert "독립 검토자를 추가 확보하지 못해" in rendered
+    assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
+        ("기준 재현", "236/236"),
+        ("계약검사 실패", "0"),
+        ("대기순서 지배관계 위반", "0"),
+        ("A↔D 극단 이동", "0"),
+    ]
+    assert all(
+        code not in rendered
+        for code in [
+            "PRIORITY_REVIEW",
+            "reported_performance",
+            "budget_performance_mismatch",
+            "NEXT_YEAR_AB",
+        ]
+    )

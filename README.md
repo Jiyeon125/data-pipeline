@@ -26,6 +26,10 @@
 현재 상태와 바로 다음 작업은 [인수인계](docs/SESSION_HANDOFF.md), 전체 의존
 관계는 [아키텍처](docs/architecture.md)를 참고합니다.
 
+현재 점검등급·대시보드·발표 수치의 정본은
+[현재 프로젝트 맥락](docs/CURRENT_PROJECT_CONTEXT.md)과
+[발표 수치 단일 출처](docs/PRESENTATION_NUMBERS_SINGLE_SOURCE.md)입니다.
+
 ## 프로젝트 범위와 구조
 
 이 프로젝트는 OpenAPI 수집뿐 아니라 성과계획서·성과보고서 LLM 파싱,
@@ -445,19 +449,18 @@ fiscal-analytics analyze-priority-scenarios --root . --overwrite
 python -m streamlit run src/fiscal_dashboard/app.py
 ```
 
-- 기본 화면: H 판단 보류와 A~D 원문 검토순서를 분리한 질문형 작업대
-- 작업 순서: 시작 → 데이터 확인 → 후보 분석 → 기준 비교 → 원문 검수
+- 기본 화면: 개요 → 점검 대기열 → 프로그램 상세 → 분석·검증
+- 업무그룹: 우선 확인 A+B, 맥락 확인 C, 데이터 보완 H, 모니터링 D
 - 기본 대기열 필터: 부처, 기준연도(기본 최신 공통연도), 질문형 점검등급
-- 후보 연결: 선택 프로그램에서 해당 성과지표 PDF 검수 화면으로 바로 이동
-- 원문 검수: 수기값·PDF값·근거 페이지 이미지와 사람 검수 상태 연속 저장
+- 검수자 모드: PDF 원문 검수 기능을 기본 사용자 화면과 분리해 보존
 - 원문 검수 안내: `docs/THREE_MINISTRY_PERFORMANCE_REVIEW_GUIDE.md`
 - 우선순위 정책 초안: `docs/PRIORITY_POLICY_DECISION_DRAFT.md`
 - 기본 원문 검수 큐: 출처·페이지·원문 근거가 부족한 29행
-- 주의: 전체 공통 Top 5가 0행이므로 단일 최종 순위로 해석하지 않음
+- 2024년: 77개 중 우선 확인 A+B 6개(7.79%), 연결 원문 단위 74/1,080(6.85%)
 - 다운로드: 현재 기준연도의 프로그램-연도 점검대기열 CSV
 - 정식 분석 입력: `data/analytics/multi_ministry_priority_scenarios/`
 - 최종 프로그램-연도 점검대기열: `program_year_review_queue.csv`
-- 감사·회계유형 드릴다운용 412개 프로그램-연도-회계유형 분석행:
+- 감사·회계유형 드릴다운용 프로그램-연도-회계유형 분석행:
   `full_population_review_work_queue.csv`
 - 질문형 등급은 사업 성과·효율·감액 등급이 아니며, 기존 레인과 가중치
   시나리오는 감사·민감도 QA용으로 보존
@@ -468,6 +471,11 @@ python -m streamlit run src/fiscal_dashboard/app.py
 - 시나리오 필수 변수가 완전한 208행에만 기존 네 시나리오 순위를 표시하며,
   신호 미검출 행을 안전하다고 판정하지 않음
 - 화면 안에서 후보 규칙이나 시나리오 점수를 다시 계산하지 않음
+
+점검등급은 보고된 성과 미달을 기준축으로 두고 집행·반복·예산변화 신호의
+동시 관측 여부로 원문 확인 우선도와 확인질문을 구분하는 성과 앵커형 질문형
+등급입니다. A+B는 재정위험 또는 문제 판정이 아니며, D도 정상·안전 판정이
+아닙니다. 재정규모는 별도 영향 참고값으로 표시합니다.
 
 ## 로컬 우선 LLM 검수 하네스
 

@@ -1,5 +1,7 @@
 # 4개 부처 재정사업 점검 대기열 분석 보고서
 
+> **LEGACY:** 이 문서는 `review_workbench_v2_1` 당시 기록입니다. 현재 방법론과 발표 수치는 [CURRENT_PROJECT_CONTEXT.md](CURRENT_PROJECT_CONTEXT.md), [PRESENTATION_NUMBERS_SINGLE_SOURCE.md](PRESENTATION_NUMBERS_SINGLE_SOURCE.md), [FINAL_VALIDATION_REPORT.md](FINAL_VALIDATION_REPORT.md)를 사용하십시오.
+
 성과자료 기준선: `manual-v1` · 분석 버전: `review_workbench_v2_1`
 산출물 스키마: `priority_review_outputs_v2` · 분석일: 2026-08-05
 
