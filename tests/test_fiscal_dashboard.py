@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import pandas as pd
@@ -176,18 +177,19 @@ def test_dashboard_data_contract_and_filter() -> None:
     assert blind["pair_id"].nunique() == 10
     assert "review_grade" not in blind
     simple = _queue_simple_table(data["work_queue"])
-    assert simple.columns.tolist()[3:9] == [
-        "점검등급",
-        "주 진단",
+    assert simple.columns.tolist() == [
+        "등급",
+        "부처",
+        "프로그램",
+        "왜 확인하나",
         "핵심 근거",
-        "다음 확인질문",
-        "사업특성 상태",
-        "근거강도",
+        "다음 확인",
+        "본예산(억원·참고)",
     ]
-    assert simple["점검등급"].str.contains("검토순서|판단 보류").all()
+    assert simple["등급"].str.contains("우선 확인|원인 확인|맥락 확인|모니터링|판단 보류").all()
     program_simple = _queue_simple_table(program_queue.loc[program_queue["fiscal_year"].eq(2024)])
     assert "회계" not in program_simple
-    assert "관측기간" in program_simple
+    assert len(program_simple.columns) == 7
     assert data["project_queue"].shape[0] == 3286
     assert data["project_queue"]["candidate_id"].nunique() == 397
     assert not data["project_queue"]["project_performance_attributed"].any()
@@ -250,13 +252,13 @@ def test_dashboard_default_render() -> None:
     assert not app.exception
     assert [title.value for title in app.title] == ["재정사업 점검 대기열"]
     assert app.segmented_control[0].options == list(MAIN_TABS)
-    assert app.segmented_control[0].value == "대기열"
+    assert app.segmented_control[0].value == "개요"
     # 기본값은 최신 공통연도 2024, 같은 프로그램은 한 행만 표시.
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
-        ("선택연도 고유 프로그램", "77"),
-        ("검토순서 A", "4"),
-        ("H 판단 보류", "8"),
-        ("현재 표 프로그램", "49"),
+        ("분석 프로그램", "77"),
+        ("우선 확인 A+B", "6"),
+        ("맥락 확인 C", "35"),
+        ("판단 보류 H", "8"),
     ]
     assert app.multiselect[0].options == [
         "고용노동부",
@@ -265,33 +267,64 @@ def test_dashboard_default_render() -> None:
         "과학기술정보통신부",
     ]
     assert next(box for box in app.selectbox if box.label == "기준연도").value == 2024
+    assert next(box for box in app.selectbox if box.label == "대기열 구분").value == "우선 확인 A+B"
+    assert next(toggle for toggle in app.toggle if toggle.label == "검수자 모드").value is False
+    assert "성과지표 원문 검수" not in " ".join(item.value for item in app.markdown)
+
+    app.segmented_control[0].set_value("방법론·검증").run()
+    assert not app.exception
+    metrics = {(metric.label, metric.value) for metric in app.metric}
+    assert {("부합", "8건"), ("반박", "2건"), ("근거 부족", "2건")} <= metrics
 
 
-def test_dashboard_open_card_and_pdf_review_navigation() -> None:
+def test_dashboard_queue_and_detail_information_architecture() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
-    open_card = next(button for button in app.button if button.label == "선택한 프로그램 상세 열기")
-    open_card.click().run()
+    app.segmented_control[0].set_value("점검 대기열").run()
     assert not app.exception
-    assert app.segmented_control[0].value == "사업 카드"
-
-    review_button = next(
-        button
-        for button in app.button
-        if button.label == "이 프로그램 원문(PDF) 검수로 이동" and not button.disabled
+    table = app.dataframe[0].value
+    assert table.columns.tolist() == [
+        "등급",
+        "부처",
+        "프로그램",
+        "왜 확인하나",
+        "핵심 근거",
+        "다음 확인",
+        "본예산(억원·참고)",
+    ]
+    assert len(table.columns) == 7
+    rendered = table.to_string() + " " + " ".join(item.value for item in app.markdown)
+    assert not any(
+        code in rendered
+        for code in ["UNKNOWN_TYPE", "PATTERN_CANDIDATE", "DISPLAY_ONLY", "context_flags"]
     )
-    review_button.click().run()
+    assert not any("원문(PDF) 검수" in button.label for button in app.button)
+
+    app.segmented_control[0].set_value("프로그램 상세").run()
     assert not app.exception
-    assert app.segmented_control[0].value == "원문 검수"
-    assert any("판정" in (item.value or "") for item in app.info)
+    assert any("다음 확인" in (item.value or "") for item in app.info)
+    assert any("**진단:**" in item.value for item in app.markdown)
+    assert app.dataframe[0].value.columns.tolist() == [
+        "회계유형",
+        "본예산",
+        "예산현액",
+        "지출액",
+        "집행률",
+        "원시행 등급",
+        "원시행 진단",
+    ]
+    detail_source = inspect.getsource(__import__("fiscal_dashboard.app", fromlist=["_render_program_year_detail"])._render_program_year_detail)
+    assert detail_source.index('with st.expander("회계유형별 감사 데이터 보기"') < detail_source.index("st.dataframe(\n            account_view")
 
 
 def test_dashboard_pdf_review_mode() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
-    app.segmented_control[0].set_value("원문 검수").run()
+    next(toggle for toggle in app.toggle if toggle.label == "검수자 모드").set_value(True).run()
 
     assert not app.exception
+    assert [title.value for title in app.title] == ["검수자 도구"]
+    assert not app.segmented_control
     review_metric = next(metric for metric in app.metric if metric.label == "남은 검수")
     assert review_metric.value == "5"
 
@@ -300,7 +333,7 @@ def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
     app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
 
     app.multiselect[0].set_value(["102"]).run()
-    app.segmented_control[0].set_value("사업 카드").run()
+    app.segmented_control[0].set_value("점검 대기열").run()
     project_candidate = (
         load_dashboard_data(Path("."))["program_year_queue"]
         .loc[
@@ -309,10 +342,26 @@ def test_dashboard_mss_project_queue_without_false_pdf_link() -> None:
         ]
         .iloc[0]
     )
-    app.selectbox[0].set_value(project_candidate).run()
+    next(box for box in app.selectbox if box.label == "프로그램 선택").set_value(
+        project_candidate
+    ).run()
+    app.segmented_control[0].set_value("프로그램 상세").run()
 
     assert not app.exception
-    review_button = next(
-        button for button in app.button if button.label == "이 프로그램 원문(PDF) 검수로 이동"
-    )
-    assert review_button.disabled
+    assert not any("원문(PDF) 검수" in button.label for button in app.button)
+
+    app.segmented_control[0].set_value("점검 대기열").run()
+    app.multiselect[0].set_value(["019", "075", "102", "162"]).run()
+    next(box for box in app.selectbox if box.label == "대기열 구분").set_value(
+        "판단 보류 H"
+    ).run()
+    assert not app.exception
+    hold_table = app.dataframe[0].value
+    assert hold_table["등급"].eq("H 판단 보류").all()
+    assert not hold_table["등급"].str.contains("A |B |C |D ", regex=True).any()
+
+    next(box for box in app.selectbox if box.label == "대기열 구분").set_value("전체").run()
+    assert not app.exception
+    assert len(app.dataframe) == 2
+    assert not app.dataframe[0].value["등급"].eq("H 판단 보류").any()
+    assert app.dataframe[1].value["등급"].eq("H 판단 보류").all()
