@@ -67,12 +67,22 @@ def test_dashboard_data_contract_and_filter() -> None:
         2024: 77,
     }
     assert program_queue["review_grade"].value_counts().to_dict() == {
-        "C": 120,
-        "H": 64,
-        "D": 25,
+        "C": 90,
+        "D": 89,
+        "H": 27,
+        "A": 16,
         "B": 14,
-        "A": 13,
     }
+    assert int(program_queue["base_key_reused"].sum()) == 51
+    assert int(program_queue["identity_resolved_by_extended_key"].sum()) == 37
+    assert int(program_queue["identity_unresolved"].sum()) == 16
+    assert (
+        not program_queue.loc[program_queue["identity_resolved_by_extended_key"], "review_grade"]
+        .eq("H")
+        .any()
+    )
+    assert program_queue.loc[program_queue["context_only"], "review_grade"].eq("D").all()
+    assert int(program_queue["context_only"].sum()) == 56
     assert not program_queue.duplicated(["fiscal_year", "program_year_id"]).any()
     assert (
         program_queue.loc[program_queue["fiscal_year"].eq(2024)]
@@ -90,8 +100,29 @@ def test_dashboard_data_contract_and_filter() -> None:
         "raw_account_row_count": 40,
         "unique_program_year_count": 38,
         "unique_program_count": 29,
-        "program_year_c_grade_count": 12,
+        "program_year_c_grade_count": 14,
     }
+    low_execution_target_met_ids = set(
+        program_queue.loc[
+            program_queue["diagnostic_type"].eq("LOW_EXECUTION_TARGET_MET")
+            & program_queue["review_grade"].eq("C"),
+            "program_year_id",
+        ]
+    )
+    assert {
+        "019:1000:2022",
+        "019:3000:2022",
+        "075:3900:2022",
+        "075:3900:2023",
+        "075:4500:2023",
+        "019:1000:2024",
+        "075:1800:2024",
+        "075:1900:2024",
+        "075:3700:2024",
+        "075:3800:2024",
+        "075:3900:2024",
+        "075:4000:2024",
+    }.issubset(low_execution_target_met_ids)
     assert program_summary["preferred_key_conflict_group_count"] == 24
     assert program_summary["unique_program_count"] == 80
     assert program_summary["program_identity_count_including_unknown_continuity"] == 84
@@ -121,7 +152,7 @@ def test_dashboard_data_contract_and_filter() -> None:
         "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
     )
     assert data["summary"]["output_schema_version"] == (
-        "priority_review_outputs_v4_program_year_queue"
+        "priority_review_outputs_v5_identity_context_resolution"
     )
     assert data["summary"]["real_time_or_historical_information_set_reconstructed"] is False
     assert data["summary"]["feedback_linkage"] == {
@@ -223,9 +254,9 @@ def test_dashboard_default_render() -> None:
     # 기본값은 최신 공통연도 2024, 같은 프로그램은 한 행만 표시.
     assert [(metric.label, metric.value) for metric in app.metric[:4]] == [
         ("선택연도 고유 프로그램", "77"),
-        ("검토순서 A", "3"),
-        ("H 판단 보류", "19"),
-        ("현재 표 프로그램", "77"),
+        ("검토순서 A", "4"),
+        ("H 판단 보류", "8"),
+        ("현재 표 프로그램", "49"),
     ]
     assert app.multiselect[0].options == [
         "고용노동부",

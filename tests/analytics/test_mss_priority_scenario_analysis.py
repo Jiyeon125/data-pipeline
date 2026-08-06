@@ -92,6 +92,21 @@ def _question_grade_row(**changes: object) -> dict[str, object]:
             "TARGET_ADEQUACY_REVIEW",
         ),
         (
+            {"budget_increase_context_signal": True},
+            "D",
+            "NO_STRUCTURED_SIGNAL_DETECTED",
+        ),
+        (
+            {"accounting_context_signal": True, "structure_context_signal": True},
+            "D",
+            "NO_STRUCTURED_SIGNAL_DETECTED",
+        ),
+        (
+            {"budget_increase_context_signal": True, "budget_mismatch_signal": True},
+            "C",
+            "SINGLE_SIGNAL_REVIEW",
+        ),
+        (
             {
                 "reported_target_status": "ALL_COMPARABLE_BELOW_TARGET",
                 "below_target_count": 1,
@@ -129,8 +144,20 @@ def test_question_review_grade_counterexamples(
 
     assert result.loc[0, "review_grade"] == grade
     assert result.loc[0, "diagnostic_type"] == diagnostic
+    assert result.loc[0, "signal_families"] == result.loc[0, "grade_trigger_signal_families"]
     if changes.get("current_execution_severity") and not changes.get("performance_signal"):
         assert result.loc[0, "review_grade"] != "A"
+    if diagnostic == "NO_STRUCTURED_SIGNAL_DETECTED" and any(
+        changes.get(name)
+        for name in (
+            "budget_increase_context_signal",
+            "budget_decrease_context_signal",
+            "accounting_context_signal",
+            "structure_context_signal",
+        )
+    ):
+        assert bool(result.loc[0, "context_only"])
+        assert result.loc[0, "context_effect"] == "DISPLAY_ONLY_NO_GRADE_CHANGE"
 
 
 def test_reported_target_history_is_consecutive_asof_and_deduplicated() -> None:
@@ -194,7 +221,7 @@ def test_t1_t2_values_do_not_change_question_review_grade() -> None:
 
 
 def _program_account_row(
-    program_code: str,
+    program_code: str | None,
     year: int,
     *,
     account_type: str = "GENERAL_ACCOUNT",
@@ -283,9 +310,19 @@ def test_program_year_queue_reaggregates_money_performance_and_grades() -> None:
             context_evidence="CONFIRMED_MULTIYEAR",
             context_effect="NO_GRADE_CHANGE",
         ),
-        # 선호 키가 충돌하면 자동 병합하지 않고 각각 H.
+        # 코드 namespace 충돌이 확장키로 해소되면 각각 D.
         _program_account_row("COLLIDE", 2024, field_name="분야A", program_name="프로그램A"),
         _program_account_row("COLLIDE", 2024, field_name="분야B", program_name="프로그램B"),
+        # 같은 코드·이름이 복수 분야에 있으면 집계 identity가 불명확하여 H.
+        _program_account_row("UNRESOLVED", 2024, field_name="분야A", program_name="같은프로그램"),
+        _program_account_row("UNRESOLVED", 2024, field_name="분야B", program_name="같은프로그램"),
+        # 확장키 안에서도 프로그램명이 둘이면 identity를 확정하지 않고 H.
+        _program_account_row("EXTENDED_CONFLICT", 2024, program_name="프로그램A"),
+        _program_account_row(
+            "EXTENDED_CONFLICT", 2024, account_type="FUND", program_name="프로그램B"
+        ),
+        # 프로그램코드 결측은 연도 간 연속성을 확정할 수 없어 H.
+        _program_account_row(None, 2024, program_name="코드결측프로그램"),
         _program_account_row("P9", 2024),
         _program_account_row("P9", 2024, account_type="FUND", below=1),
         # 고집행 + 반복 목표미달(예산 증가 없음)은 B.
@@ -327,7 +364,27 @@ def test_program_year_queue_reaggregates_money_performance_and_grades() -> None:
     )
     collision = queue.loc[queue["program_code"].eq("COLLIDE")]
     assert len(collision) == 2
-    assert collision["review_grade"].eq("H").all()
+    assert collision["review_grade"].eq("D").all()
+    assert collision["base_key_reused"].all()
+    assert collision["identity_resolved_by_extended_key"].all()
+    assert not collision["identity_unresolved"].any()
+    unresolved = queue.loc[queue["program_code"].eq("UNRESOLVED")]
+    assert len(unresolved) == 2
+    assert unresolved["review_grade"].eq("H").all()
+    assert unresolved["identity_unresolved"].all()
+    assert unresolved["identity_resolution_reason"].eq("SAME_CODE_NAME_MULTIPLE_FIELD_SECTOR").all()
+    extended_conflict = queue.loc[queue["program_code"].eq("EXTENDED_CONFLICT")]
+    assert len(extended_conflict) == 2
+    assert extended_conflict["review_grade"].eq("H").all()
+    assert (
+        extended_conflict["identity_resolution_reason"]
+        .eq("EXTENDED_KEY_PROGRAM_NAME_CONFLICT")
+        .all()
+    )
+    missing_code = queue.loc[queue["program_code"].isna()].iloc[0]
+    assert missing_code["review_grade"] == "H"
+    assert bool(missing_code["identity_unresolved"])
+    assert missing_code["continuity_status"] == "UNKNOWN_CONTINUITY"
     assert pick("P9", 2024)["review_grade"] == "H"
     assert bool(pick("P9", 2024)["program_performance_status_conflict"])
     assert pick("P10", 2024)["review_grade"] == "B"

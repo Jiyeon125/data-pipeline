@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-08-05T15:46:05.663427+00:00",
-  "analysis_version": "review_workbench_v4_program_year_queue",
-  "output_schema_version": "priority_review_outputs_v4_program_year_queue",
+  "generated_at": "2026-08-06T00:03:18.241365+00:00",
+  "analysis_version": "review_workbench_v5_identity_context_resolution",
+  "output_schema_version": "priority_review_outputs_v5_identity_context_resolution",
   "analysis_time_basis": "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES",
   "availability_cutoff_enforced": false,
   "real_time_or_historical_information_set_reconstructed": false,
@@ -450,6 +450,15 @@
       "program_code"
     ],
     "preferred_key_conflict_group_count": 24,
+    "base_key_reused_program_year_count": 51,
+    "identity_resolved_by_extended_key_count": 37,
+    "identity_unresolved_count": 16,
+    "identity_resolution_reason_counts": {
+      "BASE_KEY_UNIQUE": 183,
+      "RESOLVED_BY_FIELD_SECTOR": 37,
+      "SAME_CODE_NAME_MULTIPLE_FIELD_SECTOR": 12,
+      "MISSING_PROGRAM_CODE_UNKNOWN_CONTINUITY": 4
+    },
     "program_year_key_unique": true,
     "unique_program_count": 80,
     "program_identity_count_including_unknown_continuity": 84,
@@ -467,50 +476,53 @@
       "3": 54
     },
     "grade_counts": {
-      "C": 120,
-      "H": 64,
-      "D": 25,
-      "B": 14,
-      "A": 13
+      "C": 90,
+      "D": 89,
+      "H": 27,
+      "A": 16,
+      "B": 14
+    },
+    "context_only_count": 56,
+    "context_only_grade_counts": {
+      "D": 56
     },
     "grade_original_budget": {
-      "A": 24529558000000.0,
+      "A": 24617157000000.0,
       "B": 29617872000000.0,
-      "C": 383473666100000.0,
-      "D": 39108128000000.0,
-      "H": 86723300500000.0
+      "C": 146669369600000.0,
+      "D": 290577621000000.0,
+      "H": 71970505000000.0
     },
     "raw_account_grade_to_program_year_grade": {
       "A": {
-        "A": 12,
+        "A": 13,
         "B": 7,
-        "C": 2,
-        "H": 1
+        "C": 2
       },
       "B": {
-        "A": 11,
+        "A": 13,
         "B": 18,
         "C": 1,
-        "H": 4
+        "H": 2
       },
       "C": {
         "A": 1,
         "B": 2,
-        "C": 163,
-        "D": 1,
-        "H": 44
+        "C": 129,
+        "D": 71,
+        "H": 8
       },
       "D": {
-        "C": 51,
-        "D": 40,
-        "H": 39
+        "C": 35,
+        "D": 83,
+        "H": 12
       },
       "H": {
         "H": 15
       }
     },
-    "raw_account_rows_with_changed_grade": 164,
-    "program_years_with_any_raw_grade_difference": 113,
+    "raw_account_rows_with_changed_grade": 154,
+    "program_years_with_any_raw_grade_difference": 111,
     "latest_common_analysis_year": 2024,
     "selected_year_unique_program_count": 77,
     "amount_reconciliation_absolute_differences": {
@@ -530,7 +542,7 @@
       "raw_account_row_count": 40,
       "unique_program_year_count": 38,
       "unique_program_count": 29,
-      "program_year_c_grade_count": 12
+      "program_year_c_grade_count": 14
     },
     "top5_unique_programs_by_year": {
       "2022": true,
@@ -600,8 +612,8 @@
       {
         "review_grade": "A",
         "feedback_horizon": "T1",
-        "eligible_count": 4,
-        "reported_miss_then_budget_increase_count": 4,
+        "eligible_count": 6,
+        "reported_miss_then_budget_increase_count": 5,
         "reported_target_met_then_budget_decrease_count": 0
       },
       {
@@ -628,44 +640,44 @@
       {
         "review_grade": "C",
         "feedback_horizon": "T1",
-        "eligible_count": 27,
-        "reported_miss_then_budget_increase_count": 6,
-        "reported_target_met_then_budget_decrease_count": 8
+        "eligible_count": 21,
+        "reported_miss_then_budget_increase_count": 8,
+        "reported_target_met_then_budget_decrease_count": 4
       },
       {
         "review_grade": "C",
         "feedback_horizon": "T2",
-        "eligible_count": 8,
-        "reported_miss_then_budget_increase_count": 3,
-        "reported_target_met_then_budget_decrease_count": 2
-      },
-      {
-        "review_grade": "D",
-        "feedback_horizon": "T1",
-        "eligible_count": 13,
-        "reported_miss_then_budget_increase_count": 0,
-        "reported_target_met_then_budget_decrease_count": 2
-      },
-      {
-        "review_grade": "D",
-        "feedback_horizon": "T2",
-        "eligible_count": 11,
-        "reported_miss_then_budget_increase_count": 0,
-        "reported_target_met_then_budget_decrease_count": 1
-      },
-      {
-        "review_grade": "H",
-        "feedback_horizon": "T1",
-        "eligible_count": 21,
+        "eligible_count": 9,
         "reported_miss_then_budget_increase_count": 4,
-        "reported_target_met_then_budget_decrease_count": 6
+        "reported_target_met_then_budget_decrease_count": 2
+      },
+      {
+        "review_grade": "D",
+        "feedback_horizon": "T1",
+        "eligible_count": 28,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 9
+      },
+      {
+        "review_grade": "D",
+        "feedback_horizon": "T2",
+        "eligible_count": 15,
+        "reported_miss_then_budget_increase_count": 0,
+        "reported_target_met_then_budget_decrease_count": 4
+      },
+      {
+        "review_grade": "H",
+        "feedback_horizon": "T1",
+        "eligible_count": 10,
+        "reported_miss_then_budget_increase_count": 1,
+        "reported_target_met_then_budget_decrease_count": 3
       },
       {
         "review_grade": "H",
         "feedback_horizon": "T2",
-        "eligible_count": 11,
-        "reported_miss_then_budget_increase_count": 2,
-        "reported_target_met_then_budget_decrease_count": 4
+        "eligible_count": 6,
+        "reported_miss_then_budget_increase_count": 1,
+        "reported_target_met_then_budget_decrease_count": 1
       }
     ],
     "threshold_qa_scope": "CURRENT_YEAR_EXECUTION_THRESHOLDS_ONLY_NOT_PRODUCTION_RULES",

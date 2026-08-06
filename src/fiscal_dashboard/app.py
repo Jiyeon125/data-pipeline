@@ -28,7 +28,7 @@ from performance_pipeline.pdf_reconciliation import (
 )
 
 DATA_DIR = Path("data/analytics/multi_ministry_priority_scenarios")
-EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v4_program_year_queue"
+EXPECTED_PRIORITY_OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v5_identity_context_resolution"
 CASE_REVIEW_DIR = Path("data/analytics/priority_case_evidence_review")
 MINISTRY_LABELS = {
     "019": "고용노동부",
@@ -78,6 +78,7 @@ DIAGNOSTIC_LABELS = {
     "MULTIYEAR_CONTEXT_WITH_SINGLE_YEAR_LOW_EXECUTION": "다년도 맥락에서 단년도 저집행 관측",
     "TARGET_ADEQUACY_REVIEW": "목표 적정성 원문 확인",
     "CONTEXT_OR_SINGLE_SIGNAL_REVIEW": "단일·맥락 신호 확인",
+    "SINGLE_SIGNAL_REVIEW": "단일 점검신호 확인",
     "NO_STRUCTURED_SIGNAL_DETECTED": "현재 정의에서 구조화 신호 미검출",
 }
 SCENARIO_LABELS = {
@@ -322,9 +323,12 @@ def load_dashboard_data(root: Path = PROJECT_ROOT) -> dict[str, Any]:
             "reviewability_status",
             "diagnostic_type",
             "signal_families",
+            "grade_trigger_signal_families",
             "signal_strength",
             "context_type",
             "context_status",
+            "context_flags",
+            "context_only",
             "context_effect",
             "next_review_question",
             "evidence_strength",
@@ -1250,8 +1254,11 @@ def _queue_simple_table(frame: pd.DataFrame) -> pd.DataFrame:
     )
     table["핵심 근거"] = [_signal_composition_label(row) for _, row in table.iterrows()]
     table["다음 확인질문"] = table["next_review_question"]
+    context_flags = table.get("context_flags", pd.Series("NONE", index=table.index)).astype(str)
     table["사업특성 상태"] = (
-        table["context_type"].astype(str)
+        context_flags
+        + " / "
+        + table["context_type"].astype(str)
         + " / "
         + table["context_status"].astype(str)
         + " / "
@@ -1297,7 +1304,8 @@ def _render_program_year_detail(
     )
     st.caption(
         "등급은 사업 성과평가·감액등급이 아니라 프로그램 원문 검토 순서입니다. "
-        "보고 목표 상태는 프로그램 수준 참고 맥락이며 세부사업 성과로 귀속하지 않습니다."
+        "보고 목표 상태는 프로그램 수준 참고 맥락이며 세부사업 성과로 귀속하지 않습니다. "
+        f"맥락 배지: {row.get('context_flags', 'NONE')} / {row.get('context_effect')}"
     )
 
     def amount_label(value: object) -> str:
@@ -1397,7 +1405,7 @@ def _render_program_year_detail(
         icon=":material/description:",
         disabled=not pdf_ok,
         width="stretch",
-        key=f"goto_pdf_{row['program_year_id']}",
+        key="goto_pdf_program_year",
     ):
         st.session_state["review_program_filter"] = str(row["performance_program_name"])
         st.session_state["review_ministry_filter"] = str(row["ministry_code"])
@@ -1458,7 +1466,8 @@ def _render_candidate_detail(row: pd.Series, project_queue: pd.DataFrame) -> Non
     )
     st.caption(
         "이 등급은 사업 성과평가·감액등급이 아니라 프로그램 원문 검토 순서입니다. "
-        f"사업특성: {row.get('context_type')} / {row.get('context_status')} / {row.get('context_effect')}"
+        f"사업특성: {row.get('context_flags', 'NONE')} / {row.get('context_type')} / "
+        f"{row.get('context_status')} / {row.get('context_effect')}"
     )
     if row.get("signal_score_status") == "INCOMPLETE_COMPONENTS":
         st.warning(

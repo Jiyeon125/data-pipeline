@@ -30,8 +30,8 @@ SIGNAL_SCORE_COMPONENTS = (
 )
 SIGNAL_SCORE_METHOD = "complete_case_equal_mean_of_three_signal_components"
 SIZE_ROLE_IN_WORK_QUEUE = "tiebreak_only"
-ANALYSIS_VERSION = "review_workbench_v4_program_year_queue"
-OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v4_program_year_queue"
+ANALYSIS_VERSION = "review_workbench_v5_identity_context_resolution"
+OUTPUT_SCHEMA_VERSION = "priority_review_outputs_v5_identity_context_resolution"
 ANALYSIS_TIME_BASIS = "ANNUAL_RETROSPECTIVE_AFTER_REQUIRED_SOURCE_RELEASES"
 SIGNAL_FLAGS = (
     "type_repeated_strong_low_execution",
@@ -67,11 +67,14 @@ QUESTION_REVIEW_FIELDS = (
     "reviewability_status",
     "diagnostic_type",
     "signal_families",
+    "grade_trigger_signal_families",
     "signal_strength",
     "context_type",
     "context_status",
     "context_source",
     "context_evidence",
+    "context_flags",
+    "context_only",
     "context_effect",
     "grade_cap_reason",
     "grade_reason_codes",
@@ -1848,18 +1851,8 @@ def apply_question_review_grades(candidates: pd.DataFrame) -> pd.DataFrame:
         current_severity.fillna(0).ge(1) | repeated_low_execution | repeated_performance_miss
     )
     grade_b = ~hold & ~special_c & ~explicit_a & (two_domains | strong_or_repeated_single)
-    general_context = (
-        performance_miss
-        | execution_signal
-        | budget_mismatch
-        | rapid_budget_increase
-        | rapid_budget_decrease
-        | accounting_context
-        | structure_context
-        | repeated_year_end
-        | target_adequacy
-    )
-    grade_c = ~hold & ~special_c & ~explicit_a & ~grade_b & general_context
+    single_review_signal = performance_miss | execution_signal | budget_mismatch | target_adequacy
+    grade_c = ~hold & ~special_c & ~explicit_a & ~grade_b & single_review_signal
 
     result["review_grade"] = "D"
     result.loc[grade_c | special_c, "review_grade"] = "C"
@@ -1875,7 +1868,7 @@ def apply_question_review_grades(candidates: pd.DataFrame) -> pd.DataFrame:
     result.loc[result["review_grade"].eq("A"), "signal_strength"] = "STRONG"
     result.loc[hold, "signal_strength"] = "NOT_ASSESSED"
     result["diagnostic_type"] = "NO_STRUCTURED_SIGNAL_DETECTED"
-    result.loc[grade_c, "diagnostic_type"] = "CONTEXT_OR_SINGLE_SIGNAL_REVIEW"
+    result.loc[grade_c, "diagnostic_type"] = "SINGLE_SIGNAL_REVIEW"
     result.loc[grade_b, "diagnostic_type"] = "STRONG_OR_REPEATED_SINGLE_SIGNAL"
     result.loc[repeated_execution_with_miss & explicit_a, "diagnostic_type"] = (
         "REPEATED_LOW_EXECUTION_WITH_REPORTED_TARGET_MISS"
@@ -1909,7 +1902,27 @@ def apply_question_review_grades(candidates: pd.DataFrame) -> pd.DataFrame:
         if bool(target_adequacy.loc[row_index]):
             active.append("target_or_trend")
         families.append(";".join(active) or "NONE")
-    result["signal_families"] = families
+    result["grade_trigger_signal_families"] = families
+    result["signal_families"] = result["grade_trigger_signal_families"]
+    context_flag_values: list[str] = []
+    for row_index in index:
+        flags: list[str] = []
+        if bool(rapid_budget_increase.loc[row_index]):
+            flags.append("budget_increase_context")
+        if bool(rapid_budget_decrease.loc[row_index]):
+            flags.append("budget_decrease_context")
+        if bool(accounting_context.loc[row_index]):
+            flags.append("accounting_context")
+        if bool(structure_context.loc[row_index]):
+            flags.append("structure_context")
+        if bool(repeated_year_end.loc[row_index]):
+            flags.append("repeated_year_end_concentration")
+        context_flag_values.append(";".join(flags) or "NONE")
+    result["context_flags"] = context_flag_values
+    result["context_only"] = result["grade_trigger_signal_families"].eq("NONE") & result[
+        "context_flags"
+    ].ne("NONE")
+    result.loc[result["context_only"], "context_effect"] = "DISPLAY_ONLY_NO_GRADE_CHANGE"
     result["grade_cap_reason"] = "NOT_APPLICABLE"
     result.loc[low_execution_target_met & special_c, "grade_cap_reason"] = (
         "LOW_EXECUTION_WITH_REPORTED_TARGET_MET"
@@ -1985,6 +1998,7 @@ def _program_year_group_map(candidates: pd.DataFrame) -> pd.DataFrame:
         .any(axis=1)
     )
     result["base_program_year_key_conflict"] = conflict
+    result["base_key_reused"] = conflict
 
     def token(value: object) -> str:
         return "<NA>" if pd.isna(value) else str(value).strip()
@@ -2027,6 +2041,41 @@ def _program_year_group_map(candidates: pd.DataFrame) -> pd.DataFrame:
             + result.loc[name_conflict, "fiscal_year"].astype("string")
         )
     result["program_year_name_conflict"] = name_conflict
+    extended_key_token = result[["field_name", "sector_name"]].apply(
+        lambda row: "|".join(token(value) for value in row), axis=1
+    )
+    program_name_token = result["performance_program_name"].map(token)
+    same_name_multiple_extended_keys = (
+        extended_key_token.groupby(
+            [
+                result["ministry_code"],
+                result["fiscal_year"],
+                result["program_code"],
+                program_name_token,
+            ],
+            dropna=False,
+        )
+        .transform("nunique")
+        .gt(1)
+    )
+    missing_program_code = result["program_code"].isna()
+    result["identity_unresolved"] = (
+        missing_program_code | name_conflict | same_name_multiple_extended_keys
+    )
+    result["identity_resolved_by_extended_key"] = (
+        result["base_key_reused"] & ~result["identity_unresolved"]
+    )
+    result["identity_resolution_reason"] = "BASE_KEY_UNIQUE"
+    result.loc[result["identity_resolved_by_extended_key"], "identity_resolution_reason"] = (
+        "RESOLVED_BY_FIELD_SECTOR"
+    )
+    result.loc[same_name_multiple_extended_keys, "identity_resolution_reason"] = (
+        "SAME_CODE_NAME_MULTIPLE_FIELD_SECTOR"
+    )
+    result.loc[name_conflict, "identity_resolution_reason"] = "EXTENDED_KEY_PROGRAM_NAME_CONFLICT"
+    result.loc[missing_program_code, "identity_resolution_reason"] = (
+        "MISSING_PROGRAM_CODE_UNKNOWN_CONTINUITY"
+    )
     return result
 
 
@@ -2111,6 +2160,12 @@ def build_program_year_review_queue(
             ),
             "raw_candidate_ids": json.dumps(part["candidate_id"].tolist(), ensure_ascii=False),
             "base_program_year_key_conflict": bool(part["base_program_year_key_conflict"].any()),
+            "base_key_reused": bool(part["base_key_reused"].any()),
+            "identity_resolved_by_extended_key": bool(
+                part["identity_resolved_by_extended_key"].all()
+            ),
+            "identity_unresolved": bool(part["identity_unresolved"].any()),
+            "identity_resolution_reason": first["identity_resolution_reason"],
             "program_year_name_conflict": bool(part["program_year_name_conflict"].any()),
         }
         missing_amount = False
@@ -2187,12 +2242,14 @@ def build_program_year_review_queue(
         row["data_validation_signal"] = bool(
             part["data_validation_signal"].fillna(False).astype(bool).any()
             or part["analysis_status"].astype("string").ne("JOINT_ANALYSIS").any()
-            or row["base_program_year_key_conflict"]
+            or row["identity_unresolved"]
             or row["program_year_name_conflict"]
             or row["program_performance_status_conflict"]
             or pd.isna(row["program_code"])
             or missing_amount
         )
+        if row["data_validation_signal"]:
+            row["evidence_status"] = "DATA_BLOCKED"
         row["analysis_status"] = (
             "DATA_QUALITY_HOLD" if row["data_validation_signal"] else "PROGRAM_YEAR_REVIEW"
         )
@@ -2299,13 +2356,14 @@ def build_program_year_review_queue(
     result["observed_end_year"] = observed.transform("max")
     result["observed_year_count"] = observed.transform("nunique")
     result["continuity_status"] = "EXACT_PROGRAM_KEY"
-    result.loc[result["base_program_year_key_conflict"], "continuity_status"] = (
-        "EXACT_METADATA_DISAMBIGUATION_DATA_HOLD"
+    result.loc[result["identity_resolved_by_extended_key"], "continuity_status"] = (
+        "EXACT_METADATA_DISAMBIGUATION"
     )
+    result.loc[result["identity_unresolved"], "continuity_status"] = "UNRESOLVED_IDENTITY_HOLD"
     result.loc[result["program_code"].isna(), "continuity_status"] = "UNKNOWN_CONTINUITY"
 
     result = apply_question_review_grades(result)
-    result["independent_signal_family_count"] = result["signal_families"].map(
+    result["independent_signal_family_count"] = result["grade_trigger_signal_families"].map(
         lambda value: 0 if value == "NONE" else len(str(value).split(";"))
     )
     result["repeated_signal_family_count"] = result["repeated_low_execution_signal"].astype(
@@ -2414,6 +2472,15 @@ def build_program_year_review_queue(
             .drop_duplicates()
             .shape[0]
         ),
+        "base_key_reused_program_year_count": int(result["base_key_reused"].sum()),
+        "identity_resolved_by_extended_key_count": int(
+            result["identity_resolved_by_extended_key"].sum()
+        ),
+        "identity_unresolved_count": int(result["identity_unresolved"].sum()),
+        "identity_resolution_reason_counts": {
+            str(key): int(value)
+            for key, value in result["identity_resolution_reason"].value_counts().items()
+        },
         "program_year_key_unique": True,
         "unique_program_count": int(
             result.loc[result["program_code"].notna(), "program_identity_id"].nunique()
@@ -2434,6 +2501,13 @@ def build_program_year_review_queue(
         },
         "grade_counts": {
             str(key): int(value) for key, value in result["review_grade"].value_counts().items()
+        },
+        "context_only_count": int(result["context_only"].sum()),
+        "context_only_grade_counts": {
+            str(key): int(value)
+            for key, value in result.loc[result["context_only"], "review_grade"]
+            .value_counts()
+            .items()
         },
         "grade_original_budget": {
             str(key): float(value)
