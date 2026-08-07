@@ -2,6 +2,7 @@ import inspect
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from fiscal_dashboard.app import (
@@ -423,3 +424,79 @@ def test_dashboard_analysis_validation_numbers_and_labels() -> None:
             "NEXT_YEAR_AB",
         ]
     )
+
+
+@pytest.mark.parametrize(
+    ("grade", "diagnostic_type", "queue_filter"),
+    [
+        ("A", None, "우선 확인 A+B"),
+        ("B", None, "우선 확인 A+B"),
+        ("C", "LOW_EXECUTION_TARGET_MET", "맥락 확인 C"),
+        ("D", None, "모니터링 D"),
+        ("H", None, "데이터 보완 H"),
+    ],
+)
+def test_dashboard_2024_representative_grade_detail(
+    grade: str,
+    diagnostic_type: str | None,
+    queue_filter: str,
+) -> None:
+    queue = load_dashboard_data(Path("."))["program_year_queue"]
+    cases = queue.loc[queue["fiscal_year"].eq(2024) & queue["review_grade"].eq(grade)]
+    if diagnostic_type:
+        cases = cases.loc[cases["diagnostic_type"].eq(diagnostic_type)]
+    assert not cases.empty
+    row = cases.sort_values("program_year_id").iloc[0]
+
+    app = AppTest.from_file("src/fiscal_dashboard/app.py", default_timeout=30).run()
+    assert not app.exception
+    next(box for box in app.selectbox if box.key == "queue_filter").set_value(queue_filter).run()
+    next(control for control in app.segmented_control if control.key == "main_tab").set_value(
+        "점검 대기열"
+    ).run()
+    assert not app.exception
+    table = app.dataframe[0].value
+    assert row["performance_program_name"] in table["프로그램"].tolist()
+    assert "핵심 근거" in table.columns
+    if grade == "H":
+        assert table["등급"].eq("H 데이터 보완").all()
+
+    next(box for box in app.selectbox if box.key == "selected_program_year").set_value(
+        row["program_year_id"]
+    ).run()
+    next(control for control in app.segmented_control if control.key == "main_tab").set_value(
+        "프로그램 상세"
+    ).run()
+    assert not app.exception
+
+    rendered = " ".join(
+        str(element.value)
+        for element in [*app.markdown, *app.info, *app.caption, *app.warning, *app.get("badge")]
+    )
+    assert grade in rendered
+    assert "**진단:**" in rendered
+    assert "다음 확인" in rendered
+    assert "연도별 관측" in rendered
+    assert str(row["diagnostic_type"]) not in rendered
+    assert str(row["context_type"]) not in rendered
+    assert not any(
+        code in rendered
+        for code in ["UNKNOWN_TYPE", "PATTERN_CANDIDATE", "DISPLAY_ONLY", "context_flags"]
+    )
+    assert app.dataframe[0].value.columns.tolist() == [
+        "회계유형",
+        "본예산",
+        "예산현액",
+        "지출액",
+        "집행률",
+        "원시행 등급",
+        "원시행 진단",
+    ]
+    detail_source = inspect.getsource(
+        __import__(
+            "fiscal_dashboard.app", fromlist=["_render_program_year_detail"]
+        )._render_program_year_detail
+    )
+    assert detail_source.index(
+        'with st.expander("회계유형별 감사 데이터 보기"'
+    ) < detail_source.index("st.dataframe(\n            account_view")

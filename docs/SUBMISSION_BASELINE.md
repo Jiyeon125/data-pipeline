@@ -6,8 +6,9 @@
 
 - repository: `Jiyeon125/data-pipeline`
 - branch: `main`
-- full commit SHA: `609b9db848d7e476e3fcb7d62050fd21c2672bf4`
-- 작업트리: dirty. 자동 commit·push·tag는 수행하지 않았습니다.
+- 최종 full commit SHA: `586a8444dea033e71a9a19f60b3ce075b717c7a6`
+- 작업 시작 상태: clean
+- 현재 작업트리: dirty, 자동 stage·commit·push·tag 미수행
 - 분석 버전: `review_workbench_v5_identity_context_resolution`
 - 스키마 버전: `priority_review_outputs_v5_identity_context_resolution`
 
@@ -34,14 +35,15 @@
 
 ## 실행 QA 결과
 
-- 전체 pytest: `309 passed, 3 xfailed`, 경고 2건
-- 전체 Ruff: 실패, 기존 범위 9건
-  - `notebooks/mss_priority_scenario_stability.ipynb`: 2건
-  - `src/analytics/cli.py`: 1건
-  - `src/analytics/explanation_need_score.py`: 6건
-- 기존 대시보드 AppTest: 전체 pytest 안에서 6건 통과
-- A/B/C/D/H 대표사례 별도 AppTest: 위젯 탐색 `StopIteration`으로 미완료, 1회 제한에 따라 재실행하지 않음
-- Streamlit 서버 스모크: `/_stcore/health` HTTP 200, 응답 `ok`
+- 대표 A/B/C/D/H AppTest: `5 passed`
+- 나머지 기존 Streamlit AppTest: `6 passed, 5 deselected`
+- 관련 분석 테스트: `26 passed`
+- 전체 pytest: `314 passed, 3 xfailed`, 경고 2건
+- 대상 파일 Ruff: 통과
+- 전체 Ruff: 통과
+- `git diff --check`: 통과
+- 대표사례 과거 `StopIteration` 원인: `TEST_HARNESS_LIMITATION`
+- UI 수정: 없음
 
 ## 알려진 한계
 
@@ -50,38 +52,24 @@
 - 동료집단 백분위 적격은 10/472로 본편 기준에 사용하지 않습니다.
 - 다음 연도 관측은 예측 성능이 아니라 방향적 연관성입니다.
 - 독립 사람검증은 완료되지 않았습니다.
-- 작업트리가 dirty이므로 현재 full commit SHA만으로 문서·대시보드 변경을 재현할 수 없습니다.
+- 현재 release gate 변경이 커밋되지 않아 full commit SHA만으로는 이번 수정분을 재현할 수 없습니다.
 
 ## 제출 판정
 
-**조건부 가능**입니다. 생산 기준본과 전체 pytest·서버 스모크는 통과했으나, 전체 Ruff 9건과 대표사례 AppTest 미완료를 해소하고 제출 대상 dirty 파일을 검토·커밋한 뒤 제출 기준을 다시 고정해야 합니다.
+**조건부 가능**입니다. 데이터·등급·UI·테스트 gate는 통과했습니다. `docs/FINAL_CHANGE_MANIFEST.md`에 포함 대상으로 분류한 현재 변경을 검토·커밋한 뒤 제출할 수 있습니다.
 
-## dirty 파일
-
-기존 운영분석 산출물과 이번 문서·대시보드 변경을 자동 커밋하지 않았습니다.
+## 현재 dirty 파일
 
 ```text
-M README.md
-M docs/FINAL_REPORT.md
-M docs/FINAL_VALIDATION_REPORT.md
-M docs/VALIDATION_PRESENTATION_SUMMARY.md
-M src/fiscal_dashboard/app.py
+M docs/CURRENT_PROJECT_CONTEXT.md
+M docs/FINAL_PRESENTATION_OUTLINE.md
+M docs/FINAL_QA_CHECKLIST.md
+M docs/SUBMISSION_BASELINE.md
+D docs/work_in_progress/OPERATIONAL_ANALYSIS_CHECKPOINT.md
+M notebooks/mss_priority_scenario_stability.ipynb
+M src/analytics/cli.py
+M src/analytics/explanation_need_score.py
 M tests/test_fiscal_dashboard.py
-?? docs/CURRENT_PROJECT_CONTEXT.md
-?? docs/DATA_ANALYSIS_PRESENTATION_SUMMARY.md
-?? docs/FINAL_PRESENTATION_OUTLINE.md
-?? docs/FINAL_QA_CHECKLIST.md
-?? docs/OPERATIONAL_ANALYSIS_REPORT.md
-?? docs/PEER_REFERENCE_REPORT.md
-?? docs/PRESENTATION_NUMBERS_SINGLE_SOURCE.md
-?? docs/SUBMISSION_BASELINE.md
-?? docs/TEMPORAL_FOLLOWUP_REPORT.md
-?? docs/WORKLOAD_COMPRESSION_REPORT.md
-?? docs/work_in_progress/OPERATIONAL_ANALYSIS_CHECKPOINT.md
-?? tests/validation/test_operational_analysis.py
-?? validation/analyze_operational_analysis.py
-?? validation/figures/peer_reference_examples.png
-?? validation/figures/priority_review_stability_2024.png
-?? validation/figures/temporal_grade_transition.png
-?? validation/figures/workload_compression.png
+?? docs/FINAL_CHANGE_MANIFEST.md
+?? docs/FINAL_DASHBOARD_SMOKE_TEST.md
 ```

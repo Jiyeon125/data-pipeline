@@ -18,7 +18,7 @@ import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -212,7 +212,7 @@ def estimate_log_lift_weights(panel: pd.DataFrame) -> tuple[dict[str, float], pd
         raw = weights[col]
         row["weight_share"] = (raw / active_sum) if active_sum > 0 else 0.0
         # 표용 정수 포인트: 모든 활성 성분 합이 100
-        row["display_points"] = int(round(100 * row["weight_share"])) if raw > 0 else 0
+        row["display_points"] = round(100 * row["weight_share"]) if raw > 0 else 0
 
     # 반올림 오차 보정: display_points 합을 100에 맞춤
     table = pd.DataFrame(rows)
@@ -223,9 +223,6 @@ def estimate_log_lift_weights(panel: pd.DataFrame) -> tuple[dict[str, float], pd
             idx = table.loc[active, "log_lift_weight_raw"].idxmax()
             table.loc[idx, "display_points"] += drift
 
-    display_weights = {
-        row["column"]: float(row["display_points"]) for _, row in table.iterrows()
-    }
     # 실제 점수 계산은 raw log-lift 사용 (수학식과 동일)
     return weights, table
 
@@ -434,7 +431,7 @@ def run_explanation_need_score(paths: ExplanationNeedPaths) -> dict[str, Any]:
                 "next_year performance_gap>0 OR execution_rate<0.80 "
                 "OR lane in {REPEATED_OR_MULTIPLE, STRONG_SINGLE}"
             ),
-            "panel_n": int(len(panel)),
+            "panel_n": len(panel),
             "base_years": [2022, 2023],
         },
         "weights_raw_log_lift": {SIGNAL_LABELS[k]: v for k, v in weights.items()},
@@ -453,7 +450,7 @@ def run_explanation_need_score(paths: ExplanationNeedPaths) -> dict[str, Any]:
             "hand_tuned_points": False,
         },
         "counts": {
-            "rows": int(len(scored)),
+            "rows": len(scored),
             "budget_review_rows": int(scored["budget_review_eligible"].sum()),
             "score_lane": scored["score_lane"].value_counts().to_dict(),
         },

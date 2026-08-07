@@ -13,6 +13,11 @@ from analytics.analysis_policy_decision_support import (
     DecisionSupportPaths,
     build_analysis_policy_decision_support,
 )
+from analytics.explanation_need_score import (
+    ExplanationNeedPaths,
+    ExplanationNeedScoreError,
+    run_explanation_need_score,
+)
 from analytics.financial_eda import EDAPaths, build_financial_eda
 from analytics.m3_financial_signals import M3Paths, build_m3_analysis
 from analytics.m3_methodology_audit import AuditPaths, build_m3_methodology_audit
@@ -25,11 +30,6 @@ from analytics.mss_priority_scenario_analysis import (
 from analytics.mss_same_year_budget_check import (
     SameYearBudgetCheckError,
     run_same_year_budget_check,
-)
-from analytics.explanation_need_score import (
-    ExplanationNeedPaths,
-    ExplanationNeedScoreError,
-    run_explanation_need_score,
 )
 from analytics.priority_case_evidence_review import (
     CaseEvidencePaths,
