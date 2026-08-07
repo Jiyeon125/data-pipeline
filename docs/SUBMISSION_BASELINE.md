@@ -6,9 +6,9 @@
 
 - repository: `Jiyeon125/data-pipeline`
 - branch: `main`
-- 최종 full commit SHA: `586a8444dea033e71a9a19f60b3ce075b717c7a6`
-- 작업 시작 상태: clean
-- 현재 작업트리: dirty, 자동 stage·commit·push·tag 미수행
+- 최종 full commit SHA: `9beefea7dfdf497f1ec326f38dcd44d665747ed0`
+- 기준 고정 직전 작업트리: clean (`git status --short` 출력 없음)
+- 자동 commit·push·tag 미수행
 - 분석 버전: `review_workbench_v5_identity_context_resolution`
 - 스키마 버전: `priority_review_outputs_v5_identity_context_resolution`
 
@@ -52,24 +52,13 @@
 - 동료집단 백분위 적격은 10/472로 본편 기준에 사용하지 않습니다.
 - 다음 연도 관측은 예측 성능이 아니라 방향적 연관성입니다.
 - 독립 사람검증은 완료되지 않았습니다.
-- 현재 release gate 변경이 커밋되지 않아 full commit SHA만으로는 이번 수정분을 재현할 수 없습니다.
 
 ## 제출 판정
 
-**조건부 가능**입니다. 데이터·등급·UI·테스트 gate는 통과했습니다. `docs/FINAL_CHANGE_MANIFEST.md`에 포함 대상으로 분류한 현재 변경을 검토·커밋한 뒤 제출할 수 있습니다.
+**제출 가능**입니다. 데이터·등급·UI·테스트 gate가 통과했고, release gate 변경은 위 full commit SHA에 포함되어 있습니다.
 
-## 현재 dirty 파일
+## 기준 고정 직전 dirty 파일
 
 ```text
-M docs/CURRENT_PROJECT_CONTEXT.md
-M docs/FINAL_PRESENTATION_OUTLINE.md
-M docs/FINAL_QA_CHECKLIST.md
-M docs/SUBMISSION_BASELINE.md
-D docs/work_in_progress/OPERATIONAL_ANALYSIS_CHECKPOINT.md
-M notebooks/mss_priority_scenario_stability.ipynb
-M src/analytics/cli.py
-M src/analytics/explanation_need_score.py
-M tests/test_fiscal_dashboard.py
-?? docs/FINAL_CHANGE_MANIFEST.md
-?? docs/FINAL_DASHBOARD_SMOKE_TEST.md
+없음
 ```
